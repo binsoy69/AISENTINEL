@@ -26,8 +26,11 @@ import argparse
 from datetime import datetime
 
 # Check prerequisites before importing heavy libraries
+HAILO_MODULE = None  # Will be set after successful import
+
 def check_prerequisites():
     """Check if required packages are available"""
+    global HAILO_MODULE
     errors = []
     
     try:
@@ -40,16 +43,127 @@ def check_prerequisites():
     except ImportError:
         errors.append("NumPy not installed. Run: pip install numpy")
     
+    # Try multiple possible import names for HailoRT
+    hailo_imported = False
+    import_attempts = []
+    
+    # Attempt 1: hailo_platform (standard name)
     try:
-        from hailo_platform import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm
-    except ImportError:
+        from hailo_platform import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm, FormatType
+        HAILO_MODULE = "hailo_platform"
+        hailo_imported = True
+    except ImportError as e:
+        import_attempts.append(f"hailo_platform: {e}")
+    
+    # Attempt 2: hailort
+    if not hailo_imported:
         try:
-            import hailo_platform
-            errors.append(f"hailo_platform found but missing components")
-        except ImportError:
-            errors.append("HailoRT not installed. Run: sudo apt install hailo-all")
+            from hailort import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm, FormatType
+            HAILO_MODULE = "hailort"
+            hailo_imported = True
+        except ImportError as e:
+            import_attempts.append(f"hailort: {e}")
+    
+    # Attempt 3: hailo (older versions)
+    if not hailo_imported:
+        try:
+            import hailo
+            HAILO_MODULE = "hailo"
+            hailo_imported = True
+        except ImportError as e:
+            import_attempts.append(f"hailo: {e}")
+    
+    # Attempt 4: pyhailort
+    if not hailo_imported:
+        try:
+            import pyhailort
+            HAILO_MODULE = "pyhailort"
+            hailo_imported = True
+        except ImportError as e:
+            import_attempts.append(f"pyhailort: {e}")
+    
+    if not hailo_imported:
+        errors.append("HailoRT Python bindings not found")
+        errors.append("Tried: " + ", ".join([a.split(":")[0] for a in import_attempts]))
+        errors.append("Run --diagnose for detailed import error info")
     
     return errors
+
+
+def run_diagnostics():
+    """Run detailed diagnostics for HailoRT installation"""
+    print("=" * 60)
+    print("Hailo Installation Diagnostics")
+    print("=" * 60)
+    
+    # Check system info
+    import platform
+    print(f"\n[System]")
+    print(f"  Platform: {platform.platform()}")
+    print(f"  Python: {platform.python_version()}")
+    print(f"  Python path: {sys.executable}")
+    
+    # Check for Hailo device
+    print(f"\n[Hailo Device]")
+    if os.path.exists("/dev/hailo0"):
+        print("  ✓ /dev/hailo0 found")
+    else:
+        print("  ✗ /dev/hailo0 not found - check if AI Hat is connected")
+    
+    # Try each import and show detailed errors
+    print(f"\n[Python Module Imports]")
+    modules_to_try = [
+        ("hailo_platform", "from hailo_platform import HEF"),
+        ("hailort", "from hailort import HEF"),
+        ("hailo", "import hailo"),
+        ("pyhailort", "import pyhailort"),
+    ]
+    
+    for module_name, import_stmt in modules_to_try:
+        try:
+            exec(import_stmt)
+            print(f"  ✓ {module_name}: OK")
+        except ImportError as e:
+            print(f"  ✗ {module_name}: {e}")
+        except Exception as e:
+            print(f"  ✗ {module_name}: {type(e).__name__}: {e}")
+    
+    # Check pip packages
+    print(f"\n[Installed pip packages with 'hailo']")
+    try:
+        import subprocess
+        result = subprocess.run([sys.executable, "-m", "pip", "list"], 
+                              capture_output=True, text=True)
+        for line in result.stdout.split("\n"):
+            if "hailo" in line.lower():
+                print(f"  {line}")
+    except Exception as e:
+        print(f"  Error checking pip: {e}")
+    
+    # Check system packages
+    print(f"\n[System packages]")
+    try:
+        import subprocess
+        result = subprocess.run(["dpkg", "-l"], capture_output=True, text=True)
+        for line in result.stdout.split("\n"):
+            if "hailo" in line.lower():
+                parts = line.split()
+                if len(parts) >= 3:
+                    print(f"  {parts[1]}: {parts[2]}")
+    except Exception as e:
+        print(f"  Error checking dpkg: {e}")
+    
+    print("\n" + "=" * 60)
+    print("Suggested fixes:")
+    print("=" * 60)
+    print("1. Make sure you're using the system Python (not a venv):")
+    print("   python3 hailo_detection_test.py")
+    print("\n2. Or install the Python wheel in your environment:")
+    print("   pip install /usr/share/hailo/*.whl")
+    print("\n3. Check Hailo documentation:")
+    print("   https://github.com/hailo-ai/hailo-rpi5-examples")
+    print("=" * 60)
+    return 0
 
 
 def print_error_and_exit(errors):
@@ -59,12 +173,18 @@ def print_error_and_exit(errors):
     print("=" * 60)
     for error in errors:
         print(f"  ✗ {error}")
-    print("\nInstall on Raspberry Pi OS:")
-    print("  sudo apt update")
-    print("  sudo apt install hailo-all python3-opencv")
+    print("\nTry running with --diagnose for detailed info:")
+    print("  python hailo_detection_test.py --diagnose")
+    print("\nOr try using system Python directly:")
+    print("  python3 hailo_detection_test.py")
     print("=" * 60)
     sys.exit(1)
 
+
+# Handle --diagnose flag early
+if "--diagnose" in sys.argv:
+    run_diagnostics()
+    sys.exit(0)
 
 # Check prerequisites
 errors = check_prerequisites()
@@ -72,10 +192,23 @@ if errors:
     print_error_and_exit(errors)
 
 
-# Now import the heavy libraries
+# Now import based on what we found
 import cv2
 import numpy as np
-from hailo_platform import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm, FormatType
+
+if HAILO_MODULE == "hailo_platform":
+    from hailo_platform import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm, FormatType
+elif HAILO_MODULE == "hailort":
+    from hailort import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm, FormatType
+elif HAILO_MODULE == "hailo":
+    import hailo
+    # Older API might have different structure
+    HEF = hailo.HEF if hasattr(hailo, 'HEF') else None
+    VDevice = hailo.VDevice if hasattr(hailo, 'VDevice') else None
+elif HAILO_MODULE == "pyhailort":
+    import pyhailort
+    HEF = pyhailort.HEF if hasattr(pyhailort, 'HEF') else None
+    VDevice = pyhailort.VDevice if hasattr(pyhailort, 'VDevice') else None
 
 
 # COCO class labels (80 classes for YOLO models)
