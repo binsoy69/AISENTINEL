@@ -1,338 +1,383 @@
 #!/usr/bin/env python3
 """
-Hailo AI Hat Object Detection Test Script for Raspberry Pi 5
-Tests object detection using Hailo accelerator with USB camera input
+Standalone Hailo AI Hat Object Detection Test Script
+Uses only HailoRT (pyhailort) and OpenCV - NO hailo-apps dependency
 
-This script is designed to run on Raspberry Pi 5 with Hailo AI Hat installed.
-It will NOT work on Windows or systems without Hailo hardware.
+This script is designed to run on Raspberry Pi 5 with Hailo AI Hat.
 
-Prerequisites:
-    1. Hailo AI Hat connected to Raspberry Pi 5
-    2. hailo-apps repository installed (https://github.com/hailo-ai/hailo-apps)
-    3. Environment sourced: source setup_env.sh
-    
-    OR set HAILO_APPS_PATH environment variable to point to hailo-apps directory
+Prerequisites (install via apt on Raspberry Pi OS):
+    sudo apt update
+    sudo apt install hailo-all python3-opencv
+
+    # Or install Python packages:
+    pip install hailort opencv-python numpy
 
 Usage:
-    # Option 1: Source environment first (recommended)
-    cd ~/hailo-apps && source setup_env.sh
-    python /path/to/hailo_detection_test.py
-    
-    # Option 2: Set HAILO_APPS_PATH
-    export HAILO_APPS_PATH=~/hailo-apps
-    python hailo_detection_test.py
-    
-    # Option 3: Run from hailo-apps directory
-    cd ~/hailo-apps && source setup_env.sh
-    python ~/AISENTINEL/tests/hailo_detection_test.py
+    python hailo_detection_test.py                          # USB camera (default)
+    python hailo_detection_test.py --input /dev/video0      # Specific camera
+    python hailo_detection_test.py --input video.mp4        # Video file
+    python hailo_detection_test.py --hef /path/to/model.hef # Custom model
 """
 
 import sys
 import os
+import time
 import argparse
 from datetime import datetime
 
-
-def setup_hailo_path():
-    """
-    Set up Python path to find hailo_apps package.
-    Checks multiple locations in order of priority.
-    """
-    # Check if hailo_apps is already importable
-    try:
-        import hailo_apps
-        return True
-    except ImportError:
-        pass
-    
-    # List of paths to check
-    paths_to_check = []
-    
-    # 1. Check HAILO_APPS_PATH environment variable
-    hailo_apps_env = os.environ.get('HAILO_APPS_PATH')
-    if hailo_apps_env:
-        paths_to_check.append(os.path.expanduser(hailo_apps_env))
-    
-    # 2. Check common installation locations
-    home = os.path.expanduser('~')
-    common_paths = [
-        os.path.join(home, 'hailo-apps'),
-        os.path.join(home, 'hailo-rpi5-examples'),
-        '/opt/hailo-apps',
-        '/usr/local/hailo-apps',
-    ]
-    paths_to_check.extend(common_paths)
-    
-    # 3. Check if we're in a hailo-apps subdirectory
-    current = os.getcwd()
-    while current != '/':
-        if os.path.exists(os.path.join(current, 'hailo_apps')):
-            paths_to_check.insert(0, current)
-            break
-        current = os.path.dirname(current)
-    
-    # Try each path
-    for path in paths_to_check:
-        if os.path.exists(path) and os.path.isdir(path):
-            hailo_apps_dir = os.path.join(path, 'hailo_apps')
-            if os.path.exists(hailo_apps_dir):
-                if path not in sys.path:
-                    sys.path.insert(0, path)
-                    print(f"[INFO] Added to Python path: {path}")
-                
-                # Also check for virtual environment
-                venv_path = os.path.join(path, 'venv_hailo_apps', 'lib')
-                if os.path.exists(venv_path):
-                    # Find python version directory
-                    for item in os.listdir(venv_path):
-                        if item.startswith('python'):
-                            site_packages = os.path.join(venv_path, item, 'site-packages')
-                            if os.path.exists(site_packages) and site_packages not in sys.path:
-                                sys.path.insert(0, site_packages)
-                
-                return True
-    
-    return False
-
-
-# Set up path before checking prerequisites
-setup_hailo_path()
-
-
-# Check if running on compatible system
+# Check prerequisites before importing heavy libraries
 def check_prerequisites():
-    """Check if Hailo dependencies are available"""
+    """Check if required packages are available"""
     errors = []
     
-    # Check for GStreamer
     try:
-        import gi
-        gi.require_version('Gst', '1.0')
-        from gi.repository import Gst
-    except (ImportError, ValueError) as e:
-        errors.append(f"GStreamer not available: {e}")
-    
-    # Check for Hailo runtime
-    try:
-        import hailo
+        import cv2
     except ImportError:
-        errors.append("Hailo runtime not installed. Please install hailo-apps package.")
+        errors.append("OpenCV not installed. Run: pip install opencv-python")
     
-    # Check for hailo_apps
     try:
-        from hailo_apps.hailo_app_python.core.gstreamer.gstreamer_app import app_callback_class
+        import numpy
     except ImportError:
-        errors.append("hailo_apps package not found. Please clone and install hailo-apps repository.")
+        errors.append("NumPy not installed. Run: pip install numpy")
+    
+    try:
+        from hailo_platform import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm
+    except ImportError:
+        try:
+            import hailo_platform
+            errors.append(f"hailo_platform found but missing components")
+        except ImportError:
+            errors.append("HailoRT not installed. Run: sudo apt install hailo-all")
     
     return errors
 
 
-def print_banner():
-    """Print script banner"""
-    print("=" * 60)
-    print("Hailo AI Hat Object Detection Test")
-    print("AISENTINEL Project")
-    print("=" * 60)
-
-
-def print_prerequisites_error(errors):
-    """Print helpful error message for missing prerequisites"""
+def print_error_and_exit(errors):
+    """Print helpful error message"""
     print("\n" + "=" * 60)
-    print("ERROR: Prerequisites not met")
+    print("ERROR: Missing dependencies")
     print("=" * 60)
-    print("\nThis script requires Hailo AI Hat and hailo-apps package.")
-    print("\nMissing dependencies:")
     for error in errors:
         print(f"  ✗ {error}")
-    
-    print("\n" + "-" * 60)
-    print("SOLUTION OPTIONS:")
-    print("-" * 60)
-    
-    print("\nOption 1 (Recommended): Source the environment first")
-    print("  cd ~/hailo-apps")
-    print("  source setup_env.sh")
-    print("  python /path/to/hailo_detection_test.py")
-    
-    print("\nOption 2: Set HAILO_APPS_PATH environment variable")
-    print("  export HAILO_APPS_PATH=~/hailo-apps")
-    print("  python hailo_detection_test.py")
-    
-    print("\nIf hailo-apps is not installed:")
-    print("  git clone https://github.com/hailo-ai/hailo-apps.git")
-    print("  cd hailo-apps && sudo ./install.sh")
-    
-    print("\nFor more info: https://github.com/hailo-ai/hailo-apps")
+    print("\nInstall on Raspberry Pi OS:")
+    print("  sudo apt update")
+    print("  sudo apt install hailo-all python3-opencv")
     print("=" * 60)
-
-
-# Only import Hailo dependencies if prerequisites are met
-prerequisites_errors = check_prerequisites()
-if prerequisites_errors:
-    # Define minimal argument parser for help message
-    if "--help" in sys.argv or "-h" in sys.argv:
-        print(__doc__)
-        sys.exit(0)
-    print_prerequisites_error(prerequisites_errors)
     sys.exit(1)
 
-# Import Hailo dependencies (only reached if prerequisites pass)
-from pathlib import Path
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst
-import hailo
 
-from hailo_apps.hailo_app_python.core.gstreamer.gstreamer_app import app_callback_class
-
-# Try to import the simple detection pipeline first (lightweight)
-try:
-    from hailo_apps.hailo_app_python.apps.detection_simple.detection_pipeline_simple import GStreamerDetectionApp
-    DETECTION_TYPE = "simple"
-except ImportError:
-    # Fall back to full detection pipeline
-    from hailo_apps.hailo_app_python.apps.detection.detection_pipeline import GStreamerDetectionApp
-    DETECTION_TYPE = "full"
+# Check prerequisites
+errors = check_prerequisites()
+if errors:
+    print_error_and_exit(errors)
 
 
-class DetectionTestCallback(app_callback_class):
+# Now import the heavy libraries
+import cv2
+import numpy as np
+from hailo_platform import HEF, VDevice, ConfigureParams, HailoSchedulingAlgorithm, FormatType
+
+
+# COCO class labels (80 classes for YOLO models)
+COCO_LABELS = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
+    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
+    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+    "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
+    "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush"
+]
+
+
+class HailoDetector:
     """
-    Custom callback class for object detection testing.
-    Extends app_callback_class to track detections and performance.
+    Standalone Hailo object detector using HailoRT directly.
+    No dependency on hailo-apps.
     """
     
-    def __init__(self, log_file=None, target_classes=None):
-        super().__init__()
-        self.detection_count = 0
-        self.frame_start_time = datetime.now()
-        self.log_file = log_file
-        self.target_classes = target_classes  # Filter specific classes (e.g., ['person'])
+    def __init__(self, hef_path, confidence_threshold=0.5, labels=None):
+        """
+        Initialize the Hailo detector.
         
-        if self.log_file:
-            with open(self.log_file, 'w') as f:
-                f.write(f"Hailo Detection Test Log - {self.frame_start_time}\n")
-                f.write("=" * 60 + "\n")
-    
-    def log_detection(self, frame_num, label, confidence, bbox=None):
-        """Log a detection to file and console"""
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        msg = f"[{timestamp}] Frame {frame_num}: {label} ({confidence:.2%})"
+        Args:
+            hef_path: Path to the HEF model file
+            confidence_threshold: Minimum confidence for detections
+            labels: List of class labels (defaults to COCO)
+        """
+        self.confidence_threshold = confidence_threshold
+        self.labels = labels or COCO_LABELS
         
-        if self.log_file:
-            with open(self.log_file, 'a') as f:
-                f.write(msg + "\n")
+        print(f"[INFO] Loading model: {hef_path}")
         
-        return msg
+        # Load HEF file
+        self.hef = HEF(hef_path)
+        
+        # Create virtual device
+        self.vdevice = VDevice()
+        
+        # Configure the device
+        configure_params = ConfigureParams.create_from_hef(
+            hef=self.hef,
+            interface=HailoSchedulingAlgorithm.ROUND_ROBIN
+        )
+        self.network_group = self.vdevice.configure(self.hef, configure_params)[0]
+        
+        # Get input/output info
+        self.input_vstreams_info = self.hef.get_input_vstream_infos()
+        self.output_vstreams_info = self.hef.get_output_vstream_infos()
+        
+        # Get input shape
+        input_info = self.input_vstreams_info[0]
+        self.input_shape = input_info.shape
+        self.input_height = self.input_shape[0]
+        self.input_width = self.input_shape[1]
+        
+        print(f"[INFO] Model input shape: {self.input_shape}")
+        print(f"[INFO] Model loaded successfully")
     
-    def get_elapsed_time(self):
-        """Get elapsed time since start"""
-        return (datetime.now() - self.frame_start_time).total_seconds()
+    def preprocess(self, frame):
+        """
+        Preprocess frame for inference.
+        
+        Args:
+            frame: BGR image from OpenCV
+            
+        Returns:
+            Preprocessed frame ready for inference
+        """
+        # Resize to model input size
+        resized = cv2.resize(frame, (self.input_width, self.input_height))
+        
+        # Convert BGR to RGB
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        
+        return rgb
     
-    def get_fps(self):
-        """Calculate current FPS"""
-        elapsed = self.get_elapsed_time()
-        if elapsed > 0:
-            return self.get_count() / elapsed
-        return 0
+    def infer(self, preprocessed_frame):
+        """
+        Run inference on a preprocessed frame.
+        
+        Args:
+            preprocessed_frame: Preprocessed image
+            
+        Returns:
+            Raw inference output
+        """
+        # Create input/output params
+        input_params = self.network_group.make_input_vstream_params(
+            quantized=False,
+            format_type=FormatType.FLOAT32
+        )
+        output_params = self.network_group.make_output_vstream_params(
+            quantized=False,
+            format_type=FormatType.FLOAT32
+        )
+        
+        # Run inference
+        with self.network_group.activate():
+            input_data = {self.input_vstreams_info[0].name: 
+                         np.expand_dims(preprocessed_frame.astype(np.float32) / 255.0, axis=0)}
+            
+            with self.network_group.create_vstreams(input_params, output_params) as (input_vstreams, output_vstreams):
+                # Send input
+                for name, data in input_data.items():
+                    input_vstreams[name].send(data)
+                
+                # Get output
+                outputs = {}
+                for output_vstream in output_vstreams:
+                    outputs[output_vstream.name] = output_vstream.recv()
+        
+        return outputs
+    
+    def postprocess(self, outputs, original_shape):
+        """
+        Parse detection outputs.
+        
+        Args:
+            outputs: Raw inference outputs
+            original_shape: Original image shape (height, width)
+            
+        Returns:
+            List of detections: [(label, confidence, x1, y1, x2, y2), ...]
+        """
+        detections = []
+        orig_h, orig_w = original_shape[:2]
+        
+        # Handle different output formats
+        # This is a simplified parser - actual format depends on the model
+        for name, output in outputs.items():
+            # Flatten and reshape as needed
+            output = np.squeeze(output)
+            
+            # Try to parse as YOLO-style output
+            # Format varies by model - this handles common cases
+            if len(output.shape) == 2:
+                # Each row: [x, y, w, h, conf, class_scores...]
+                for detection in output:
+                    if len(detection) >= 6:
+                        # Get confidence
+                        conf = detection[4] if len(detection) > 5 else max(detection[5:])
+                        
+                        if conf < self.confidence_threshold:
+                            continue
+                        
+                        # Get class
+                        class_scores = detection[5:] if len(detection) > 5 else detection[4:]
+                        class_id = np.argmax(class_scores)
+                        
+                        # Get bounding box (normalized coordinates)
+                        x, y, w, h = detection[:4]
+                        
+                        # Convert to pixel coordinates
+                        x1 = int((x - w/2) * orig_w)
+                        y1 = int((y - h/2) * orig_h)
+                        x2 = int((x + w/2) * orig_w)
+                        y2 = int((y + h/2) * orig_h)
+                        
+                        # Clip to image bounds
+                        x1 = max(0, min(x1, orig_w))
+                        y1 = max(0, min(y1, orig_h))
+                        x2 = max(0, min(x2, orig_w))
+                        y2 = max(0, min(y2, orig_h))
+                        
+                        label = self.labels[class_id] if class_id < len(self.labels) else f"class_{class_id}"
+                        detections.append((label, float(conf), x1, y1, x2, y2))
+        
+        return detections
+    
+    def detect(self, frame):
+        """
+        Run full detection pipeline on a frame.
+        
+        Args:
+            frame: BGR image from OpenCV
+            
+        Returns:
+            List of detections: [(label, confidence, x1, y1, x2, y2), ...]
+        """
+        preprocessed = self.preprocess(frame)
+        outputs = self.infer(preprocessed)
+        detections = self.postprocess(outputs, frame.shape)
+        return detections
+    
+    def close(self):
+        """Release resources"""
+        if hasattr(self, 'vdevice'):
+            self.vdevice.release()
 
 
-def detection_callback(pad, info, user_data):
-    """
-    Callback function called for each frame processed by the pipeline.
-    Parses detections from the GStreamer buffer and prints results.
-    
-    Args:
-        pad: GStreamer pad
-        info: Probe info containing the buffer
-        user_data: DetectionTestCallback instance
-    """
-    # Get the GstBuffer from the probe info
-    buffer = info.get_buffer()
-    if buffer is None:
-        return Gst.PadProbeReturn.OK
-    
-    # Increment frame counter
-    user_data.increment()
-    frame_num = user_data.get_count()
-    
-    # Get detections from buffer
-    roi = hailo.get_roi_from_buffer(buffer)
-    detections = roi.get_objects_typed(hailo.HAILO_DETECTION)
-    
-    # Build output string
-    output_lines = []
-    
-    # Add FPS info every 30 frames
-    if frame_num % 30 == 0:
-        fps = user_data.get_fps()
-        output_lines.append(f"\n[Frame {frame_num}] FPS: {fps:.1f}")
-    
-    # Parse each detection
-    frame_detections = 0
-    for detection in detections:
-        label = detection.get_label()
-        confidence = detection.get_confidence()
+def draw_detections(frame, detections):
+    """Draw bounding boxes and labels on frame"""
+    for label, conf, x1, y1, x2, y2 in detections:
+        # Draw bounding box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         
-        # Filter by target classes if specified
-        if user_data.target_classes and label not in user_data.target_classes:
-            continue
+        # Draw label background
+        label_text = f"{label}: {conf:.2%}"
+        (text_w, text_h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(frame, (x1, y1 - text_h - 5), (x1 + text_w, y1), (0, 255, 0), -1)
         
-        # Get bounding box
-        bbox = detection.get_bbox()
-        
-        # Log detection
-        msg = user_data.log_detection(frame_num, label, confidence, bbox)
-        output_lines.append(f"  ✓ {label}: {confidence:.2%}")
-        
-        frame_detections += 1
-        user_data.detection_count += 1
+        # Draw label text
+        cv2.putText(frame, label_text, (x1, y1 - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     
-    # Print output if there are detections
-    if output_lines:
-        print("\n".join(output_lines))
-    
-    return Gst.PadProbeReturn.OK
+    return frame
 
 
-def parse_arguments():
+def find_default_hef():
+    """Try to find a default HEF model file"""
+    search_paths = [
+        "/usr/share/hailo-models",
+        "/usr/local/share/hailo-models",
+        os.path.expanduser("~/hailo-models"),
+        os.path.expanduser("~/hailo-apps/resources/models"),
+        os.path.expanduser("~/hailo-rpi5-examples/resources"),
+        "/usr/local/hailo/resources",
+    ]
+    
+    # Common YOLO model names
+    model_names = [
+        "yolov8s.hef",
+        "yolov8n.hef",
+        "yolov6n.hef",
+        "yolov5s.hef",
+        "yolov5n.hef",
+    ]
+    
+    for path in search_paths:
+        if os.path.exists(path):
+            for model in model_names:
+                model_path = os.path.join(path, model)
+                if os.path.exists(model_path):
+                    return model_path
+            # Search recursively
+            for root, dirs, files in os.walk(path):
+                for file in files:
+                    if file.endswith('.hef') and 'yolo' in file.lower():
+                        return os.path.join(root, file)
+    
+    return None
+
+
+def parse_args():
     """Parse command-line arguments"""
     parser = argparse.ArgumentParser(
-        description="Hailo AI Hat Object Detection Test for AISENTINEL",
+        description="Standalone Hailo Object Detection Test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python hailo_detection_test.py                     # USB camera (default)
-  python hailo_detection_test.py --input usb         # USB camera auto-detect
-  python hailo_detection_test.py --input /dev/video0 # Specific device
-  python hailo_detection_test.py --input video.mp4   # Video file
-  python hailo_detection_test.py --filter person     # Only detect persons
+  python hailo_detection_test.py                          # USB camera
+  python hailo_detection_test.py --input /dev/video0      # Specific camera
+  python hailo_detection_test.py --input video.mp4        # Video file
+  python hailo_detection_test.py --hef yolov8s.hef        # Custom model
         """
     )
     
     parser.add_argument(
         "--input", "-i",
         type=str,
-        default="usb",
-        help="Input source: 'usb' (default), 'rpi', '/dev/videoX', or video file path"
+        default="0",
+        help="Input source: camera index (0), device path (/dev/video0), or video file"
+    )
+    
+    parser.add_argument(
+        "--hef", "-m",
+        type=str,
+        default=None,
+        help="Path to HEF model file (auto-detected if not specified)"
+    )
+    
+    parser.add_argument(
+        "--confidence", "-c",
+        type=float,
+        default=0.5,
+        help="Minimum confidence threshold (default: 0.5)"
     )
     
     parser.add_argument(
         "--filter", "-f",
         type=str,
         nargs="+",
-        help="Filter specific object classes (e.g., --filter person car)"
+        help="Filter specific classes (e.g., --filter person car)"
     )
     
     parser.add_argument(
-        "--log", "-l",
-        type=str,
-        help="Log detections to specified file"
-    )
-    
-    parser.add_argument(
-        "--use-frame",
+        "--no-display",
         action="store_true",
-        help="Enable frame processing (higher CPU usage)"
+        help="Run without display (headless mode)"
+    )
+    
+    parser.add_argument(
+        "--log",
+        type=str,
+        help="Log detections to file"
     )
     
     return parser.parse_args()
@@ -340,65 +385,149 @@ Examples:
 
 def main():
     """Main entry point"""
-    print_banner()
+    print("=" * 60)
+    print("Hailo AI Hat Object Detection Test")
+    print("AISENTINEL Project - Standalone Version")
+    print("=" * 60)
     
-    # Parse arguments
-    args = parse_arguments()
+    args = parse_args()
     
-    print(f"\nConfiguration:")
-    print(f"  Input source: {args.input}")
-    print(f"  Detection type: {DETECTION_TYPE}")
-    if args.filter:
-        print(f"  Filter classes: {', '.join(args.filter)}")
-    if args.log:
-        print(f"  Log file: {args.log}")
+    # Find or validate HEF model
+    hef_path = args.hef
+    if hef_path is None:
+        hef_path = find_default_hef()
+        if hef_path is None:
+            print("\n[ERROR] No HEF model found!")
+            print("Please specify a model using --hef /path/to/model.hef")
+            print("\nTo download models, run:")
+            print("  hailo-download-resources --all")
+            return 1
     
-    print("\n" + "-" * 60)
-    print("Starting object detection pipeline...")
-    print("Press Ctrl+C to stop")
-    print("-" * 60 + "\n")
-    
-    # Set up environment
-    project_root = Path(__file__).resolve().parent.parent
-    env_file = project_root / ".env"
-    if env_file.exists():
-        os.environ["HAILO_ENV_FILE"] = str(env_file)
-    
-    # Create callback instance
-    user_data = DetectionTestCallback(
-        log_file=args.log,
-        target_classes=args.filter
-    )
-    
-    if args.use_frame:
-        user_data.use_frame = True
-    
-    try:
-        # Create and run detection app
-        # Pass input argument to the app
-        sys.argv = ['hailo_detection_test.py', '--input', args.input]
-        
-        app = GStreamerDetectionApp(detection_callback, user_data)
-        app.run()
-        
-    except KeyboardInterrupt:
-        print("\n\nStopping detection...")
-    except Exception as e:
-        print(f"\nError running detection: {e}")
-        print("\nTroubleshooting:")
-        print("  1. Ensure Hailo AI Hat is properly connected")
-        print("  2. Check if camera is available: ls /dev/video*")
-        print("  3. Verify hailo-apps environment: source setup_env.sh")
+    if not os.path.exists(hef_path):
+        print(f"\n[ERROR] Model file not found: {hef_path}")
         return 1
     
+    print(f"\n[CONFIG]")
+    print(f"  Model: {hef_path}")
+    print(f"  Input: {args.input}")
+    print(f"  Confidence: {args.confidence}")
+    if args.filter:
+        print(f"  Filter: {', '.join(args.filter)}")
+    
+    # Initialize detector
+    try:
+        detector = HailoDetector(hef_path, args.confidence)
+    except Exception as e:
+        print(f"\n[ERROR] Failed to initialize detector: {e}")
+        print("\nMake sure:")
+        print("  1. Hailo AI Hat is properly connected")
+        print("  2. HailoRT is installed: sudo apt install hailo-all")
+        return 1
+    
+    # Open video source
+    if args.input.isdigit():
+        source = int(args.input)
+    else:
+        source = args.input
+    
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        print(f"\n[ERROR] Failed to open video source: {args.input}")
+        print("\nCheck available cameras: ls /dev/video*")
+        detector.close()
+        return 1
+    
+    print(f"\n[INFO] Video source opened successfully")
+    print("-" * 60)
+    print("Running detection... Press 'q' to quit, 's' to save frame")
+    print("-" * 60)
+    
+    # Set up logging
+    log_file = None
+    if args.log:
+        log_file = open(args.log, 'w')
+        log_file.write(f"Hailo Detection Log - {datetime.now()}\n")
+        log_file.write("=" * 60 + "\n")
+    
+    # Main loop
+    frame_count = 0
+    start_time = time.time()
+    total_detections = 0
+    
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                if isinstance(source, str) and not source.startswith('/dev'):
+                    print("\n[INFO] End of video file")
+                    break
+                continue
+            
+            frame_count += 1
+            
+            # Run detection
+            detections = detector.detect(frame)
+            
+            # Filter classes if specified
+            if args.filter:
+                detections = [d for d in detections if d[0] in args.filter]
+            
+            total_detections += len(detections)
+            
+            # Log detections
+            if detections and log_file:
+                for label, conf, x1, y1, x2, y2 in detections:
+                    log_file.write(f"Frame {frame_count}: {label} ({conf:.2%})\n")
+            
+            # Print to console every 30 frames
+            if frame_count % 30 == 0:
+                elapsed = time.time() - start_time
+                fps = frame_count / elapsed if elapsed > 0 else 0
+                print(f"[Frame {frame_count}] FPS: {fps:.1f}, Detections this frame: {len(detections)}")
+            
+            # Draw and display
+            if not args.no_display:
+                frame = draw_detections(frame, detections)
+                
+                # Add FPS overlay
+                elapsed = time.time() - start_time
+                fps = frame_count / elapsed if elapsed > 0 else 0
+                cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame, f"Detections: {len(detections)}", (10, 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                cv2.imshow("Hailo Detection Test", frame)
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    print("\n[INFO] Quit requested")
+                    break
+                elif key == ord('s'):
+                    filename = f"detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                    cv2.imwrite(filename, frame)
+                    print(f"[INFO] Saved: {filename}")
+    
+    except KeyboardInterrupt:
+        print("\n\n[INFO] Interrupted by user")
+    
+    finally:
+        # Cleanup
+        cap.release()
+        detector.close()
+        cv2.destroyAllWindows()
+        if log_file:
+            log_file.close()
+    
     # Print summary
+    elapsed = time.time() - start_time
     print("\n" + "=" * 60)
     print("Detection Test Summary")
     print("=" * 60)
-    print(f"  Total frames processed: {user_data.get_count()}")
-    print(f"  Total detections: {user_data.detection_count}")
-    print(f"  Average FPS: {user_data.get_fps():.1f}")
-    print(f"  Duration: {user_data.get_elapsed_time():.1f} seconds")
+    print(f"  Total frames: {frame_count}")
+    print(f"  Total detections: {total_detections}")
+    print(f"  Average FPS: {frame_count / elapsed:.1f}" if elapsed > 0 else "  Duration: 0s")
+    print(f"  Duration: {elapsed:.1f} seconds")
     if args.log:
         print(f"  Log saved to: {args.log}")
     print("=" * 60)
