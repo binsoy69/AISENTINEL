@@ -60,8 +60,54 @@ sudo apt install -y \
     libhdf5-dev \
     libhdf5-serial-dev
 
-# Install OpenCV via pip (alternative method)
+# Install OpenCV via pip (alternative method - see note below)
 pip3 install opencv-python opencv-contrib-python
+```
+
+> [!IMPORTANT]
+> **If you get "error: externally-managed-environment"**  
+> This error occurs on Raspberry Pi OS Bookworm (Debian 12) and later. Use one of the solutions below instead of pip3.
+
+**Solution 1: Use APT (Recommended for Raspberry Pi)**
+
+```bash
+# This is the best approach for Raspberry Pi
+sudo apt install python3-opencv -y
+
+# Verify installation
+python3 -c "import cv2; print(cv2.__version__)"
+```
+
+**Solution 2: Use Virtual Environment**
+
+```bash
+# Create virtual environment
+python3 -m venv ~/aisentinel-env
+
+# Activate it
+source ~/aisentinel-env/bin/activate
+
+# Now pip install works
+pip install opencv-python
+
+# Remember to activate this environment before running the script
+```
+
+**Solution 3: Use pipx (For Isolated Tools)**
+
+```bash
+# Install pipx
+sudo apt install pipx -y
+
+# Install opencv in isolated environment
+pipx install opencv-python
+```
+
+**Solution 4: Override (Not Recommended)**
+
+```bash
+# Use --break-system-packages flag (use with caution)
+pip3 install opencv-python --break-system-packages
 ```
 
 ### 3. Install Additional Python Dependencies
@@ -94,7 +140,7 @@ Copy the `camera_test.py` script to your Raspberry Pi:
 
 ```bash
 # If using git clone
-cd /home/pi/AISENTINEL
+cd /home/pi/AISENTINEL/tests
 # The script should already be in the directory
 
 # Make the script executable
