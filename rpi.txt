@@ -1,0 +1,10 @@
+rpi config
+- Front Node:
+hostname: aisentinel-1
+username: sentinel
+password: pass123
+
+- Back Node:
+hostname: aisentinel-2
+username: sentinel
+password: pass123
