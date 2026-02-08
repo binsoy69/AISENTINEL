@@ -10,19 +10,94 @@ Prerequisites:
     1. Hailo AI Hat connected to Raspberry Pi 5
     2. hailo-apps repository installed (https://github.com/hailo-ai/hailo-apps)
     3. Environment sourced: source setup_env.sh
+    
+    OR set HAILO_APPS_PATH environment variable to point to hailo-apps directory
 
 Usage:
-    python hailo_detection_test.py                    # Use USB camera (default)
-    python hailo_detection_test.py --input usb        # Use USB camera
-    python hailo_detection_test.py --input /dev/video0  # Use specific device
-    python hailo_detection_test.py --input video.mp4  # Use video file
-    python hailo_detection_test.py --help             # Show all options
+    # Option 1: Source environment first (recommended)
+    cd ~/hailo-apps && source setup_env.sh
+    python /path/to/hailo_detection_test.py
+    
+    # Option 2: Set HAILO_APPS_PATH
+    export HAILO_APPS_PATH=~/hailo-apps
+    python hailo_detection_test.py
+    
+    # Option 3: Run from hailo-apps directory
+    cd ~/hailo-apps && source setup_env.sh
+    python ~/AISENTINEL/tests/hailo_detection_test.py
 """
 
 import sys
 import os
 import argparse
 from datetime import datetime
+
+
+def setup_hailo_path():
+    """
+    Set up Python path to find hailo_apps package.
+    Checks multiple locations in order of priority.
+    """
+    # Check if hailo_apps is already importable
+    try:
+        import hailo_apps
+        return True
+    except ImportError:
+        pass
+    
+    # List of paths to check
+    paths_to_check = []
+    
+    # 1. Check HAILO_APPS_PATH environment variable
+    hailo_apps_env = os.environ.get('HAILO_APPS_PATH')
+    if hailo_apps_env:
+        paths_to_check.append(os.path.expanduser(hailo_apps_env))
+    
+    # 2. Check common installation locations
+    home = os.path.expanduser('~')
+    common_paths = [
+        os.path.join(home, 'hailo-apps'),
+        os.path.join(home, 'hailo-rpi5-examples'),
+        '/opt/hailo-apps',
+        '/usr/local/hailo-apps',
+    ]
+    paths_to_check.extend(common_paths)
+    
+    # 3. Check if we're in a hailo-apps subdirectory
+    current = os.getcwd()
+    while current != '/':
+        if os.path.exists(os.path.join(current, 'hailo_apps')):
+            paths_to_check.insert(0, current)
+            break
+        current = os.path.dirname(current)
+    
+    # Try each path
+    for path in paths_to_check:
+        if os.path.exists(path) and os.path.isdir(path):
+            hailo_apps_dir = os.path.join(path, 'hailo_apps')
+            if os.path.exists(hailo_apps_dir):
+                if path not in sys.path:
+                    sys.path.insert(0, path)
+                    print(f"[INFO] Added to Python path: {path}")
+                
+                # Also check for virtual environment
+                venv_path = os.path.join(path, 'venv_hailo_apps', 'lib')
+                if os.path.exists(venv_path):
+                    # Find python version directory
+                    for item in os.listdir(venv_path):
+                        if item.startswith('python'):
+                            site_packages = os.path.join(venv_path, item, 'site-packages')
+                            if os.path.exists(site_packages) and site_packages not in sys.path:
+                                sys.path.insert(0, site_packages)
+                
+                return True
+    
+    return False
+
+
+# Set up path before checking prerequisites
+setup_hailo_path()
+
 
 # Check if running on compatible system
 def check_prerequisites():
@@ -70,14 +145,23 @@ def print_prerequisites_error(errors):
     for error in errors:
         print(f"  ✗ {error}")
     
-    print("\nTo set up on Raspberry Pi 5:")
-    print("  1. Install Hailo AI Hat hardware")
-    print("  2. Clone hailo-apps repository:")
-    print("     git clone https://github.com/hailo-ai/hailo-apps.git")
-    print("  3. Install dependencies:")
-    print("     cd hailo-apps && sudo ./install.sh")
-    print("  4. Source environment before running:")
-    print("     source setup_env.sh")
+    print("\n" + "-" * 60)
+    print("SOLUTION OPTIONS:")
+    print("-" * 60)
+    
+    print("\nOption 1 (Recommended): Source the environment first")
+    print("  cd ~/hailo-apps")
+    print("  source setup_env.sh")
+    print("  python /path/to/hailo_detection_test.py")
+    
+    print("\nOption 2: Set HAILO_APPS_PATH environment variable")
+    print("  export HAILO_APPS_PATH=~/hailo-apps")
+    print("  python hailo_detection_test.py")
+    
+    print("\nIf hailo-apps is not installed:")
+    print("  git clone https://github.com/hailo-ai/hailo-apps.git")
+    print("  cd hailo-apps && sudo ./install.sh")
+    
     print("\nFor more info: https://github.com/hailo-ai/hailo-apps")
     print("=" * 60)
 
