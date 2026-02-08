@@ -107,64 +107,127 @@ def nms(boxes, scores, iou_threshold=0.45):
     return np.array(keep)
 
 
-def postprocess_yolov8(raw_output, img_w, img_h, input_size=640,
-                       conf_threshold=0.5, iou_threshold=0.45):
+def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640,
+                           conf_threshold=0.5, iou_threshold=0.45):
     """
-    Decode raw YOLOv8 output tensor into a list of detections.
+    Decode Hailo NMS-postprocessed YOLOv8 output into a list of detections.
 
-    YOLOv8 raw output shape from Hailo is typically one of:
-      - (1, 84, 8400)  — transposed format [batch, 4+80, num_preds]
+    When the .hef has built-in NMS (output layer name contains 'nms_postprocess'),
+    the output is a list of 80 arrays (one per COCO class), each with shape (N, 5):
+        [y1, x1, y2, x2, score]   — coordinates normalized to [0, 1]
+
+    Some classes may have 0 detections (empty arrays).
+
+    Returns list of dicts: {label, confidence, box: [x1,y1,x2,y2], class_id}
+    """
+    # Extract the output — may be a dict with one key
+    if isinstance(raw_output, dict):
+        output = list(raw_output.values())[0]
+    else:
+        output = raw_output
+
+    # Remove batch dimension if present: (1, 80, ...) → (80, ...)
+    if isinstance(output, np.ndarray):
+        output = np.squeeze(output, axis=0) if output.ndim > 2 else output
+    elif isinstance(output, list) and len(output) == 1 and isinstance(output[0], (list, np.ndarray)):
+        # Unwrap single-batch list: [[class0, class1, ...]] → [class0, class1, ...]
+        output = output[0]
+
+    detections = []
+
+    # Iterate over each class
+    for cls_id, class_dets in enumerate(output):
+        # Convert to numpy if needed
+        if not isinstance(class_dets, np.ndarray):
+            try:
+                class_dets = np.array(class_dets, dtype=np.float32)
+            except (ValueError, TypeError):
+                continue
+
+        # Skip empty classes
+        if class_dets.size == 0:
+            continue
+
+        # Ensure 2D: (N, 5)
+        if class_dets.ndim == 1:
+            class_dets = class_dets.reshape(1, -1)
+
+        # Each row: [y1, x1, y2, x2, score]
+        for det in class_dets:
+            if len(det) < 5:
+                continue
+
+            score = float(det[4])
+            if score < conf_threshold:
+                continue
+
+            # Hailo NMS output is normalized [0,1] — scale to image size
+            y1, x1, y2, x2 = det[0], det[1], det[2], det[3]
+
+            # Scale to original image dimensions
+            x1_px = int(np.clip(x1 * img_w, 0, img_w))
+            y1_px = int(np.clip(y1 * img_h, 0, img_h))
+            x2_px = int(np.clip(x2 * img_w, 0, img_w))
+            y2_px = int(np.clip(y2 * img_h, 0, img_h))
+
+            # Skip tiny/invalid boxes
+            if x2_px - x1_px < 2 or y2_px - y1_px < 2:
+                continue
+
+            label = COCO_LABELS[cls_id] if cls_id < len(COCO_LABELS) else f"class_{cls_id}"
+            detections.append({
+                "label": label,
+                "confidence": score,
+                "box": [x1_px, y1_px, x2_px, y2_px],
+                "class_id": int(cls_id),
+            })
+
+    # Sort by confidence (highest first)
+    detections.sort(key=lambda d: d["confidence"], reverse=True)
+    return detections
+
+
+def postprocess_yolov8_raw(raw_output, img_w, img_h, input_size=640,
+                           conf_threshold=0.5, iou_threshold=0.45):
+    """
+    Decode raw (non-NMS) YOLOv8 output tensor into a list of detections.
+
+    Raw YOLOv8 output shape is typically:
+      - (1, 84, 8400)  — [batch, 4+80classes, num_preds]
       - (8400, 84)     — already transposed
-      - Multiple output tensors for different stride heads
 
     Each detection row (after transpose): [cx, cy, w, h, cls0, cls1, ..., cls79]
 
-    Returns list of dicts: {label, confidence, box: [x1,y1,x2,y2]}
+    Returns list of dicts: {label, confidence, box: [x1,y1,x2,y2], class_id}
     """
-    # Handle dict output (multiple output layers from Hailo)
     if isinstance(raw_output, dict):
         arrays = list(raw_output.values())
-        # If we have multiple tensors, try to concatenate them
-        # or use the largest one
         if len(arrays) == 1:
             output = arrays[0]
         else:
-            # YOLOv8 may output separate tensors per stride head
-            # Try concatenating along prediction dimension
             try:
-                # Flatten any batch dimensions and concatenate
                 flat = []
                 for a in arrays:
                     a = np.squeeze(a)
                     if a.ndim == 3:
-                        # (batch, features, preds) or (batch, preds, features)
                         a = a.reshape(-1, a.shape[-1])
                     elif a.ndim == 1:
                         continue
                     flat.append(a)
                 output = np.concatenate(flat, axis=0)
             except Exception:
-                # Fall back to largest tensor
                 output = max(arrays, key=lambda x: x.size)
     else:
         output = raw_output
 
     output = np.squeeze(output)
 
-    # Determine shape and transpose if needed
-    # Target shape: (num_predictions, 4 + num_classes)
     if output.ndim == 2:
-        if output.shape[0] == 84 and output.shape[1] > 84:
-            # Shape is (84, 8400) → transpose to (8400, 84)
+        if output.shape[0] in (84, 85) and output.shape[1] > 85:
             output = output.T
-        elif output.shape[1] == 84:
-            pass  # Already (N, 84)
-        else:
-            # Try the other way
-            if output.shape[1] > output.shape[0]:
-                output = output.T
+        elif output.shape[1] > output.shape[0]:
+            output = output.T
     elif output.ndim == 3:
-        # (1, 84, 8400) → squeeze and transpose
         output = output.reshape(output.shape[-2], output.shape[-1])
         if output.shape[0] < output.shape[1]:
             output = output.T
@@ -176,11 +239,9 @@ def postprocess_yolov8(raw_output, img_w, img_h, input_size=640,
     boxes_xywh = output[:, :4]
     class_scores = output[:, 4:]
 
-    # Get best class per prediction
     class_ids = np.argmax(class_scores, axis=1)
     confidences = np.max(class_scores, axis=1)
 
-    # Filter by confidence
     mask = confidences > conf_threshold
     if not np.any(mask):
         return []
@@ -189,20 +250,15 @@ def postprocess_yolov8(raw_output, img_w, img_h, input_size=640,
     class_ids = class_ids[mask]
     confidences = confidences[mask]
 
-    # Convert to xyxy
     boxes_xyxy = xywh_to_xyxy(boxes_xywh)
 
-    # Scale boxes from model input size to original image size
     scale_x = img_w / input_size
     scale_y = img_h / input_size
     boxes_xyxy[:, [0, 2]] *= scale_x
     boxes_xyxy[:, [1, 3]] *= scale_y
-
-    # Clip to image bounds
     boxes_xyxy[:, [0, 2]] = np.clip(boxes_xyxy[:, [0, 2]], 0, img_w)
     boxes_xyxy[:, [1, 3]] = np.clip(boxes_xyxy[:, [1, 3]], 0, img_h)
 
-    # Per-class NMS
     detections = []
     unique_classes = np.unique(class_ids)
     for cls_id in unique_classes:
@@ -218,7 +274,6 @@ def postprocess_yolov8(raw_output, img_w, img_h, input_size=640,
                 "box": cls_boxes[idx].astype(int).tolist(),
                 "class_id": int(cls_id),
             })
-
     return detections
 
 
@@ -285,9 +340,15 @@ class HailoDetector:
         self.input_h = self.input_shape[0]
         self.input_w = self.input_shape[1]
 
+        # Auto-detect if model has built-in NMS postprocessing
+        self.has_nms = any(
+            "nms" in info.name.lower() for info in self.output_vstream_info
+        )
+
         print(f"[INFO] Model input shape : {self.input_shape}")
         for out_info in self.output_vstream_info:
             print(f"[INFO] Model output layer: {out_info.name} → {out_info.shape}")
+        print(f"[INFO] NMS on-chip       : {'YES' if self.has_nms else 'NO (will do NMS in Python)'}")
         print(f"[INFO] Hailo device ready.")
 
     def detect(self, frame):
@@ -313,13 +374,20 @@ class HailoDetector:
             ) as infer_pipeline:
                 results = infer_pipeline.infer(input_dict)
 
-        # Post-process
-        detections = postprocess_yolov8(
-            results, img_w, img_h,
-            input_size=self.input_w,
-            conf_threshold=self.conf_threshold,
-            iou_threshold=self.iou_threshold,
-        )
+        # Post-process — choose method based on model output format
+        if self.has_nms:
+            detections = postprocess_yolov8_nms(
+                results, img_w, img_h,
+                input_size=self.input_w,
+                conf_threshold=self.conf_threshold,
+            )
+        else:
+            detections = postprocess_yolov8_raw(
+                results, img_w, img_h,
+                input_size=self.input_w,
+                conf_threshold=self.conf_threshold,
+                iou_threshold=self.iou_threshold,
+            )
         return detections
 
 
