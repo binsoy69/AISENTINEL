@@ -3,31 +3,43 @@
 YOLO Object Detection on Raspberry Pi 5 (Trixie OS) + Hailo AI Accelerator
 Using a USB Camera — No hailo-apps required.
 
-This script uses the HailoRT Python API (hailo_platform) directly with OpenCV
-to capture frames from a USB camera, run YOLOv8s inference on the Hailo NPU,
-and display bounding boxes in real time.
+Live preview via web browser at http://<pi-ip>:8080
 
 Usage:
     python3 yolo_usb_cam_hailo.py [--model MODEL.hef] [--camera 0] [--threshold 0.5]
+    Then open http://<your-pi-ip>:8080 in any browser.
 
 Requirements:
     - Raspberry Pi 5 with Trixie OS
     - Hailo AI Kit / AI HAT+ installed and configured
     - USB camera plugged in
-    - Python packages: opencv-python, numpy, hailo_platform (system-installed)
+    - Python packages: opencv-python, numpy, flask, hailo_platform (system-installed)
+    - pip install flask  (if not already installed)
 """
 
 import argparse
 import time
 import sys
 import os
+import threading
+import socket
 
 import cv2
 import numpy as np
 
 # ──────────────────────────────────────────────────────────────
-# Try to import hailo_platform — available as a system package
-# after installing hailo-all on Trixie
+# Try to import Flask for web preview
+# ──────────────────────────────────────────────────────────────
+try:
+    from flask import Flask, Response, render_template_string
+    FLASK_AVAILABLE = True
+except ImportError:
+    FLASK_AVAILABLE = False
+    print("[WARN] flask not found. Install with: pip install flask")
+    print("       Web preview will be disabled.\n")
+
+# ──────────────────────────────────────────────────────────────
+# Try to import hailo_platform
 # ──────────────────────────────────────────────────────────────
 try:
     from hailo_platform import (
@@ -63,7 +75,6 @@ COCO_LABELS = [
     "hair drier", "toothbrush",
 ]
 
-# Distinct colours for each class (randomly seeded for consistency)
 np.random.seed(42)
 COLORS = np.random.randint(0, 255, size=(len(COCO_LABELS), 3), dtype=np.uint8)
 
@@ -73,21 +84,18 @@ COLORS = np.random.randint(0, 255, size=(len(COCO_LABELS), 3), dtype=np.uint8)
 # ──────────────────────────────────────────────────────────────
 
 def xywh_to_xyxy(boxes):
-    """Convert [cx, cy, w, h] → [x1, y1, x2, y2]."""
+    """Convert [cx, cy, w, h] to [x1, y1, x2, y2]."""
     out = np.copy(boxes)
-    out[:, 0] = boxes[:, 0] - boxes[:, 2] / 2  # x1
-    out[:, 1] = boxes[:, 1] - boxes[:, 3] / 2  # y1
-    out[:, 2] = boxes[:, 0] + boxes[:, 2] / 2  # x2
-    out[:, 3] = boxes[:, 1] + boxes[:, 3] / 2  # y2
+    out[:, 0] = boxes[:, 0] - boxes[:, 2] / 2
+    out[:, 1] = boxes[:, 1] - boxes[:, 3] / 2
+    out[:, 2] = boxes[:, 0] + boxes[:, 2] / 2
+    out[:, 3] = boxes[:, 1] + boxes[:, 3] / 2
     return out
 
 
 def nms(boxes, scores, iou_threshold=0.45):
-    """Non-Maximum Suppression (simple Python version)."""
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
+    """Non-Maximum Suppression."""
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
     areas = (x2 - x1) * (y2 - y1)
     order = scores.argsort()[::-1]
     keep = []
@@ -98,108 +106,67 @@ def nms(boxes, scores, iou_threshold=0.45):
         yy1 = np.maximum(y1[i], y1[order[1:]])
         xx2 = np.minimum(x2[i], x2[order[1:]])
         yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
+        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
         iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
-        inds = np.where(iou <= iou_threshold)[0]
-        order = order[inds + 1]
+        order = order[np.where(iou <= iou_threshold)[0] + 1]
     return np.array(keep)
 
 
-def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640,
-                           conf_threshold=0.5, iou_threshold=0.45):
+def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640, conf_threshold=0.5):
     """
-    Decode Hailo NMS-postprocessed YOLOv8 output into a list of detections.
-
-    When the .hef has built-in NMS (output layer name contains 'nms_postprocess'),
-    the output is a list of 80 arrays (one per COCO class), each with shape (N, 5):
-        [y1, x1, y2, x2, score]   — coordinates normalized to [0, 1]
-
-    Some classes may have 0 detections (empty arrays).
-
-    Returns list of dicts: {label, confidence, box: [x1,y1,x2,y2], class_id}
+    Decode Hailo NMS-postprocessed YOLOv8 output.
+    Output is a list of 80 arrays (one per class), each row: [y1, x1, y2, x2, score]
+    Coordinates are normalized [0, 1].
     """
-    # Extract the output — may be a dict with one key
     if isinstance(raw_output, dict):
         output = list(raw_output.values())[0]
     else:
         output = raw_output
 
-    # Remove batch dimension if present: (1, 80, ...) → (80, ...)
+    # Remove batch dimension
     if isinstance(output, np.ndarray):
         output = np.squeeze(output, axis=0) if output.ndim > 2 else output
     elif isinstance(output, list) and len(output) == 1 and isinstance(output[0], (list, np.ndarray)):
-        # Unwrap single-batch list: [[class0, class1, ...]] → [class0, class1, ...]
         output = output[0]
 
     detections = []
-
-    # Iterate over each class
     for cls_id, class_dets in enumerate(output):
-        # Convert to numpy if needed
         if not isinstance(class_dets, np.ndarray):
             try:
                 class_dets = np.array(class_dets, dtype=np.float32)
             except (ValueError, TypeError):
                 continue
-
-        # Skip empty classes
         if class_dets.size == 0:
             continue
-
-        # Ensure 2D: (N, 5)
         if class_dets.ndim == 1:
             class_dets = class_dets.reshape(1, -1)
 
-        # Each row: [y1, x1, y2, x2, score]
         for det in class_dets:
             if len(det) < 5:
                 continue
-
             score = float(det[4])
             if score < conf_threshold:
                 continue
-
-            # Hailo NMS output is normalized [0,1] — scale to image size
             y1, x1, y2, x2 = det[0], det[1], det[2], det[3]
-
-            # Scale to original image dimensions
             x1_px = int(np.clip(x1 * img_w, 0, img_w))
             y1_px = int(np.clip(y1 * img_h, 0, img_h))
             x2_px = int(np.clip(x2 * img_w, 0, img_w))
             y2_px = int(np.clip(y2 * img_h, 0, img_h))
-
-            # Skip tiny/invalid boxes
             if x2_px - x1_px < 2 or y2_px - y1_px < 2:
                 continue
-
             label = COCO_LABELS[cls_id] if cls_id < len(COCO_LABELS) else f"class_{cls_id}"
             detections.append({
-                "label": label,
-                "confidence": score,
-                "box": [x1_px, y1_px, x2_px, y2_px],
-                "class_id": int(cls_id),
+                "label": label, "confidence": score,
+                "box": [x1_px, y1_px, x2_px, y2_px], "class_id": int(cls_id),
             })
 
-    # Sort by confidence (highest first)
     detections.sort(key=lambda d: d["confidence"], reverse=True)
     return detections
 
 
 def postprocess_yolov8_raw(raw_output, img_w, img_h, input_size=640,
                            conf_threshold=0.5, iou_threshold=0.45):
-    """
-    Decode raw (non-NMS) YOLOv8 output tensor into a list of detections.
-
-    Raw YOLOv8 output shape is typically:
-      - (1, 84, 8400)  — [batch, 4+80classes, num_preds]
-      - (8400, 84)     — already transposed
-
-    Each detection row (after transpose): [cx, cy, w, h, cls0, cls1, ..., cls79]
-
-    Returns list of dicts: {label, confidence, box: [x1,y1,x2,y2], class_id}
-    """
+    """Decode raw (non-NMS) YOLOv8 output tensor."""
     if isinstance(raw_output, dict):
         arrays = list(raw_output.values())
         if len(arrays) == 1:
@@ -221,7 +188,6 @@ def postprocess_yolov8_raw(raw_output, img_w, img_h, input_size=640,
         output = raw_output
 
     output = np.squeeze(output)
-
     if output.ndim == 2:
         if output.shape[0] in (84, 85) and output.shape[1] > 85:
             output = output.T
@@ -236,62 +202,57 @@ def postprocess_yolov8_raw(raw_output, img_w, img_h, input_size=640,
     if num_classes <= 0:
         return []
 
-    boxes_xywh = output[:, :4]
-    class_scores = output[:, 4:]
-
+    boxes_xywh, class_scores = output[:, :4], output[:, 4:]
     class_ids = np.argmax(class_scores, axis=1)
     confidences = np.max(class_scores, axis=1)
-
     mask = confidences > conf_threshold
     if not np.any(mask):
         return []
 
-    boxes_xywh = boxes_xywh[mask]
-    class_ids = class_ids[mask]
-    confidences = confidences[mask]
-
+    boxes_xywh, class_ids, confidences = boxes_xywh[mask], class_ids[mask], confidences[mask]
     boxes_xyxy = xywh_to_xyxy(boxes_xywh)
-
-    scale_x = img_w / input_size
-    scale_y = img_h / input_size
-    boxes_xyxy[:, [0, 2]] *= scale_x
-    boxes_xyxy[:, [1, 3]] *= scale_y
+    boxes_xyxy[:, [0, 2]] *= img_w / input_size
+    boxes_xyxy[:, [1, 3]] *= img_h / input_size
     boxes_xyxy[:, [0, 2]] = np.clip(boxes_xyxy[:, [0, 2]], 0, img_w)
     boxes_xyxy[:, [1, 3]] = np.clip(boxes_xyxy[:, [1, 3]], 0, img_h)
 
     detections = []
-    unique_classes = np.unique(class_ids)
-    for cls_id in unique_classes:
+    for cls_id in np.unique(class_ids):
         cls_mask = class_ids == cls_id
-        cls_boxes = boxes_xyxy[cls_mask]
-        cls_scores = confidences[cls_mask]
-        keep = nms(cls_boxes, cls_scores, iou_threshold)
-        for idx in keep:
+        cls_boxes, cls_scores = boxes_xyxy[cls_mask], confidences[cls_mask]
+        for idx in nms(cls_boxes, cls_scores, iou_threshold):
             label = COCO_LABELS[cls_id] if cls_id < len(COCO_LABELS) else f"class_{cls_id}"
             detections.append({
-                "label": label,
-                "confidence": float(cls_scores[idx]),
-                "box": cls_boxes[idx].astype(int).tolist(),
-                "class_id": int(cls_id),
+                "label": label, "confidence": float(cls_scores[idx]),
+                "box": cls_boxes[idx].astype(int).tolist(), "class_id": int(cls_id),
             })
     return detections
 
 
-def draw_detections(frame, detections):
-    """Draw bounding boxes and labels on the frame."""
+def draw_detections(frame, detections, fps=0):
+    """Draw bounding boxes, labels, and FPS on the frame."""
     for det in detections:
         x1, y1, x2, y2 = det["box"]
         cls_id = det["class_id"]
         color = tuple(int(c) for c in COLORS[cls_id % len(COLORS)])
         label = f'{det["label"]} {det["confidence"]:.2f}'
-
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-        # Label background
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw, y1), color, -1)
-        cv2.putText(frame, label, (x1, y1 - 4),
+        cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+        cv2.putText(frame, label, (x1 + 2, y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # FPS overlay
+    fps_text = f"FPS: {fps:.1f}"
+    cv2.rectangle(frame, (5, 5), (160, 35), (0, 0, 0), -1)
+    cv2.putText(frame, fps_text, (10, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+
+    # Detection count
+    count_text = f"Objects: {len(detections)}"
+    cv2.rectangle(frame, (frame.shape[1] - 170, 5), (frame.shape[1] - 5, 35), (0, 0, 0), -1)
+    cv2.putText(frame, count_text, (frame.shape[1] - 165, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2, cv2.LINE_AA)
     return frame
 
 
@@ -312,60 +273,43 @@ class HailoDetector:
         print(f"[INFO] Loading HEF model: {hef_path}")
         self.hef = HEF(hef_path)
 
-        # Create a virtual device (auto-discovers Hailo-8/8L on PCIe)
         self.vdevice = VDevice()
-
-        # Configure the device with the model
         configure_params = ConfigureParams.create_from_hef(
             self.hef, interface=HailoStreamInterface.PCIe
         )
         self.network_group = self.vdevice.configure(self.hef, configure_params)[0]
         self.network_group_params = self.network_group.create_params()
 
-        # Get input/output stream info
         self.input_vstream_info = self.hef.get_input_vstream_infos()
         self.output_vstream_info = self.hef.get_output_vstream_infos()
 
-        # Configure vstream params — request UINT8 input (matches OpenCV frames)
         self.input_vstreams_params = InputVStreamParams.make_from_network_group(
             self.network_group, quantized=True, format_type=FormatType.UINT8
         )
-        # Output as FLOAT32 for easier post-processing
         self.output_vstreams_params = OutputVStreamParams.make_from_network_group(
             self.network_group, quantized=False, format_type=FormatType.FLOAT32
         )
 
-        # Determine model input dimensions
-        self.input_shape = self.input_vstream_info[0].shape  # e.g. (640, 640, 3)
+        self.input_shape = self.input_vstream_info[0].shape
         self.input_h = self.input_shape[0]
         self.input_w = self.input_shape[1]
 
-        # Auto-detect if model has built-in NMS postprocessing
-        self.has_nms = any(
-            "nms" in info.name.lower() for info in self.output_vstream_info
-        )
+        self.has_nms = any("nms" in info.name.lower() for info in self.output_vstream_info)
 
         print(f"[INFO] Model input shape : {self.input_shape}")
         for out_info in self.output_vstream_info:
-            print(f"[INFO] Model output layer: {out_info.name} → {out_info.shape}")
-        print(f"[INFO] NMS on-chip       : {'YES' if self.has_nms else 'NO (will do NMS in Python)'}")
+            print(f"[INFO] Model output layer: {out_info.name} -> {out_info.shape}")
+        print(f"[INFO] NMS on-chip       : {'YES' if self.has_nms else 'NO (Python NMS)'}")
         print(f"[INFO] Hailo device ready.")
 
     def detect(self, frame):
-        """Run detection on a single BGR frame. Returns list of detections."""
+        """Run detection on a single BGR frame."""
         img_h, img_w = frame.shape[:2]
-
-        # Preprocess: resize to model input, keep as uint8 RGB
         resized = cv2.resize(frame, (self.input_w, self.input_h))
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-
-        # Add batch dimension: (1, H, W, 3)
         input_data = np.expand_dims(rgb, axis=0)
-
-        # Build the input dict keyed by input layer name
         input_dict = {self.input_vstream_info[0].name: input_data}
 
-        # Run inference
         with self.network_group.activate(self.network_group_params):
             with InferVStreams(
                 self.network_group,
@@ -374,25 +318,23 @@ class HailoDetector:
             ) as infer_pipeline:
                 results = infer_pipeline.infer(input_dict)
 
-        # Post-process — choose method based on model output format
         if self.has_nms:
-            detections = postprocess_yolov8_nms(
+            return postprocess_yolov8_nms(
                 results, img_w, img_h,
                 input_size=self.input_w,
                 conf_threshold=self.conf_threshold,
             )
         else:
-            detections = postprocess_yolov8_raw(
+            return postprocess_yolov8_raw(
                 results, img_w, img_h,
                 input_size=self.input_w,
                 conf_threshold=self.conf_threshold,
                 iou_threshold=self.iou_threshold,
             )
-        return detections
 
 
 # ──────────────────────────────────────────────────────────────
-# CPU fallback using ultralytics (no Hailo required)
+# CPU fallback
 # ──────────────────────────────────────────────────────────────
 
 class UltralyticsDetector:
@@ -402,14 +344,11 @@ class UltralyticsDetector:
         try:
             from ultralytics import YOLO
         except ImportError:
-            print("[ERROR] ultralytics not installed. Install with:")
-            print("        pip install ultralytics --break-system-packages")
+            print("[ERROR] pip install ultralytics --break-system-packages")
             sys.exit(1)
-
         self.conf_threshold = conf_threshold
         print(f"[INFO] Loading ultralytics model: {model_name} (CPU mode)")
         self.model = YOLO(model_name)
-        print("[INFO] Model loaded — running on CPU (expect ~2-5 FPS on Pi 5).")
 
     def detect(self, frame):
         results = self.model(frame, conf=self.conf_threshold, verbose=False)
@@ -418,19 +357,132 @@ class UltralyticsDetector:
             for box in r.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                 cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                label = self.model.names.get(cls_id, f"class_{cls_id}")
                 detections.append({
-                    "label": label,
-                    "confidence": conf,
-                    "box": [x1, y1, x2, y2],
-                    "class_id": cls_id,
+                    "label": self.model.names.get(cls_id, f"class_{cls_id}"),
+                    "confidence": float(box.conf[0]),
+                    "box": [x1, y1, x2, y2], "class_id": cls_id,
                 })
         return detections
 
 
 # ──────────────────────────────────────────────────────────────
-# Main loop
+# Flask MJPEG web preview server
+# ──────────────────────────────────────────────────────────────
+
+# Shared state for the web stream
+_latest_frame = None
+_frame_lock = threading.Lock()
+
+HTML_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YOLO Detection - RPi 5</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e; color: #eee;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            display: flex; flex-direction: column;
+            align-items: center; min-height: 100vh;
+        }
+        h1 {
+            margin: 20px 0 10px;
+            font-size: 1.5em; font-weight: 400;
+            color: #0ff;
+        }
+        .info {
+            color: #888; font-size: 0.9em;
+            margin-bottom: 15px;
+        }
+        .stream-container {
+            border: 2px solid #0ff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.15);
+            max-width: 95vw;
+        }
+        img {
+            display: block;
+            width: 100%;
+            max-width: 960px;
+        }
+        .footer {
+            margin-top: 15px;
+            color: #555; font-size: 0.8em;
+        }
+    </style>
+</head>
+<body>
+    <h1>YOLO Object Detection - RPi 5 + Hailo</h1>
+    <p class="info">Live USB camera feed with real-time detection</p>
+    <div class="stream-container">
+        <img src="/video_feed" alt="Live Stream">
+    </div>
+    <p class="footer">Stream: MJPEG | Press Ctrl+C in terminal to stop</p>
+</body>
+</html>
+"""
+
+
+def create_flask_app():
+    """Create the Flask app for MJPEG streaming."""
+    app = Flask(__name__)
+
+    # Suppress Flask request logs
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+
+    @app.route('/')
+    def index():
+        return render_template_string(HTML_PAGE)
+
+    @app.route('/video_feed')
+    def video_feed():
+        def generate():
+            while True:
+                with _frame_lock:
+                    frame = _latest_frame
+                if frame is not None:
+                    _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                else:
+                    time.sleep(0.05)
+                # Cap stream to ~30fps to reduce CPU
+                time.sleep(0.03)
+
+        return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+    return app
+
+
+def get_local_ip():
+    """Get the Pi's local IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
+def start_web_server(port=8080):
+    """Start Flask in a background daemon thread."""
+    app = create_flask_app()
+    thread = threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=port, threaded=True),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+# ──────────────────────────────────────────────────────────────
+# Camera helpers
 # ──────────────────────────────────────────────────────────────
 
 def find_usb_camera():
@@ -446,8 +498,14 @@ def find_usb_camera():
     return None
 
 
+# ──────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="YOLO Object Detection — RPi 5 + Hailo + USB Cam")
+    global _latest_frame
+
+    parser = argparse.ArgumentParser(description="YOLO Detection - RPi 5 + Hailo + USB Cam")
     parser.add_argument("--model", default="yolov8s.hef",
                         help="Path to .hef model file (default: yolov8s.hef)")
     parser.add_argument("--camera", type=int, default=None,
@@ -460,31 +518,25 @@ def main():
                         help="Detection confidence threshold (0-1)")
     parser.add_argument("--iou", type=float, default=0.45,
                         help="NMS IoU threshold")
-    parser.add_argument("--no-display", action="store_true",
-                        help="Run headless — print detections to terminal only")
+    parser.add_argument("--port", type=int, default=8080,
+                        help="Web preview port (default: 8080)")
+    parser.add_argument("--no-web", action="store_true",
+                        help="Disable web preview (terminal output only)")
     parser.add_argument("--cpu", action="store_true",
-                        help="Force CPU-only mode using ultralytics (no Hailo)")
+                        help="Force CPU-only mode using ultralytics")
     args = parser.parse_args()
 
     # ── Select detector ──────────────────────────────────────
     if args.cpu or not HAILO_AVAILABLE:
-        detector = UltralyticsDetector(
-            model_name="yolov8n.pt",
-            conf_threshold=args.threshold,
-        )
+        detector = UltralyticsDetector("yolov8n.pt", conf_threshold=args.threshold)
     else:
         if not os.path.isfile(args.model):
             print(f"[ERROR] HEF model file not found: {args.model}")
-            print("        Download one with:")
-            print("        wget https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/"
-                  "ModelZoo/Compiled/v2.14.0/hailo8l/yolov8s.hef")
-            print("        (Use hailo8l or hailo8 path depending on your hardware.)")
+            print("        Download with:")
+            print("        wget -O yolov8n.hef https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/"
+                  "ModelZoo/Compiled/v2.14.0/hailo8/yolov8n.hef")
             sys.exit(1)
-        detector = HailoDetector(
-            args.model,
-            conf_threshold=args.threshold,
-            iou_threshold=args.iou,
-        )
+        detector = HailoDetector(args.model, args.threshold, args.iou)
 
     # ── Open USB camera ──────────────────────────────────────
     if args.camera is not None:
@@ -495,18 +547,31 @@ def main():
     else:
         cap = find_usb_camera()
         if cap is None:
-            print("[ERROR] No USB camera found. Check connection and try:")
-            print("        ls /dev/video*")
-            print("        v4l2-ctl --list-devices")
+            print("[ERROR] No USB camera found. Try: ls /dev/video* && v4l2-ctl --list-devices")
             sys.exit(1)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"[INFO] Camera resolution: {actual_w}x{actual_h}")
-    print(f"[INFO] Press 'q' to quit.\n")
+
+    # ── Start web preview ────────────────────────────────────
+    if not args.no_web and FLASK_AVAILABLE:
+        start_web_server(args.port)
+        local_ip = get_local_ip()
+        print(f"")
+        print(f"  +-------------------------------------------------+")
+        print(f"  |  LIVE PREVIEW ready at:                          |")
+        print(f"  |  -> http://{local_ip}:{args.port:<24}|")
+        print(f"  |  -> http://localhost:{args.port:<23}|")
+        print(f"  +-------------------------------------------------+")
+        print(f"")
+    elif not args.no_web:
+        print("[WARN] Flask not available - web preview disabled.")
+        print("       Install with: pip install flask")
+
+    print(f"[INFO] Running... Press Ctrl+C to stop.\n")
 
     # ── Main loop ────────────────────────────────────────────
     fps_smooth = 0
@@ -518,7 +583,7 @@ def main():
 
             ret, frame = cap.read()
             if not ret:
-                print("[WARN] Failed to read frame — retrying...")
+                print("[WARN] Failed to read frame - retrying...")
                 time.sleep(0.1)
                 continue
 
@@ -531,29 +596,27 @@ def main():
             fps_smooth = 0.9 * fps_smooth + 0.1 * fps_instant
             frame_count += 1
 
-            # Print detections to terminal periodically
-            if frame_count % 30 == 0 or len(detections) > 0:
-                det_str = ", ".join(
-                    f'{d["label"]}({d["confidence"]:.0%})' for d in detections
-                )
-                print(f"[FPS: {fps_smooth:5.1f}]  Detections: {det_str or 'none'}")
+            # Draw detections onto frame
+            annotated = draw_detections(frame.copy(), detections, fps_smooth)
 
-            # Display
-            if not args.no_display:
-                frame = draw_detections(frame, detections)
-                cv2.putText(frame, f"FPS: {fps_smooth:.1f}", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                cv2.imshow("YOLO Detection — RPi 5", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+            # Update the shared frame for web streaming
+            with _frame_lock:
+                _latest_frame = annotated
+
+            # Print to terminal periodically
+            if frame_count % 30 == 0 or (len(detections) > 0 and frame_count % 5 == 0):
+                det_str = ", ".join(
+                    f'{d["label"]}({d["confidence"]:.0%})' for d in detections[:8]
+                )
+                if len(detections) > 8:
+                    det_str += f", +{len(detections)-8} more"
+                print(f"  [FPS: {fps_smooth:5.1f}]  {det_str or 'no detections'}")
 
     except KeyboardInterrupt:
-        print("\n[INFO] Interrupted — shutting down.")
+        print("\n[INFO] Shutting down...")
 
     finally:
         cap.release()
-        if not args.no_display:
-            cv2.destroyAllWindows()
         print("[INFO] Done.")
 
 
