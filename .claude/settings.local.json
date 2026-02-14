@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:community.hailo.ai)",
+      "WebFetch(domain:www.raspberrypi.com)"
+    ]
+  }
+}

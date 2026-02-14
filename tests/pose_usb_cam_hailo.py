@@ -15,10 +15,10 @@ Usage:
     python3 pose_usb_cam_hailo.py --cpu --port 8080
 
     # Hailo accelerated mode (requires .hef model)
-    python3 pose_usb_cam_hailo.py --model yolov11n-pose.hef --port 8080
+    python3 pose_usb_cam_hailo.py --model yolo11n-pose.hef --port 8080
 
     # With behavioral analysis logging
-    python3 pose_usb_cam_hailo.py --model yolov11n-pose.hef --log behaviors.log --save-frames
+    python3 pose_usb_cam_hailo.py --model yolo11n-pose.hef --log behaviors.log --save-frames
 
 Requirements:
     - Raspberry Pi 5 with Trixie OS
@@ -784,17 +784,17 @@ Examples:
   python3 pose_usb_cam_hailo.py --cpu --port 8080
 
   # Hailo accelerated mode
-  python3 pose_usb_cam_hailo.py --model yolov11n-pose.hef --port 8080
+  python3 pose_usb_cam_hailo.py --model yolo11n-pose.hef --port 8080
 
   # With behavioral logging
-  python3 pose_usb_cam_hailo.py --model yolov11n-pose.hef --log behaviors.log --save-frames
+  python3 pose_usb_cam_hailo.py --model yolo11n-pose.hef --log behaviors.log --save-frames
         """
     )
 
     # Model configuration
     parser.add_argument("--model", "--hef", dest="model",
-                       default="yolov11n-pose.hef",
-                       help="Path to .hef model file (default: yolov11n-pose.hef)")
+                       default="yolo11n-pose.hef",
+                       help="Path to .hef model file (default: yolo11n-pose.hef)")
 
     # Camera configuration
     parser.add_argument("--camera", type=int, default=None,
