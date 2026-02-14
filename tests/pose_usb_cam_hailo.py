@@ -942,6 +942,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Simple, reliable pose view (recommended first test)
+  python3 pose_usb_cam_hailo.py --simple --cpu --port 8080
+
   # CPU mode (immediate testing, auto-downloads model)
   python3 pose_usb_cam_hailo.py --cpu --port 8080
 
@@ -957,6 +960,8 @@ Examples:
     parser.add_argument("--model", "--hef", dest="model",
                        default="yolov8s_pose.hef",
                        help="Path to .hef model file (default: yolov8s_pose.hef)")
+    parser.add_argument("--cpu-model", default="yolo11n-pose.pt",
+                       help="Ultralytics pose model for CPU/simple mode (default: yolo11n-pose.pt)")
 
     # Camera configuration
     parser.add_argument("--camera", type=int, default=None,
@@ -967,8 +972,8 @@ Examples:
                        help="Camera capture height (default: 480)")
 
     # Detection thresholds
-    parser.add_argument("--confidence", "--conf", type=float, default=0.5,
-                       help="Person detection confidence threshold (default: 0.5)")
+    parser.add_argument("--confidence", "--conf", type=float, default=0.25,
+                       help="Person detection confidence threshold (default: 0.25)")
     parser.add_argument("--kpt-threshold", type=float, default=0.3,
                        help="Keypoint confidence threshold (default: 0.3)")
 
@@ -995,6 +1000,8 @@ Examples:
     # System configuration
     parser.add_argument("--cpu", action="store_true",
                        help="Force CPU-only mode using ultralytics")
+    parser.add_argument("--simple", action="store_true",
+                       help="Simple pose mode: draw keypoints/skeleton only (no behavior analytics)")
     parser.add_argument("--diagnose", action="store_true",
                        help="Run diagnostic tests and exit")
 
@@ -1011,10 +1018,13 @@ Examples:
     print("="*60)
 
     # Initialize detector
-    if args.cpu or not HAILO_AVAILABLE:
-        if not args.cpu:
+    if args.simple:
+        print("[INFO] SIMPLE mode enabled: skeleton + keypoints only.")
+
+    if args.simple or args.cpu or not HAILO_AVAILABLE:
+        if not args.cpu and not args.simple:
             print("[INFO] Hailo not available, using CPU fallback")
-        detector = UltralyticsPoser("yolov11n-pose.pt", args.confidence)
+        detector = UltralyticsPoser(args.cpu_model, args.confidence)
     else:
         if not os.path.isfile(args.model):
             print(f"[ERROR] HEF model not found: {args.model}")
@@ -1037,14 +1047,17 @@ Examples:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
 
     # Initialize components
-    analyzer = PoseAnalyzer()
     visualizer = PoseVisualizer()
     perf_monitor = PerformanceMonitor()
-    behavior_tracker = BehaviorTracker(
-        head_turn_threshold=args.head_turn_threshold,
-        head_tilt_threshold=args.head_tilt_threshold,
-        sustained_duration=args.sustained_duration
-    )
+    analyzer = None
+    behavior_tracker = None
+    if not args.simple:
+        analyzer = PoseAnalyzer()
+        behavior_tracker = BehaviorTracker(
+            head_turn_threshold=args.head_turn_threshold,
+            head_tilt_threshold=args.head_tilt_threshold,
+            sustained_duration=args.sustained_duration
+        )
 
     # Setup logging
     log_file = None
@@ -1088,6 +1101,39 @@ Examples:
             # Analyze each detected person
             current_time = time.perf_counter()
             annotated_frame = frame.copy()
+
+            if args.simple:
+                for pose in pose_results:
+                    keypoints = pose['keypoints']
+                    bbox = pose['bbox']
+                    confidence = pose['confidence']
+                    visualizer.draw_skeleton(annotated_frame, keypoints, args.kpt_threshold)
+                    visualizer.draw_keypoints(annotated_frame, keypoints, args.kpt_threshold)
+                    visualizer.draw_bbox(annotated_frame, bbox, confidence)
+
+                # Update performance
+                inference_time = time.perf_counter() - t0
+                perf_monitor.update(inference_time)
+                stats = perf_monitor.get_stats()
+
+                # Draw FPS overlay
+                cv2.putText(annotated_frame, f"FPS: {stats['fps']:.1f}",
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(annotated_frame, f"Inference: {stats['inference_ms']:.1f}ms",
+                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(annotated_frame, f"Detections: {len(pose_results)}",
+                           (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+                # Update web stream
+                with _frame_lock:
+                    _latest_frame = annotated_frame
+
+                # Print periodic status
+                if perf_monitor.frame_count % 30 == 0:
+                    print(f"[Frame {perf_monitor.frame_count}] "
+                          f"FPS: {stats['fps']:.1f}, "
+                          f"Detections: {len(pose_results)}")
+                continue
 
             for i, pose in enumerate(pose_results):
                 keypoints = pose['keypoints']
