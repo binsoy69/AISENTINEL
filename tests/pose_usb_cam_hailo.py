@@ -220,6 +220,97 @@ class HailoPoseEstimator:
 
         return self._postprocess_pose(results, img_w, img_h)
 
+    @staticmethod
+    def _sigmoid(x):
+        """Numerically stable sigmoid."""
+        x = np.clip(x, -60.0, 60.0)
+        return 1.0 / (1.0 + np.exp(-x))
+
+    @staticmethod
+    def _decode_dfl(box_logits, reg_max=16):
+        """Decode YOLO DFL box logits (N, 4 * reg_max) to distances (N, 4)."""
+        box_logits = box_logits.reshape(-1, 4, reg_max)
+        box_logits = box_logits - np.max(box_logits, axis=2, keepdims=True)
+        probs = np.exp(box_logits)
+        probs /= np.sum(probs, axis=2, keepdims=True) + 1e-9
+        bins = np.arange(reg_max, dtype=np.float32).reshape(1, 1, reg_max)
+        return np.sum(probs * bins, axis=2)
+
+    def _decode_multiscale_pose_heads(self, raw_output):
+        """Decode split YOLO pose heads (64/1/51 channels per scale) into (N, 56)."""
+        if not isinstance(raw_output, dict):
+            return None
+
+        groups = {}
+        for _, arr in raw_output.items():
+            a = np.array(arr)
+            a = np.squeeze(a)
+            if a.ndim != 3:
+                continue
+
+            # Support both HWC and CHW tensors.
+            if a.shape[-1] in (64, 51, 1):
+                h, w, c = a.shape
+                hwc = a
+            elif a.shape[0] in (64, 51, 1):
+                c, h, w = a.shape
+                hwc = np.transpose(a, (1, 2, 0))
+            else:
+                continue
+
+            group = groups.setdefault((h, w), {})
+            group[c] = hwc.astype(np.float32, copy=False)
+
+        decoded_scales = []
+        for (h, w), group in sorted(groups.items(), key=lambda x: x[0][0], reverse=True):
+            if 64 not in group or 1 not in group or 51 not in group:
+                continue
+
+            box_logits = group[64].reshape(-1, 64)
+            obj_logits = group[1].reshape(-1)
+            kpt_logits = group[51].reshape(-1, 51)
+
+            stride_x = self.input_w / float(w)
+            stride_y = self.input_h / float(h)
+
+            gy, gx = np.meshgrid(
+                np.arange(h, dtype=np.float32),
+                np.arange(w, dtype=np.float32),
+                indexing="ij",
+            )
+            anchor_x = gx.reshape(-1) + 0.5
+            anchor_y = gy.reshape(-1) + 0.5
+
+            # Decode DFL distances [left, top, right, bottom] in feature-map units.
+            ltrb = self._decode_dfl(box_logits, reg_max=16)
+
+            x1 = (anchor_x - ltrb[:, 0]) * stride_x
+            y1 = (anchor_y - ltrb[:, 1]) * stride_y
+            x2 = (anchor_x + ltrb[:, 2]) * stride_x
+            y2 = (anchor_y + ltrb[:, 3]) * stride_y
+
+            cx = (x1 + x2) * 0.5
+            cy = (y1 + y2) * 0.5
+            bw = x2 - x1
+            bh = y2 - y1
+            boxes_xywh = np.stack([cx, cy, bw, bh], axis=1)
+
+            confidences = self._sigmoid(obj_logits).reshape(-1, 1)
+
+            kpts = kpt_logits.reshape(-1, 17, 3)
+            # Ultralytics pose decode: offsets are relative to anchor grid.
+            kpts[:, :, 0] = (kpts[:, :, 0] * 2.0 + (anchor_x[:, None] - 0.5)) * stride_x
+            kpts[:, :, 1] = (kpts[:, :, 1] * 2.0 + (anchor_y[:, None] - 0.5)) * stride_y
+            kpts[:, :, 2] = self._sigmoid(kpts[:, :, 2])
+            keypoints_flat = kpts.reshape(-1, 51)
+
+            decoded_scales.append(np.concatenate([boxes_xywh, confidences, keypoints_flat], axis=1))
+
+        if not decoded_scales:
+            return None
+
+        return np.concatenate(decoded_scales, axis=0)
+
     def _postprocess_pose(self, raw_output, img_w, img_h):
         """Parse YOLOv8/v11-pose output format.
 
@@ -228,20 +319,31 @@ class HailoPoseEstimator:
         """
         # Extract and concatenate output tensors
         if isinstance(raw_output, dict):
-            arrays = list(raw_output.values())
-            if len(arrays) == 1:
-                output = arrays[0]
+            # Preferred path for Hailo raw pose heads: 3 tensors per scale (64/1/51).
+            decoded = self._decode_multiscale_pose_heads(raw_output)
+            if decoded is not None:
+                output = decoded
             else:
-                # Multi-scale outputs: concatenate along detection axis
-                flat = []
-                for a in arrays:
-                    a = np.squeeze(a)
-                    if a.ndim == 3:
-                        a = a.reshape(-1, a.shape[-1])
-                    elif a.ndim == 1:
-                        continue
-                    flat.append(a)
-                output = np.concatenate(flat, axis=0)
+                arrays = list(raw_output.values())
+                if len(arrays) == 1:
+                    output = arrays[0]
+                else:
+                    # Fallback: best-effort concatenate tensors that share feature width.
+                    flat = []
+                    for a in arrays:
+                        a = np.squeeze(a)
+                        if a.ndim == 3:
+                            a = a.reshape(-1, a.shape[-1])
+                        elif a.ndim == 1:
+                            continue
+                        flat.append(a)
+                    if not flat:
+                        return []
+                    if all(x.shape[1] == flat[0].shape[1] for x in flat):
+                        output = np.concatenate(flat, axis=0)
+                    else:
+                        # Keep the largest candidate tensor if shapes are mixed.
+                        output = max(flat, key=lambda x: x.shape[0] * x.shape[1])
         else:
             output = raw_output
 
@@ -275,6 +377,14 @@ class HailoPoseEstimator:
                 output = output.T
                 num_cols = output.shape[1]
                 has_conf_col = num_cols == 56
+
+        if num_cols not in (55, 56):
+            if not hasattr(self, "_shape_warned"):
+                self._shape_warned = True
+                print(f"[WARN] Unsupported pose output shape after parsing: {output.shape}")
+            return []
+
+        has_conf_col = (num_cols == 56)
 
         # Extract components based on column count
         boxes_xywh = output[:, :4]       # [x, y, w, h]
