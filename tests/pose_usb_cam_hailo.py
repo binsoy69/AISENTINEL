@@ -945,6 +945,9 @@ Examples:
   # Simple, reliable pose view (recommended first test)
   python3 pose_usb_cam_hailo.py --simple --cpu --port 8080
 
+  # Simple mode on Hailo (skeleton + keypoints only)
+  python3 pose_usb_cam_hailo.py --simple --model ~/AISENTINEL/models/yolov8s_pose.hef --port 8080
+
   # CPU mode (immediate testing, auto-downloads model)
   python3 pose_usb_cam_hailo.py --cpu --port 8080
 
@@ -1021,11 +1024,13 @@ Examples:
     if args.simple:
         print("[INFO] SIMPLE mode enabled: skeleton + keypoints only.")
 
-    if args.simple or args.cpu or not HAILO_AVAILABLE:
-        if not args.cpu and not args.simple:
+    if args.cpu or not HAILO_AVAILABLE:
+        if not args.cpu:
             print("[INFO] Hailo not available, using CPU fallback")
         detector = UltralyticsPoser(args.cpu_model, args.confidence)
     else:
+        if args.simple:
+            print("[INFO] SIMPLE mode using Hailo backend.")
         if not os.path.isfile(args.model):
             print(f"[ERROR] HEF model not found: {args.model}")
             print("See POSE_MODEL_SETUP.md for conversion instructions")
