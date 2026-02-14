@@ -243,8 +243,16 @@ class HailoPoseEstimator:
 
         groups = {}
         for _, arr in raw_output.items():
-            a = np.array(arr)
-            a = np.squeeze(a)
+            a = np.array(arr, dtype=np.float32, copy=False)
+
+            # Keep channel dimensions intact; only remove explicit batch=1.
+            if a.ndim == 4 and a.shape[0] == 1:
+                a = a[0]
+
+            # If singleton channel was already squeezed somewhere, restore it.
+            if a.ndim == 2:
+                a = a[:, :, None]
+
             if a.ndim != 3:
                 continue
 
@@ -259,7 +267,7 @@ class HailoPoseEstimator:
                 continue
 
             group = groups.setdefault((h, w), {})
-            group[c] = hwc.astype(np.float32, copy=False)
+            group[c] = hwc
 
         decoded_scales = []
         for (h, w), group in sorted(groups.items(), key=lambda x: x[0][0], reverse=True):
@@ -309,6 +317,13 @@ class HailoPoseEstimator:
         if not decoded_scales:
             return None
 
+        if not hasattr(self, "_head_groups_debug_printed"):
+            self._head_groups_debug_printed = True
+            grouped = ", ".join(
+                [f"{h}x{w}:{sorted(group.keys())}" for (h, w), group in sorted(groups.items())]
+            )
+            print(f"[DEBUG] Pose head groups: {grouped}")
+
         return np.concatenate(decoded_scales, axis=0)
 
     def _postprocess_pose(self, raw_output, img_w, img_h):
@@ -323,6 +338,14 @@ class HailoPoseEstimator:
             decoded = self._decode_multiscale_pose_heads(raw_output)
             if decoded is not None:
                 output = decoded
+                if not hasattr(self, "_decoded_stats_printed"):
+                    self._decoded_stats_printed = True
+                    conf = output[:, 4]
+                    print(
+                        "[DEBUG] Decoded pose tensor: "
+                        f"shape={output.shape}, conf[min/mean/max]="
+                        f"{conf.min():.4f}/{conf.mean():.4f}/{conf.max():.4f}"
+                    )
             else:
                 arrays = list(raw_output.values())
                 if len(arrays) == 1:
