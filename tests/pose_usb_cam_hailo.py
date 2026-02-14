@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-YOLOv11 Pose Estimation on Raspberry Pi 5 (Trixie OS) + Hailo AI Accelerator
+YOLO Pose Estimation on Raspberry Pi 5 (Trixie OS) + Hailo AI Accelerator
 Using a USB Camera with Behavioral Analysis
 
 Live preview via web browser at http://<pi-ip>:8080
@@ -15,10 +15,10 @@ Usage:
     python3 pose_usb_cam_hailo.py --cpu --port 8080
 
     # Hailo accelerated mode (requires .hef model)
-    python3 pose_usb_cam_hailo.py --model yolo11n-pose.hef --port 8080
+    python3 pose_usb_cam_hailo.py --model yolov8s_pose.hef --port 8080
 
     # With behavioral analysis logging
-    python3 pose_usb_cam_hailo.py --model yolo11n-pose.hef --log behaviors.log --save-frames
+    python3 pose_usb_cam_hailo.py --model yolov8s_pose.hef --log behaviors.log --save-frames
 
 Requirements:
     - Raspberry Pi 5 with Trixie OS
@@ -139,7 +139,7 @@ def nms(boxes, scores, iou_threshold=0.45):
 # ──────────────────────────────────────────────────────────────
 
 class HailoPoseEstimator:
-    """Wraps HailoRT Python API for YOLOv11-pose inference on the Hailo NPU."""
+    """Wraps HailoRT Python API for YOLOv8/v11-pose inference on the Hailo NPU."""
 
     def __init__(self, hef_path, conf_threshold=0.5, kpt_threshold=0.3, iou_threshold=0.45):
         if not HAILO_AVAILABLE:
@@ -209,31 +209,83 @@ class HailoPoseEstimator:
             ) as infer_pipeline:
                 results = infer_pipeline.infer(input_dict)
 
+        # Debug: print output shapes on first inference
+        if not hasattr(self, '_debug_printed'):
+            self._debug_printed = True
+            if isinstance(results, dict):
+                for name, arr in results.items():
+                    print(f"[DEBUG] Output '{name}': shape={np.array(arr).shape}, dtype={np.array(arr).dtype}")
+            else:
+                print(f"[DEBUG] Output: shape={np.array(results).shape}")
+
         return self._postprocess_pose(results, img_w, img_h)
 
     def _postprocess_pose(self, raw_output, img_w, img_h):
-        """Parse YOLOv11-pose output format.
+        """Parse YOLOv8/v11-pose output format.
 
-        YOLOv11-pose output: (1, 56, 8400) or (8400, 56)
+        Output: (1, 56, 8400) or (8400, 56) or multiple tensors per scale.
         56 = [x, y, w, h, conf, kpt0_x, kpt0_y, kpt0_conf, ...] (4 + 1 + 17*3)
         """
-        # Extract output tensor
+        # Extract and concatenate output tensors
         if isinstance(raw_output, dict):
-            output = list(raw_output.values())[0]
+            arrays = list(raw_output.values())
+            if len(arrays) == 1:
+                output = arrays[0]
+            else:
+                # Multi-scale outputs: concatenate along detection axis
+                flat = []
+                for a in arrays:
+                    a = np.squeeze(a)
+                    if a.ndim == 3:
+                        a = a.reshape(-1, a.shape[-1])
+                    elif a.ndim == 1:
+                        continue
+                    flat.append(a)
+                output = np.concatenate(flat, axis=0)
         else:
             output = raw_output
 
         # Remove batch dimension
         output = np.squeeze(output)
 
-        # Transpose if needed: should be (8400, 56)
-        if output.shape[0] == 56 and output.shape[1] > 56:
-            output = output.T
+        # Handle various shapes — target is (N, 56)
+        if output.ndim == 2:
+            if output.shape[0] == 56 and output.shape[1] > 56:
+                output = output.T
+            elif output.shape[1] < output.shape[0] and output.shape[1] != 56:
+                # Columns might be features, rows might be detections — check
+                if output.shape[0] in (56,):
+                    output = output.T
+        elif output.ndim == 3:
+            # (batch, channels, detections) or similar
+            output = output.reshape(-1, output.shape[-1])
+            if output.shape[0] == 56 and output.shape[1] > 56:
+                output = output.T
 
-        # Extract components
+        # Validate we have 56 feature columns (4 bbox + 1 conf + 51 keypoints)
+        # YOLOv8 pose may omit the conf column (56 = 4 + 1 + 51 or 55 = 4 + 51)
+        num_cols = output.shape[1]
+        has_conf_col = True
+        if num_cols == 55:
+            # No explicit conf column — derive from class scores
+            has_conf_col = False
+        elif num_cols != 56:
+            # Try transposing as last resort
+            if output.shape[0] in (55, 56):
+                output = output.T
+                num_cols = output.shape[1]
+                has_conf_col = num_cols == 56
+
+        # Extract components based on column count
         boxes_xywh = output[:, :4]       # [x, y, w, h]
-        confidences = output[:, 4]       # person confidence
-        keypoints_raw = output[:, 5:]    # 17 × 3 = 51 values
+        if has_conf_col:
+            confidences = output[:, 4]       # person confidence
+            keypoints_raw = output[:, 5:]    # 17 × 3 = 51 values
+        else:
+            # No conf column — use max keypoint confidence as proxy
+            keypoints_raw = output[:, 4:]    # 17 × 3 = 51 values
+            kpt_confs = keypoints_raw[:, 2::3]  # every 3rd value is conf
+            confidences = np.mean(kpt_confs, axis=1)
 
         # Filter by confidence
         mask = confidences > self.conf_threshold
@@ -568,7 +620,7 @@ HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pose Estimation - RPi 5 + Hailo</title>
+    <title>YOLO Pose Estimation - RPi 5 + Hailo</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -611,7 +663,7 @@ HTML_PAGE = """
     </style>
 </head>
 <body>
-    <h1>YOLOv11 Pose Estimation - RPi 5 + Hailo</h1>
+    <h1>YOLO Pose Estimation - RPi 5 + Hailo</h1>
     <p class="info">Real-time pose detection with behavioral analysis</p>
     <div class="stream-container">
         <img src="/video_feed" alt="Live Stream">
@@ -776,7 +828,7 @@ def main():
     global _latest_frame
 
     parser = argparse.ArgumentParser(
-        description="YOLOv11 Pose Estimation - RPi 5 + Hailo",
+        description="YOLO Pose Estimation - RPi 5 + Hailo",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -793,8 +845,8 @@ Examples:
 
     # Model configuration
     parser.add_argument("--model", "--hef", dest="model",
-                       default="yolo11n-pose.hef",
-                       help="Path to .hef model file (default: yolo11n-pose.hef)")
+                       default="yolov8s_pose.hef",
+                       help="Path to .hef model file (default: yolov8s_pose.hef)")
 
     # Camera configuration
     parser.add_argument("--camera", type=int, default=None,
@@ -844,7 +896,7 @@ Examples:
         return
 
     print("="*60)
-    print("YOLOv11 Pose Estimation Test - RPi 5 + Hailo")
+    print("YOLO Pose Estimation Test - RPi 5 + Hailo")
     print("AISENTINEL Project")
     print("="*60)
 

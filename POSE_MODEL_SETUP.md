@@ -29,7 +29,11 @@ Both detect **17 COCO keypoints** per person (nose, eyes, ears, shoulders, elbow
 
 ---
 
-## Quick Start (Simplest Path)
+## Quick Start (Python-Only — Recommended for Trixie)
+
+> **Why Python-only?** The `hailo-apps` GStreamer pipeline has a known `filter_letterbox` symbol mismatch
+> on RPi OS Trixie with TAPPAS 5.1.0. The Python approach uses HailoRT directly — no GStreamer, no
+> TAPPAS post-process `.so` files needed. Works reliably on Trixie.
 
 ### Step 1: Download the Pre-compiled HEF Model
 
@@ -66,69 +70,43 @@ ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 test_frame.jpg
 
 Your USB webcam will typically be at `/dev/video0` or `/dev/video2`.
 
-### Step 3: Install the Hailo Apps Framework
-
-The **hailo-apps** framework provides ready-to-run pose estimation pipelines with USB webcam support:
+### Step 3: Install Python Dependencies
 
 ```bash
-cd ~
-git clone https://github.com/hailo-ai/hailo-apps.git
-cd hailo-apps
-sudo ./install.sh
-source setup_env.sh
+pip install opencv-python numpy flask
+# hailo_platform is already installed via hailo-all (system package)
 ```
 
-### Step 4: Run Pose Estimation
+### Step 4: Run Pose Estimation (Python-only, no GStreamer)
 
 ```bash
-# Basic run with USB webcam (auto-detects camera and model)
-hailo-pose --input usb --show-fps
+cd ~/AISENTINEL/tests
 
-# Specify your downloaded model explicitly
-hailo-pose --input usb --hef-path ~/AISENTINEL/models/yolov8s_pose.hef --show-fps
+# Run with Hailo acceleration + web preview
+python3 pose_usb_cam_hailo.py \
+  --model ~/AISENTINEL/models/yolov8s_pose.hef \
+  --port 8080
 
-# Target a specific camera device
-hailo-pose --input /dev/video0 --show-fps
-
-# Force Hailo-8 architecture (if auto-detect fails)
-hailo-pose --input usb --arch hailo8 --show-fps
+# Then open http://<your-pi-ip>:8080 in a browser
 ```
 
-That's it! You should see a live video window with pose skeletons overlaid on detected persons.
+That's it! You should see a live video stream with pose skeletons and behavioral analysis overlaid.
+
+### Step 4b: CPU-only Quick Test (no HEF needed)
+
+If you want to test immediately without downloading the HEF model:
+
+```bash
+pip install ultralytics
+python3 pose_usb_cam_hailo.py --cpu --port 8080
+# Runs at ~2-4 FPS on CPU — for testing only
+```
 
 ---
 
-## Method 2: Using the AISENTINEL Test Script
+## Behavioral Analysis Options
 
-The project includes a custom pose estimation script with **behavioral analysis** (head tilt, head turn detection) designed for attention monitoring.
-
-### Step 1: Install Python Dependencies
-
-```bash
-pip install opencv-python numpy flask ultralytics
-```
-
-### Step 2: Run in CPU Mode (Quick Test, No HEF Needed)
-
-```bash
-cd ~/AISENTINEL/tests
-python3 pose_usb_cam_hailo.py --cpu --port 8080
-```
-
-This auto-downloads `yolo11n-pose.pt` and runs on CPU at 2-4 FPS. Open `http://<pi-ip>:8080` in your browser to view the stream.
-
-### Step 3: Run with Hailo Acceleration
-
-```bash
-cd ~/AISENTINEL/tests
-python3 pose_usb_cam_hailo.py --model ~/AISENTINEL/models/yolov8s_pose.hef --port 8080
-```
-
-> **Note:** The AISENTINEL script currently expects YOLOv11 output format (56 channels). If using the YOLOv8 HEF models, the output format is the same (56 channels: 4 bbox + 1 conf + 17×3 keypoints), so they are compatible.
-
-### Behavioral Analysis Options
-
-The AISENTINEL script includes attention monitoring features:
+The pose estimation script includes **attention monitoring** features built in:
 
 ```bash
 python3 pose_usb_cam_hailo.py \
@@ -373,27 +351,13 @@ ls -lh ~/AISENTINEL/models/yolov8s_pose.hef
 
 ### Trixie Compatibility Notes
 
-RPi OS Trixie has known edge cases with Hailo software. If you encounter issues:
+RPi OS Trixie has known edge cases with Hailo software:
 
-1. **Driver version mismatch**: Run `sudo apt update && sudo apt upgrade hailo-all`
-2. **Python 3.13 issues**: Some Hailo Python bindings may need `pip install --break-system-packages`
-3. **DKMS driver**: If kernel updates break Hailo, run `sudo dkms autoinstall`
-4. **Fallback**: Raspberry Pi OS Bookworm is the most battle-tested OS for Hailo
-
----
-
-## Hailo-Apps CLI Reference
-
-| Flag | Description |
-|------|-------------|
-| `--input usb` | Auto-detect USB camera |
-| `--input /dev/video0` | Specific camera device |
-| `--hef-path <path>` | Custom HEF model file |
-| `--arch hailo8` | Force Hailo-8 architecture |
-| `--show-fps` | Display FPS counter |
-| `--frame-rate 30` | Target frame rate |
-| `--disable-sync` | Max speed (benchmarking) |
-| `--log-level debug` | Verbose logging |
+1. **GStreamer/TAPPAS segfault**: `hailo-apps` GStreamer pipeline crashes with `undefined symbol: filter_letterbox`
+   on TAPPAS 5.1.0 + Trixie. **Workaround**: Use the Python-only approach (`pose_usb_cam_hailo.py`) instead.
+2. **Driver version mismatch**: Run `sudo apt update && sudo apt upgrade hailo-all`
+3. **Python 3.13 issues**: Some Hailo Python bindings may need `pip install --break-system-packages`
+4. **DKMS driver**: If kernel updates break Hailo, run `sudo dkms autoinstall`
 
 ---
 
@@ -405,15 +369,16 @@ mkdir -p ~/AISENTINEL/models && cd ~/AISENTINEL/models
 wget -O yolov8s_pose.hef \
   https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.17.0/hailo8/yolov8s_pose.hef
 
-# 2. Install hailo-apps (5 minutes)
-cd ~ && git clone https://github.com/hailo-ai/hailo-apps.git
-cd hailo-apps && sudo ./install.sh && source setup_env.sh
+# 2. Install Python deps
+pip install opencv-python numpy flask
 
 # 3. Run! (immediate)
-hailo-pose --input usb --hef-path ~/AISENTINEL/models/yolov8s_pose.hef --show-fps
+cd ~/AISENTINEL/tests
+python3 pose_usb_cam_hailo.py --model ~/AISENTINEL/models/yolov8s_pose.hef --port 8080
+# Open http://<your-pi-ip>:8080 in a browser
 ```
 
-Three commands. That's it.
+Three commands. That's it. No GStreamer, no TAPPAS, no `.so` files.
 
 ---
 
