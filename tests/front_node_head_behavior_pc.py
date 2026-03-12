@@ -197,6 +197,11 @@ def detect_looking_at_neighbor(kp_xy, kp_conf):
     Nose offset from shoulder midpoint (PROJECT.md formula):
         offset = abs(nose.x - shoulder_center.x)
     Normalized by shoulder width for scale invariance.
+
+    Compensates for body orientation: when a person's body is turned
+    (one ear occluded), nose offset in the turn direction is natural
+    posture, not looking at a neighbor.
+
     Returns (is_looking, offset_ratio, direction).
     """
     if kp_conf[KP_NOSE] < KP_CONF_THRESH:
@@ -219,6 +224,32 @@ def detect_looking_at_neighbor(kp_xy, kp_conf):
     offset_ratio = abs(offset) / shoulder_width
 
     direction = "RIGHT" if offset > 0 else "LEFT"
+
+    # ── Body-orientation compensation ──────────────────────────
+    # When a person's body is angled to the camera, one ear becomes
+    # occluded while the other stays visible.  The nose naturally
+    # shifts toward the visible-ear side.  If the nose offset aligns
+    # with this body turn, it's posture — not looking at a neighbor.
+    left_ear_conf = float(kp_conf[KP_LEFT_EAR])
+    right_ear_conf = float(kp_conf[KP_RIGHT_EAR])
+    max_ear = max(left_ear_conf, right_ear_conf)
+    min_ear = min(left_ear_conf, right_ear_conf)
+
+    if max_ear > KP_CONF_THRESH:
+        ear_symmetry = min_ear / max_ear  # 1.0 = both ears equally visible
+
+        # Determine which way the body is turned based on ear visibility.
+        # Low left-ear conf → body turned RIGHT (left ear occluded),
+        # low right-ear conf → body turned LEFT  (right ear occluded).
+        if ear_symmetry < 0.6:
+            # Body is significantly turned to one side
+            body_turn_dir = "RIGHT" if left_ear_conf < right_ear_conf else "LEFT"
+
+            if direction == body_turn_dir:
+                # Nose offset matches body orientation — this is natural
+                # posture, not head-turning.  Suppress the detection.
+                return False, offset_ratio, direction
+
     return offset_ratio > LOOK_NEIGHBOR_RATIO, offset_ratio, direction
 
 
