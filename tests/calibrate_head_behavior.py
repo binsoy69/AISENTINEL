@@ -66,10 +66,12 @@ SKELETON = [
 TILT_SLIDER_MAX = 90        # degrees
 RATIO_SLIDER_MAX = 100      # percent (displayed as 0.00-1.00)
 CONF_SLIDER_MAX = 100       # percent
+EAR_SYM_SLIDER_MAX = 100    # percent (displayed as 0.00-1.00)
 
 TILT_DEFAULT = 30           # degrees
 RATIO_DEFAULT = 35          # percent -> 0.35
 CONF_DEFAULT = 30           # percent -> 0.30
+EAR_SYM_DEFAULT = 60        # percent -> 0.60
 
 CAMERA_INDEX = 0
 
@@ -142,13 +144,14 @@ def measure_head_tilt(kp_xy, kp_conf, conf_thresh):
     return True, angle
 
 
-def measure_look_neighbor(kp_xy, kp_conf, conf_thresh):
-    """Returns (valid, offset_ratio, direction, nose_x, shoulder_center_x)."""
+def measure_look_neighbor(kp_xy, kp_conf, conf_thresh, ear_sym_thresh):
+    """Returns (valid, offset_ratio, direction, nose_x, shoulder_center_x,
+               ear_symmetry, body_suppressed)."""
     if kp_conf[KP_NOSE] < conf_thresh:
-        return False, 0.0, "", 0, 0
+        return False, 0.0, "", 0, 0, 0.0, False
     if (kp_conf[KP_LEFT_SHOULDER] < conf_thresh or
             kp_conf[KP_RIGHT_SHOULDER] < conf_thresh):
-        return False, 0.0, "", 0, 0
+        return False, 0.0, "", 0, 0, 0.0, False
 
     nose_x = float(kp_xy[KP_NOSE][0])
     ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
@@ -158,12 +161,27 @@ def measure_look_neighbor(kp_xy, kp_conf, conf_thresh):
     shoulder_width = abs(rs_x - ls_x)
 
     if shoulder_width < 5:
-        return False, 0.0, "", 0, 0
+        return False, 0.0, "", 0, 0, 0.0, False
 
     offset = nose_x - shoulder_center_x
     offset_ratio = abs(offset) / shoulder_width
     direction = "RIGHT" if offset > 0 else "LEFT"
-    return True, offset_ratio, direction, nose_x, shoulder_center_x
+
+    # Body-orientation compensation via ear symmetry
+    left_ear_conf = float(kp_conf[KP_LEFT_EAR])
+    right_ear_conf = float(kp_conf[KP_RIGHT_EAR])
+    max_ear = max(left_ear_conf, right_ear_conf)
+    min_ear = min(left_ear_conf, right_ear_conf)
+
+    ear_symmetry = (min_ear / max_ear) if max_ear > conf_thresh else 1.0
+    body_suppressed = False
+
+    if max_ear > conf_thresh and ear_symmetry < ear_sym_thresh:
+        body_turn_dir = "RIGHT" if left_ear_conf < right_ear_conf else "LEFT"
+        if direction == body_turn_dir:
+            body_suppressed = True
+
+    return True, offset_ratio, direction, nose_x, shoulder_center_x, ear_symmetry, body_suppressed
 
 
 # ── Trackbar callback (no-op, we read values each frame) ────
@@ -205,6 +223,7 @@ def main():
 
     cv2.createTrackbar("Head Tilt (deg)", win, TILT_DEFAULT, TILT_SLIDER_MAX, _noop)
     cv2.createTrackbar("Look Ratio (%)", win, RATIO_DEFAULT, RATIO_SLIDER_MAX, _noop)
+    cv2.createTrackbar("Ear Sym (%)", win, EAR_SYM_DEFAULT, EAR_SYM_SLIDER_MAX, _noop)
     cv2.createTrackbar("KP Conf (%)", win, CONF_DEFAULT, CONF_SLIDER_MAX, _noop)
 
     print()
@@ -227,10 +246,12 @@ def main():
         # Read current slider values
         tilt_thresh = cv2.getTrackbarPos("Head Tilt (deg)", win)
         ratio_thresh_pct = cv2.getTrackbarPos("Look Ratio (%)", win)
+        ear_sym_thresh_pct = cv2.getTrackbarPos("Ear Sym (%)", win)
         conf_thresh_pct = cv2.getTrackbarPos("KP Conf (%)", win)
 
         tilt_thresh = max(tilt_thresh, 1)
         ratio_thresh = ratio_thresh_pct / 100.0
+        ear_sym_thresh = ear_sym_thresh_pct / 100.0
         conf_thresh = conf_thresh_pct / 100.0
 
         # Run pose detection
@@ -264,9 +285,12 @@ def main():
                 tilt_triggered = tilt_valid and tilt_angle > tilt_thresh
 
                 # Measure look-at-neighbor
-                look_valid, look_ratio, look_dir, nose_x, sc_x = \
-                    measure_look_neighbor(kp_xy, kp_conf, conf_thresh)
-                look_triggered = look_valid and look_ratio > ratio_thresh
+                look_valid, look_ratio, look_dir, nose_x, sc_x, \
+                    ear_sym, body_suppressed = \
+                    measure_look_neighbor(kp_xy, kp_conf, conf_thresh,
+                                         ear_sym_thresh)
+                look_triggered = (look_valid and look_ratio > ratio_thresh
+                                  and not body_suppressed)
 
                 # Determine box color
                 if tilt_triggered and look_triggered:
@@ -323,7 +347,10 @@ def main():
                 if tilt_valid:
                     labels.append(f"Tilt: {tilt_angle:.1f} deg")
                 if look_valid:
-                    labels.append(f"Look: {look_ratio:.2f} {look_dir}")
+                    sup_tag = " [SUPPRESSED]" if body_suppressed else ""
+                    labels.append(
+                        f"Look: {look_ratio:.2f} {look_dir}{sup_tag}")
+                    labels.append(f"EarSym: {ear_sym:.2f}")
 
                 lbl_y = y1 - 5
                 for lbl in labels:
@@ -339,10 +366,12 @@ def main():
                     "look_ratio": look_ratio,
                     "look_dir": look_dir,
                     "look_triggered": look_triggered,
+                    "ear_sym": ear_sym,
+                    "body_suppressed": body_suppressed,
                 })
 
         # ── HUD Panel (bottom-left) ─────────────────────────────
-        panel_h = 160
+        panel_h = 200
         panel_w = 420
         panel_y = cam_h - panel_h - 10
         panel_x = 10
@@ -366,14 +395,18 @@ def main():
                     (panel_x + 5, panel_y + 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_LOOK_NEIGHBOR, 1)
         cv2.putText(annotated,
-                    f"KP_CONF_THRESH      = {conf_thresh:.2f}",
+                    f"EAR_SYMMETRY_THRESH = {ear_sym_thresh:.2f}",
                     (panel_x + 5, panel_y + 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 220, 255), 1)
+        cv2.putText(annotated,
+                    f"KP_CONF_THRESH      = {conf_thresh:.2f}",
+                    (panel_x + 5, panel_y + 100),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_GUIDE, 1)
 
         # Live readings for first person
         if person_measurements:
             pm = person_measurements[0]
-            y_off = panel_y + 105
+            y_off = panel_y + 125
             if pm["tilt_valid"]:
                 cv2.putText(annotated,
                             f"Live Tilt: {pm['tilt_angle']:.1f} deg",
@@ -387,12 +420,22 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_DIM, 1)
             y_off += 22
             if pm["look_valid"]:
+                sup_tag = " SUPPRESSED" if pm["body_suppressed"] else ""
+                look_col = (COL_TRIGGERED if pm["look_triggered"]
+                            else (COL_DIM if pm["body_suppressed"]
+                                  else COL_NORMAL))
                 cv2.putText(annotated,
-                            f"Live Look: {pm['look_ratio']:.2f} {pm['look_dir']}",
+                            f"Live Look: {pm['look_ratio']:.2f} "
+                            f"{pm['look_dir']}{sup_tag}",
+                            (panel_x + 5, y_off),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, look_col, 1)
+                y_off += 22
+                cv2.putText(annotated,
+                            f"Live EarSym: {pm['ear_sym']:.2f}",
                             (panel_x + 5, y_off),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            COL_TRIGGERED if pm["look_triggered"]
-                            else COL_NORMAL, 1)
+                            (COL_DIM if pm["ear_sym"] < ear_sym_thresh
+                             else COL_NORMAL), 1)
             else:
                 cv2.putText(annotated, "Live Look: -- (low conf)",
                             (panel_x + 5, y_off),
@@ -416,6 +459,11 @@ def main():
                            pm["look_ratio"] * 100, ratio_thresh_pct,
                            "Look Ratio", 100.0,
                            COL_LOOK_NEIGHBOR, COL_TRIGGERED)
+                # Ear symmetry gauge (inverted: low = body turned)
+                draw_gauge(annotated, gauge_x, 120,
+                           pm["ear_sym"] * 100, ear_sym_thresh_pct,
+                           "Ear Symmetry", 100.0,
+                           (180, 220, 255), COL_DIM)
 
         # Frozen indicator
         if frozen:
@@ -445,6 +493,7 @@ def main():
     # Read final slider positions
     final_tilt = tilt_thresh
     final_ratio = ratio_thresh
+    final_ear_sym = ear_sym_thresh
     final_conf = conf_thresh
 
     print()
@@ -454,9 +503,10 @@ def main():
     print()
     print("  Copy these into front_node_head_behavior_pc.py:")
     print()
-    print(f"  HEAD_TILT_ANGLE_DEG = {final_tilt:.1f}")
-    print(f"  LOOK_NEIGHBOR_RATIO = {final_ratio:.2f}")
-    print(f"  KP_CONF_THRESH      = {final_conf:.2f}")
+    print(f"  HEAD_TILT_ANGLE_DEG  = {final_tilt:.1f}")
+    print(f"  LOOK_NEIGHBOR_RATIO  = {final_ratio:.2f}")
+    print(f"  EAR_SYMMETRY_THRESH  = {final_ear_sym:.2f}")
+    print(f"  KP_CONF_THRESH       = {final_conf:.2f}")
     print()
     print("=" * 60)
 

@@ -61,6 +61,7 @@ KP_RIGHT_SHOULDER = 6
 # ── Behavior Thresholds ─────────────────────────────────────
 HEAD_TILT_ANGLE_DEG = 30.0      # middle of 25-30 range from PROJECT.md
 LOOK_NEIGHBOR_RATIO = 0.26      # nose offset / shoulder width
+EAR_SYMMETRY_THRESH = 0.6       # below this, body is turned → suppress look detection
 SUSTAINED_SEC = 3.0             # seconds before flagging
 EVENT_COOLDOWN_SEC = 10.0       # cooldown between repeated flags
 KP_CONF_THRESH = 0.3            # minimum keypoint confidence
@@ -241,7 +242,7 @@ def detect_looking_at_neighbor(kp_xy, kp_conf):
         # Determine which way the body is turned based on ear visibility.
         # Low left-ear conf → body turned RIGHT (left ear occluded),
         # low right-ear conf → body turned LEFT  (right ear occluded).
-        if ear_symmetry < 0.6:
+        if ear_symmetry < EAR_SYMMETRY_THRESH:
             # Body is significantly turned to one side
             body_turn_dir = "RIGHT" if left_ear_conf < right_ear_conf else "LEFT"
 
