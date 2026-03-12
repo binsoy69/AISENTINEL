@@ -60,8 +60,8 @@ KP_RIGHT_SHOULDER = 6
 
 # ── Behavior Thresholds ─────────────────────────────────────
 HEAD_TILT_ANGLE_DEG = 30.0      # middle of 25-30 range from PROJECT.md
-LOOK_NEIGHBOR_RATIO = 0.35      # nose offset / shoulder width
-SUSTAINED_SEC = 4.0             # seconds before flagging
+LOOK_NEIGHBOR_RATIO = 0.26      # nose offset / shoulder width
+SUSTAINED_SEC = 3.0             # seconds before flagging
 EVENT_COOLDOWN_SEC = 10.0       # cooldown between repeated flags
 KP_CONF_THRESH = 0.3            # minimum keypoint confidence
 
@@ -181,10 +181,14 @@ def detect_head_tilt(kp_xy, kp_conf):
         return False, 0.0
     le = kp_xy[KP_LEFT_EAR]
     re = kp_xy[KP_RIGHT_EAR]
-    angle = abs(math.degrees(
+    raw = abs(math.degrees(
         math.atan2(float(re[1]) - float(le[1]),
                    float(re[0]) - float(le[0]))
     ))
+    # Normalize: 0° = level head, 90° = fully sideways.
+    # atan2 gives ~0 or ~180 for level ears depending on mirrored
+    # ear ordering in the image, so map >90 back toward 0.
+    angle = raw if raw <= 90 else 180 - raw
     return angle > HEAD_TILT_ANGLE_DEG, angle
 
 
@@ -523,40 +527,7 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
                 # Draw skeleton
                 draw_skeleton(annotated, kp_xy, kp_conf)
 
-                # ── 1. Head Tilt ─────────────────────────────
-                is_tilted, angle = detect_head_tilt(kp_xy, kp_conf)
-
-                if is_tilted:
-                    if state.head_tilt_start < 0:
-                        state.head_tilt_start = ts_sec
-                    elapsed = ts_sec - state.head_tilt_start
-
-                    if elapsed >= SUSTAINED_SEC and state.can_flag("head_tilt", ts_sec):
-                        state.head_tilt_flagged_at = ts_sec
-                        stats["head_tilt"] += 1
-                        total_alerts += 1
-                        log_alert("HEAD TILT", state.student_num, ts_sec,
-                                  f"angle={angle:.1f} deg, sustained {elapsed:.1f}s",
-                                  TC.YELLOW)
-                        frame_events.append(("head_tilt", state.student_num))
-
-                    # Visual feedback even before full sustain
-                    if elapsed >= 1.0:
-                        behavior_labels.append(
-                            f"TILT {angle:.0f} deg ({elapsed:.1f}s)")
-                        box_color = COL_HEAD_TILT
-                        if elapsed >= SUSTAINED_SEC:
-                            box_color = COL_FLAGGED
-
-                    # Draw ear-to-ear line
-                    if kp_conf[KP_LEFT_EAR] > KP_CONF_THRESH and kp_conf[KP_RIGHT_EAR] > KP_CONF_THRESH:
-                        le = (int(kp_xy[KP_LEFT_EAR][0]), int(kp_xy[KP_LEFT_EAR][1]))
-                        re = (int(kp_xy[KP_RIGHT_EAR][0]), int(kp_xy[KP_RIGHT_EAR][1]))
-                        cv2.line(annotated, le, re, COL_HEAD_TILT, 2, cv2.LINE_AA)
-                else:
-                    state.head_tilt_start = -1.0
-
-                # ── 2. Looking at Neighbor ───────────────────
+                # ── 1. Looking at Neighbor ───────────────────
                 is_looking, offset_ratio, direction = detect_looking_at_neighbor(
                     kp_xy, kp_conf)
 
