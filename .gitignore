@@ -1,0 +1,8 @@
+screenshots
+*.png
+*.mp4
+tests/detection_output/*
+tests/pose_detection_output/*
+tests/evidence_obj/*
+tests/evidence_hands/*
+tests/evidence_pose/*

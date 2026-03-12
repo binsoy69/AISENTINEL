@@ -21,7 +21,7 @@
 **AISENTINEL** is designed to strengthen the integrity of academic assessments by providing automated, real-time support to human proctors. The project focuses on three key objectives:
 
 1. **Detect Suspicious Behaviors**: Specifically identifying unauthorized actions during examinations such as passing papers, head tilting, hands under the table, using a cellphone, and accessing cheat sheets.
-2. **Implement Real-Time Proctoring**: Deploying a dual-node system using two independent Raspberry Pi 5 units — one with a Raspberry Pi AI HAT+ (26 TOPS) for high-speed inference (Front Node) and one running a lightweight CPU-optimized model (Back Node) — for continuous, multi-angle monitoring.
+2. **Implement Real-Time Proctoring**: Deploying a dual-node system using two independent Raspberry Pi 5 units — one with a Raspberry Pi AI HAT+ (26 TOPS) for high-speed inference (Front Node) and one running a lightweight CPU-optimized object detection model (Mid Node) — for continuous, multi-angle monitoring of 20 students.
 3. **Generate Evidence**: Automatically recording short video clips with timestamps whenever cheating behavior is detected to serve as evidence for administrative review. A post-exam merge process unifies evidence from both nodes into a single, chronological timeline.
 
 ---
@@ -33,13 +33,13 @@
 The study is centered on a visual detection system deployed within a controlled simulation environment.
 
 - **Behaviors Detected**: The system is trained to identify specific visual cues associated with cheating:
-  - Passing of papers between students (above and below desk level).
-  - Abnormal head tilting or sustained head turning towards a neighbor.
-  - Hands hidden under the table.
-  - Presence and usage of cellphones (on desk, near face, or hidden under desk).
-  - Usage of cheat sheets.
+  - Abnormal head tilting or sustained head turning towards a neighbor (Front Node — pose estimation).
+  - Hands under the table (Front Node — wrist keypoint disappearance from pose estimation; Mid Node — hand presence-then-absence monitoring per desk zone).
+  - Presence and usage of cellphones (Front Node — object detection on all 20 students; Mid Node — object detection on the back 12 students).
+  - Usage of cheat sheets (Front Node — object detection on all 20 students; Mid Node — object detection on the back 12 students).
+  - Passing papers between side-by-side neighbors (Front Node — wrist keypoint lateral exit from tracked student's bounding box via pose estimation + ByteTrack).
 - **Environment**: A simulation room designed to approximate a standard Philippine classroom (7m × 9m).
-  - **Capacity**: The simulation involves 20 or fewer students (approximating a full class of 40–50).
+  - **Capacity**: The simulation involves 20 students. The Front Node covers all 20 students (object detection + pose-based behavioral analysis), while the Mid Node covers the back 12 students (object detection only for cellphones, cheat sheets, and hands under table).
   - **Layout**: Seats arranged with at least 1 meter of spacing, following post-pandemic DepEd and DOH guidelines to reduce occlusions and improve camera coverage.
   - **Conditions**: Average exam duration of 1 hour and 30 minutes.
 - **Evidence**: Each detected event generates a locally stored video clip with a precise timestamp for review. Evidence from both nodes is merged post-exam into a unified, deduplicated timeline.
@@ -52,7 +52,8 @@ The system operates within defined constraints:
 - **Contextual Blind Spots**:
   - It cannot reliably distinguish cheat sheets that mimic the official questionnaire in size or appearance.
   - It cannot capture subtle, non-object-based behaviors such as hand signals or whispering.
-- **Frame Rate Disparity**: The Back Node operates at a lower frame rate (8–12 FPS) than the Front Node (25–30 FPS) due to its CPU-only inference, which means very fast, transient movements may be missed by the rear camera.
+  - Passing papers detection covers only direct side-to-side hand-to-hand transfers between neighbors in the same row (Front Node only). Front-to-back passing, tossing, or sliding papers is not detected.
+- **Frame Rate Disparity**: The Mid Node operates at a lower frame rate (8–12 FPS) than the Front Node (25–30 FPS) due to its CPU-only inference, which means very fast, transient movements may be missed by the mid camera.
 - **Independent Nodes**: Because the two nodes operate independently, real-time cross-camera fusion is not available. Correlated evidence is linked only post-exam via timestamp alignment.
 - **Environment**: Results gathered in the controlled simulation may differ from those in larger, more chaotic real-world classroom settings.
 
@@ -64,28 +65,28 @@ The monitoring setup employs an **Independent Dual-Node Architecture**. Each nod
 
 ### 1. Front Node (Front View — Hailo-Accelerated)
 
-The Front Node handles the computationally intensive workload, leveraging the AI HAT+ for high-speed inference.
+The Front Node handles the computationally intensive workload, leveraging the AI HAT+ for high-speed inference. It covers all 20 students with both object detection and pose-based behavioral analysis.
 
 - **Device**: Raspberry Pi 5 (8GB RAM).
 - **Accelerator**: Raspberry Pi AI HAT+ (26 TOPS).
 - **Models**:
-  - **YOLOv11n (Object Detection)** — Runs on Hailo at 25–30 FPS, 640×640 resolution. Detects: `person`, `cell_phone`, `paper`, `hand`, `cheat_sheet`.
-  - **YOLOv11n-pose (Pose Estimation)** — Runs on Hailo or CPU at 7–8 FPS (alternating with detection model). Provides facial and upper-body keypoints for head tilt and head turn analysis.
+  - **YOLOv11n (Object Detection)** — Runs on Hailo at 25–30 FPS, 640×640 resolution. Detects: `person`, `hand`, `cell_phone`, `cheat_sheet`.
+  - **YOLOv11n-pose (Pose Estimation)** — Runs on Hailo or CPU at 7–8 FPS (alternating with detection model). Provides facial and upper-body keypoints (nose, eyes, ears, shoulders, wrists) for head tilt, head turn, and hands-under-table analysis.
 - **Tracking**: ByteTrack for persistent student identification across frames.
 - **Export Format**: HEF (Hailo Executable Format).
-- **Detection Responsibilities**: Cellphone usage (on/near desk), head tilting, looking at a neighbor's paper, cheat sheet on desk, above-desk paper passing.
+- **Detection Responsibilities**: Cellphone usage, cheat sheet usage, head tilting, looking at a neighbor's paper, hands under the table (wrist keypoints from pose estimation disappear or drop below desk zone boundary), passing papers (wrist keypoint lateral exit from student's person bounding box toward a side-by-side neighbor).
 
-### 2. Back Node (Back View — CPU-Only)
+### 2. Mid Node (Mid-Room View — CPU-Only)
 
-The Back Node provides a rear perspective with a streamlined, purpose-built detection pipeline optimized for CPU inference.
+The Mid Node is positioned in the middle of the room, facing the back half. It provides a front-facing view of the back 12 students with a streamlined object-detection-only pipeline optimized for CPU inference. No pose estimation runs on this node.
 
 - **Device**: Raspberry Pi 5 (8GB RAM).
 - **Accelerator**: None (CPU-only inference).
 - **Model**:
-  - **YOLOv11n (Object Detection, Narrowed)** — Runs on CPU via NCNN at 8–12 FPS, 320×320 resolution. Detects a reduced class set: `hand`, `cell_phone`, `paper`.
-- **Tracking**: None. Uses **static zone-based detection** instead, with predefined regions mapped to each seat during calibration.
+  - **YOLOv11n (Object Detection, Narrowed)** — Runs on CPU via NCNN at 8–12 FPS, 320×320 resolution. Detects a reduced class set: `hand`, `cell_phone`, `cheat_sheet`.
+- **Tracking**: None. Uses **per-seat desk zone monitoring** — a desk surface region is defined per student seat during calibration. Hands-under-table is inferred when `hand` detections that were previously present in a zone stop appearing (presence-then-absence).
 - **Export Format**: NCNN.
-- **Detection Responsibilities**: Hands under table, hidden phones (under desk/on lap), below-desk paper passing, reaching behind towards a neighbor.
+- **Detection Responsibilities**: Hands under table (hand absence monitoring per desk zone), cellphone usage, cheat sheet usage. Covers the back 12 of 20 students only.
 
 ### 3. Post-Exam Evidence Merge
 
@@ -107,13 +108,13 @@ To maximize coverage in the 7m × 9m room:
   - **Location**: Mounted at the front of the room.
   - **Height**: 2.5 meters.
   - **Angle**: Angled downwards at 15 degrees.
-  - **Purpose**: Captures facial expressions, head movements, head orientation, objects on desks, and above-desk interactions between students.
+  - **Purpose**: Covers all 20 students. Handles object detection (cellphones, cheat sheets, hands) and pose-based behavioral analysis (head tilt, looking at neighbor, hands under table via wrist keypoints below desk zone).
 
-- **Back Camera**:
-  - **Location**: Mounted at the rear of the room.
+- **Mid Camera**:
+  - **Location**: Mounted in the middle of the room (ceiling or elevated mount), facing the back half.
   - **Height**: 2.5 meters.
-  - **Angle**: Angled downwards at 15 degrees.
-  - **Purpose**: Monitors hands under tables, items on laps, passing of papers behind backs or below desks, and screens of unauthorized devices hidden from the front view.
+  - **Angle**: Angled downwards to cover the back 12 student desks.
+  - **Purpose**: Provides a front-facing view of the back 12 students for object detection of cellphones, cheat sheets, and hands below the desk zone. Complements the Front Camera by detecting small objects that are difficult to resolve from the front wall distance.
 
 ### Component List
 
@@ -122,7 +123,7 @@ To maximize coverage in the 7m × 9m room:
 - **Imaging**: 2× High-resolution Wide-Angle Cameras (USB or MIPI-CSI) capable of clear video at 2.5m distance.
 - **Storage**: High-endurance microSD cards (64GB+) for local video clip storage on each node.
 - **Power**: Official USB-C Power Supplies (27W) for both units to support sustained compute loads.
-- **Cooling**: Active coolers (heatsink + fan) for **both** Pis. The Front Node requires cooling for the AI HAT+ workload; the Back Node requires cooling for sustained CPU-based inference, which generates significant heat over the 1.5-hour exam duration.
+- **Cooling**: Active coolers (heatsink + fan) for **both** Pis. The Front Node requires cooling for the AI HAT+ workload; the Mid Node requires cooling for sustained CPU-based inference, which generates significant heat over the 1.5-hour exam duration.
 
 ---
 
@@ -135,7 +136,7 @@ Both nodes follow a modular pipeline structure, but with different components ac
 ```
 aisentinel/
 ├── config.yaml                 # Thresholds, timers, camera settings, zone definitions
-├── main.py                     # Orchestrator (selects front or back mode)
+├── main.py                     # Orchestrator (selects front or mid mode)
 ├── capture/
 │   ├── camera.py               # Frame capture from camera feed
 │   └── buffer.py               # Circular video ring buffer (last N seconds)
@@ -145,9 +146,9 @@ aisentinel/
 ├── tracking/
 │   └── tracker.py              # ByteTrack wrapper (Front Node only)
 ├── analysis/
-│   ├── behavior_front.py       # Front Node rule engine (tracker-based)
-│   ├── behavior_back.py        # Back Node rule engine (zone-based)
-│   └── zones.py                # Static zone definitions per seat (Back Node)
+│   ├── behavior_front.py       # Front Node rule engine (tracker + pose-based)
+│   ├── behavior_mid.py         # Mid Node rule engine (zone-based object detection)
+│   └── zones.py                # Desk zone boundary definitions per seat (Mid Node)
 ├── evidence/
 │   └── recorder.py             # Save clips + metadata on trigger
 ├── merge/
@@ -155,7 +156,7 @@ aisentinel/
 └── models/
     ├── front_detect.hef        # Front detection model (Hailo format)
     ├── front_pose.hef          # Front pose model (Hailo format)
-    └── back_detect_ncnn/       # Back detection model (NCNN format)
+    └── mid_detect_ncnn/        # Mid detection model (NCNN format)
 ```
 
 ---
@@ -169,20 +170,20 @@ aisentinel/
 - **Export Format**: HEF (Hailo Executable Format)
 - **Classes**:
 
-| Class Index | Class Name   | Description                              |
-|-------------|--------------|------------------------------------------|
-| 0           | `person`     | Student (pretrained from COCO, fine-tuned)|
-| 1           | `cell_phone` | Unauthorized device                      |
-| 2           | `paper`      | Exam paper or cheat sheet                |
-| 3           | `hand`       | For tracking paper passing gestures      |
-| 4           | `cheat_sheet`| Distinct from normal exam paper          |
+| Class Index | Class Name    | Description                                      |
+|-------------|---------------|--------------------------------------------------|
+| 0           | `person`      | Student (pretrained from COCO, fine-tuned). Used for ByteTrack person tracking. |
+| 1           | `hand`        | Visible hands on or near the desk; also used to detect reaching gestures |
+| 2           | `cell_phone`  | Unauthorized device                              |
+| 3           | `cheat_sheet` | Unauthorized reference material                  |
 
 #### Model 2 — YOLOv11n-pose Pose Estimation (Hailo or CPU)
 
 - **Resolution**: 640×640
 - **Target FPS**: 7–8 (runs on every 4th frame, alternating with detection model)
-- **Purpose**: Provides keypoints (nose, eyes, ears, shoulders) for head orientation analysis.
+- **Purpose**: Provides keypoints (nose, eyes, ears, shoulders, **wrists**) for head orientation and hands-under-table analysis.
 - **No custom training required** — uses pretrained YOLOv11n-pose weights.
+- **Desk Zone Boundary**: A horizontal line is defined per student seat representing the desk edge. When a tracked student's wrist keypoints drop below this boundary for a sustained period, a "hands under table" flag is raised.
 
 #### Tracking: ByteTrack
 
@@ -201,48 +202,59 @@ Each tracked student maintains an independent state machine:
 | Behavior                   | Detection Method                                                                                                  | Trigger Condition                          |
 |----------------------------|-------------------------------------------------------------------------------------------------------------------|--------------------------------------------|
 | **Cellphone usage**        | Direct detection of `cell_phone` at high confidence                                                               | Confidence ≥ 0.6, immediate flag           |
+| **Cheat sheet usage**      | Direct detection of `cheat_sheet` at high confidence                                                              | Confidence ≥ 0.5, immediate flag           |
 | **Head tilting**           | Ear-to-ear angle from pose keypoints: `atan2(right_ear.y - left_ear.y, right_ear.x - left_ear.x)`                | Angle > 25–30° sustained for 3–5 seconds   |
 | **Looking at neighbor**    | Nose position offset from shoulder midpoint: `abs(nose.x - shoulder_center.x)`                                    | Offset exceeds threshold for 3–5 seconds   |
-| **Cheat sheet on desk**    | `paper` or `cheat_sheet` detected in unusual desk position (not centered where exam should be)                    | Sustained presence, confidence ≥ 0.5       |
-| **Paper passing (above desk)** | `paper` + `hand` bounding boxes overlapping between two different `person` tracks within a 1–2 second window | Spatial overlap across two tracked persons |
+| **Hands under table**      | Wrist keypoints (left/right wrist) from pose drop below the per-seat desk zone line, or become undetected (low confidence) after being consistently tracked above the desk | Sustained for 5–8 seconds |
+| **Passing papers**         | A tracked student's wrist keypoint exits their own `person` bounding box laterally (left or right edge). The exit direction determines which side-by-side neighbor is involved. The nearest tracked neighbor in that lateral direction (matched by similar y-center within a row tolerance) is identified. Both students are flagged as a linked event. Confidence is boosted if a `hand` or `cheat_sheet` detection overlaps the wrist's exit region. | Immediate flag: base confidence 0.7, reinforced confidence 0.85 if `hand`/`cheat_sheet` overlaps exit region. Front Node only — Mid Node does not attempt this detection. |
 
 ---
 
-### Back Node: Model & Detection Logic
+### Mid Node: Model & Detection Logic
 
 #### Model — YOLOv11n Object Detection (NCNN, Narrowed)
 
 - **Resolution**: 320×320
 - **Target FPS**: 8–12
 - **Export Format**: NCNN (optimized for ARM CPU)
+- **Coverage**: Back 12 of 20 students (camera positioned in the middle of the room, facing toward the back wall)
 - **Classes** (reduced set for faster inference):
 
-| Class Index | Class Name   | Description                                    |
-|-------------|--------------|------------------------------------------------|
-| 0           | `hand`       | Primary class — detecting hands below desk     |
-| 1           | `cell_phone` | Phones held under desk, on lap, screen visible |
-| 2           | `paper`      | Papers passed below desk or behind backs       |
+| Class Index | Class Name    | Description                                          |
+|-------------|---------------|------------------------------------------------------|
+| 0           | `hand`        | Visible hands on the desk surface; absence from desk zone infers hands under table |
+| 1           | `cell_phone`  | Unauthorized device visible on or near desk          |
+| 2           | `cheat_sheet` | Unauthorized reference material on or near desk      |
 
-#### Zone-Based Detection (No Tracker)
+#### Per-Seat Desk Zone Monitoring (No Tracker)
 
-Instead of tracking individual students, the Back Node uses **predefined static zones** mapped during a one-time calibration step before each exam. Since the camera is fixed, these zones remain stable throughout the session.
+Instead of tracking individual students, the Mid Node uses **per-seat desk zone regions** mapped during calibration. Since the camera is fixed, these zones remain stable throughout the session. No pose estimation or tracker runs on this node.
 
-**Zone types per seat**:
-- **`desk_area`**: The visible desk surface region for that seat.
-- **`under_desk`**: The region below the desk line for that seat.
-- **`between_seats`**: The gap region between adjacent students.
-- **`lap_area`**: The region corresponding to the student's lap.
+**Hands-under-table logic (presence-then-absence)**:
 
-**Calibration process**: Before the exam, a calibration script captures a reference frame of the empty room. The operator draws bounding regions for each seat's zones using a simple GUI tool, and these are saved to `config.yaml`.
+Since hands under the desk are occluded and physically undetectable, the Mid Node infers this behavior by monitoring whether `hand` detections *stop appearing* in each student's desk zone after having been present:
 
-#### Back Node Behavioral Logic
+```
+Per desk zone, each frame:
+  if hand detected in zone → reset absence_timer, set hand_seen = True
+  if no hand in zone AND hand_seen is True → increment absence_timer
+  if absence_timer ≥ threshold (5–8 sec) → flag "hands under table"
+```
 
-| Behavior                      | Detection Method                                                       | Trigger Condition                              |
-|-------------------------------|------------------------------------------------------------------------|------------------------------------------------|
-| **Hands under table**         | `hand` detected in `under_desk` zone                                   | Sustained for 5–8 seconds                      |
-| **Hidden phone (under desk)** | `cell_phone` detected in `under_desk` or `lap_area` zone              | Immediate flag at confidence ≥ 0.6             |
-| **Paper passing (below desk)**| `paper` detected in `between_seats` zone                               | Any detection at confidence ≥ 0.5              |
-| **Reaching behind**           | `hand` detected in `between_seats` zone                                | Sustained for 3–5 seconds                      |
+The `hand_seen` flag prevents false positives at exam start before hands have ever been visible. Normal exam behavior (student writing) produces consistent `hand` detections in the zone; hands moving below the desk surface cause those detections to vanish.
+
+**Object presence**:
+- `cell_phone` and `cheat_sheet` detections anywhere in frame are flagged immediately — no zone logic required.
+
+**Calibration process**: Before the exam, a calibration script captures a reference frame of the empty room. The operator draws a bounding region per seat representing the desk surface area using a simple GUI tool. These zones are saved to `config.yaml`.
+
+#### Mid Node Behavioral Logic
+
+| Behavior                      | Detection Method                                                                                        | Trigger Condition                              |
+|-------------------------------|---------------------------------------------------------------------------------------------------------|------------------------------------------------|
+| **Hands under table**         | `hand` previously detected in desk zone, then absent — `absence_timer` incremented each frame with no detection | Absence sustained for 5–8 seconds             |
+| **Cellphone usage**           | `cell_phone` detected anywhere in frame                                                                 | Immediate flag at confidence ≥ 0.6             |
+| **Cheat sheet usage**         | `cheat_sheet` detected anywhere in frame                                                                | Immediate flag at confidence ≥ 0.5             |
 
 ---
 
@@ -255,7 +267,8 @@ Both nodes implement identical evidence recording logic:
 - **Action**: The system saves the buffered footage (10 seconds before the event) plus records an additional 10 seconds after the trigger, producing a ~20-second evidence clip.
 - **Metadata**: Each clip's filename encodes: `{node}_{timestamp}_{behavior_type}_{confidence}.mp4`
   - Example: `front_20260207_143022_cellphone_087.mp4`
-  - Example: `back_20260207_143055_hands_under_table_072.mp4`
+  - Example: `mid_20260207_143055_hands_under_table_072.mp4`
+  - Example: `front_20260207_143110_passing_papers_085.mp4`
 - **Storage**: Clips are stored locally on each node's microSD card in an `evidence/` directory.
 
 ---
@@ -297,26 +310,26 @@ timedatectl status
 ### Phase 1: Environment & Hardware Setup
 
 1. **Room Configuration**: Set up the 7m × 9m simulation room. Arrange 20 chairs with precise 1-meter spacing.
-2. **Mounting**: Install camera mounts at 2.5m height on front and back walls. Verify the 15-degree tilt covers all desks from both angles.
+2. **Mounting**: Install the Front Camera mount at 2.5m on the front wall (15-degree downward tilt covering all 20 desks). Install the Mid Camera mount at 2.5m in the middle of the room (ceiling or elevated mount, angled to cover the back 12 desks).
 3. **Device Assembly**:
    - Attach the AI HAT+ to the Front Raspberry Pi 5. Install active cooling.
-   - Set up the Back Raspberry Pi 5 with active cooling (heatsink + fan).
+   - Set up the Mid Raspberry Pi 5 with active cooling (heatsink + fan).
 4. **Clock Sync**: Configure NTP synchronization on both Pis and verify alignment.
 
 ### Phase 2: Data Collection & Model Preparation
 
-1. **Dataset Gathering**: Record footage from **both camera positions** (front and back) of actors performing the specific cheating behaviors in the simulation room.
+1. **Dataset Gathering**: Record footage from **both camera positions** (front and mid) of actors performing the specific cheating behaviors in the simulation room.
 2. **Annotation**:
-   - **Front model dataset**: Label images for all 5 classes (`person`, `cell_phone`, `paper`, `hand`, `cheat_sheet`) using Roboflow or CVAT.
-   - **Back model dataset**: Label images for the reduced 3-class set (`hand`, `cell_phone`, `paper`) from the rear camera perspective.
+   - **Front model dataset**: Label images for all 4 classes (`person`, `hand`, `cell_phone`, `cheat_sheet`) using Roboflow or CVAT from the front camera perspective.
+   - **Mid model dataset**: Label images for the 3-class set (`hand`, `cell_phone`, `cheat_sheet`) from the mid camera perspective (front-facing view of back 12 students).
    - Target: 1,500–2,000 annotated images per class, per model.
 3. **Training** (on GPU machine, not on the Pi):
-   - **Front detection model**: Fine-tune YOLOv11n from COCO-pretrained weights on the front dataset.
-   - **Back detection model**: Fine-tune YOLOv11n from COCO-pretrained weights on the back dataset with reduced classes.
+   - **Front detection model**: Fine-tune YOLOv11n from COCO-pretrained weights on the front dataset with 4 classes (`person`, `hand`, `cell_phone`, `cheat_sheet`).
+   - **Mid detection model**: Fine-tune YOLOv11n from COCO-pretrained weights on the mid dataset with 3 classes (`hand`, `cell_phone`, `cheat_sheet`).
    - **Pose model**: No training needed — use pretrained YOLOv11n-pose weights directly.
 4. **Optimization & Export**:
    - **Front models**: Export to HEF format using the Hailo Dataflow Compiler for AI HAT+ deployment.
-   - **Back model**: Export to NCNN format for CPU inference on the Back Pi.
+   - **Mid model**: Export to NCNN format for CPU inference on the Mid Pi.
 
 ### Phase 3: System Integration
 
@@ -326,11 +339,11 @@ timedatectl status
    - Implement the ByteTrack-based tracking and behavioral analysis pipeline.
    - Implement evidence recording with circular buffer.
 
-2. **Back Node Deployment**:
+2. **Mid Node Deployment**:
    - Flash Raspberry Pi OS (64-bit, Bookworm). Install NCNN runtime and Python dependencies.
    - Deploy the NCNN detection model.
-   - Run the zone calibration tool to define seat zones for the specific room layout.
-   - Implement the zone-based behavioral analysis pipeline.
+   - Run the desk zone calibration tool to define desk edge boundaries for each of the back 12 seats.
+   - Implement the desk-zone-based behavioral analysis pipeline.
    - Implement evidence recording with circular buffer.
 
 3. **Evidence Merge Tool**:
@@ -342,16 +355,16 @@ timedatectl status
    ```bash
    vcgencmd measure_temp  # Check during operation; target < 80°C
    ```
-2. **Zone Calibration Verification**: Confirm that the Back Node's predefined zones accurately map to each seat from the rear camera's perspective.
+2. **Zone Calibration Verification**: Confirm that the Mid Node's desk zone boundaries accurately map to each of the back 12 seats from the mid camera's perspective.
 3. **Pilot Run**: Conduct a mock exam with 20 participants.
 4. **Scenario Testing**: Instruct participants to act out specific scenarios:
-   - *Scenario A*: Student passes a paper to a neighbor above the desk (Front Node target).
-   - *Scenario B*: Student passes a paper below the desk (Back Node target).
-   - *Scenario C*: Student checks a phone under the desk (Back Node target).
-   - *Scenario D*: Student holds a phone near their face (Front Node target).
-   - *Scenario E*: Student holds a cheat sheet (Front Node target).
-   - *Scenario F*: Student tilts head to look at a neighbor's paper (Front Node target).
-   - *Scenario G*: Student hides hands under the table for extended period (Back Node target).
+   - *Scenario A*: Student tilts head to look at a neighbor's paper (Front Node — pose estimation).
+   - *Scenario B*: Student turns head sustained toward a neighbor (Front Node — pose estimation).
+   - *Scenario C*: Student hides hands under the table for extended period (Front Node — wrist keypoints disappear from pose; Mid Node — hand absence from desk zone triggers flag).
+   - *Scenario D*: Student uses a cellphone on or near desk (Front Node — object detection for all 20; Mid Node — object detection for back 12).
+   - *Scenario E*: Student uses a cheat sheet on or near desk (Front Node — object detection for all 20; Mid Node — object detection for back 12).
+   - *Scenario F*: Student in the front 8 seats hides hands under table (Front Node only — verifies front coverage without Mid Node overlap).
+   - *Scenario G*: Student directly hands a paper/note to the neighbor sitting beside them in the same row (Front Node only — wrist keypoint exits person bounding box laterally toward neighbor; both students flagged as a linked event).
 5. **Evidence Merge Test**: Run the merge script on the collected evidence. Verify that:
    - Events from both nodes appear in the correct chronological order.
    - Duplicate detections of the same event are properly deduplicated.
@@ -366,10 +379,10 @@ The system will be evaluated based on:
 
 1. **Detection Accuracy**: The percentage of true positive cheating events captured versus missed events (False Negatives), measured **per node** and **combined**.
 2. **False Alarm Rate**: The frequency of normal behaviors (e.g., stretching, dropping a pen, briefly looking around) being flagged as cheating, measured per node.
-3. **System Latency**: Time taken between the behavior occurring and the system flagging it, measured per node. Expected: Front Node < 1 second, Back Node 1–3 seconds.
+3. **System Latency**: Time taken between the behavior occurring and the system flagging it, measured per node. Expected: Front Node < 1 second, Mid Node 1–3 seconds.
 4. **Evidence Integrity**: Verifying that recorded clips are playable, correctly timestamped, and clearly show the flagged behavior from the appropriate camera angle.
 5. **Evidence Merge Accuracy**: Verifying that the post-exam merge correctly combines and deduplicates events from both nodes without losing genuine separate incidents.
 6. **Thermal Stability**: Ensuring both Raspberry Pi 5 units can run their respective inference workloads for the full 1.5-hour exam duration without throttling.
    - **Front Node**: Pi 5 + AI HAT+ running dual models (detection + pose).
-   - **Back Node**: Pi 5 CPU running continuous NCNN inference.
-7. **Coverage Completeness**: Evaluating whether the dual-camera setup eliminates significant blind spots, particularly for behaviors that are only visible from one angle (e.g., under-desk activity only visible from behind, facial orientation only visible from front).
+   - **Mid Node**: Pi 5 CPU running continuous NCNN inference.
+7. **Coverage Completeness**: Evaluating whether the dual-camera setup eliminates significant blind spots. The Front Node covers all 20 students for both object detection (cellphones, cheat sheets, hands) and pose-based behavioral analysis (head tilt, looking at neighbor, hands under table). The Mid Node provides supplemental close-range coverage of the back 12 students for small-object detection (cellphones, cheat sheets, hands below desk zone), improving detection reliability for students farther from the front camera.
