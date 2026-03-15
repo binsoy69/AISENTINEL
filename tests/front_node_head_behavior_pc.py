@@ -60,7 +60,7 @@ KP_RIGHT_SHOULDER = 6
 
 # ── Behavior Thresholds ─────────────────────────────────────
 HEAD_TILT_ANGLE_DEG = 30.0      # ear-to-ear roll angle threshold
-HEAD_TURN_RATIO = 0.26          # nose offset / shoulder width threshold for yaw detection
+HEAD_TURN_RATIO = 0.18          # nose offset / shoulder width threshold for yaw detection
 SHOULDER_TURN_ANGLE_DEG = 20.0  # shoulder-line deviation from horizontal (overhead cam)
 SUSTAINED_SEC = 3.0             # seconds before flagging
 EVENT_COOLDOWN_SEC = 10.0       # cooldown between repeated flags
