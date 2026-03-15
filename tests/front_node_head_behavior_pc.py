@@ -155,6 +155,11 @@ class StudentState:
     track_id: int
     student_num: int
 
+    # Baseline yaw offset captured during assignment phase.
+    # Compensates for perspective distortion when student sits at
+    # the side of the camera's field of view.
+    baseline_yaw: float = 0.0
+
     # Head tilt tracking
     head_tilt_start: float = -1.0
     head_tilt_flagged_at: float = -999.0
@@ -172,7 +177,26 @@ class StudentState:
 
 
 # ── Behavior Detection ───────────────────────────────────────
-def detect_head_tilt(kp_xy, kp_conf):
+def compute_signed_yaw(kp_xy, kp_conf):
+    """
+    Compute the signed nose-offset / shoulder-width ratio.
+    Positive = nose is to the right of shoulder center in image coords.
+    Returns (valid, signed_ratio).
+    """
+    if (kp_conf[KP_NOSE] >= KP_CONF_THRESH and
+            kp_conf[KP_LEFT_SHOULDER] >= KP_CONF_THRESH and
+            kp_conf[KP_RIGHT_SHOULDER] >= KP_CONF_THRESH):
+        nose_x = float(kp_xy[KP_NOSE][0])
+        ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
+        rs_x = float(kp_xy[KP_RIGHT_SHOULDER][0])
+        shoulder_width = abs(rs_x - ls_x)
+        if shoulder_width >= 5:
+            shoulder_center_x = (ls_x + rs_x) / 2.0
+            return True, (nose_x - shoulder_center_x) / shoulder_width
+    return False, 0.0
+
+
+def detect_head_tilt(kp_xy, kp_conf, baseline_yaw=0.0):
     """
     Detects head tilting via two complementary signals:
 
@@ -181,8 +205,8 @@ def detect_head_tilt(kp_xy, kp_conf):
 
     2. Yaw (turning left/right): nose offset from shoulder midpoint,
        normalized by shoulder width.  Triggers when ratio > HEAD_TURN_RATIO.
-       When the head turns, one ear gets occluded by the head so the
-       ear-to-ear angle alone misses this motion.
+       The baseline_yaw is subtracted first to compensate for perspective
+       distortion when the student sits at the side of the camera's FOV.
 
     Returns (is_tilted, score) where score is the higher of the two
     normalized signals (0.0 = neutral, 1.0 = at threshold, >1.0 = exceeded).
@@ -203,17 +227,13 @@ def detect_head_tilt(kp_xy, kp_conf):
         roll_score = angle / HEAD_TILT_ANGLE_DEG if HEAD_TILT_ANGLE_DEG > 0 else 0.0
 
     # ── Yaw detection (nose offset from shoulder center) ───────
-    if (kp_conf[KP_NOSE] >= KP_CONF_THRESH and
-            kp_conf[KP_LEFT_SHOULDER] >= KP_CONF_THRESH and
-            kp_conf[KP_RIGHT_SHOULDER] >= KP_CONF_THRESH):
-        nose_x = float(kp_xy[KP_NOSE][0])
-        ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
-        rs_x = float(kp_xy[KP_RIGHT_SHOULDER][0])
-        shoulder_width = abs(rs_x - ls_x)
-        if shoulder_width >= 5:
-            shoulder_center_x = (ls_x + rs_x) / 2.0
-            offset_ratio = abs(nose_x - shoulder_center_x) / shoulder_width
-            yaw_score = offset_ratio / HEAD_TURN_RATIO if HEAD_TURN_RATIO > 0 else 0.0
+    # Subtract the student's baseline offset so that their natural
+    # resting position (due to perspective at the edge of the FOV)
+    # reads as ~0, and only actual head turns trigger the alert.
+    yaw_valid, signed_yaw = compute_signed_yaw(kp_xy, kp_conf)
+    if yaw_valid:
+        corrected_yaw = abs(signed_yaw - baseline_yaw)
+        yaw_score = corrected_yaw / HEAD_TURN_RATIO if HEAD_TURN_RATIO > 0 else 0.0
 
     # No valid signal from either method
     if roll_score == 0.0 and yaw_score == 0.0:
@@ -315,8 +335,8 @@ def run_assignment_phase(first_frame, initial_results, disp_scale):
         key = cv2.waitKey(0) & 0xFF
         cv2.destroyWindow("AISENTINEL - Assign Students")
         if key == 27:
-            return None
-        return {}
+            return None, None
+        return {}, {}
 
     track_ids = boxes.id.int().cpu().tolist()
     bboxes = boxes.xyxy.cpu().numpy()
@@ -435,7 +455,7 @@ def run_assignment_phase(first_frame, initial_results, disp_scale):
 
         if key == 27:  # ESC
             cv2.destroyWindow(win_name)
-            return None
+            return None, None
 
         elif key in (ord("s"), ord("S")):
             if len(student_map) == 0:
@@ -471,19 +491,35 @@ def run_assignment_phase(first_frame, initial_results, disp_scale):
                 input_buffer += chr(key)
 
     cv2.destroyWindow(win_name)
+
+    # Compute baseline yaw offset for each assigned student from
+    # their first-frame pose.  This compensates for perspective
+    # distortion when a student sits at the side of the camera FOV.
+    baseline_yaw_map = {}  # track_id -> signed yaw ratio
+    for p in persons:
+        tid = p["track_id"]
+        if tid in student_map:
+            valid, signed_yaw = compute_signed_yaw(p["kp_xy"], p["kp_conf"])
+            baseline_yaw_map[tid] = signed_yaw if valid else 0.0
+
     log_info(f"Assignment complete: {len(student_map)} students assigned.")
     for tid, num in sorted(student_map.items(), key=lambda x: x[1]):
-        log_info(f"  Student #{num} -> Track ID {tid}")
-    return student_map
+        by = baseline_yaw_map.get(tid, 0.0)
+        log_info(f"  Student #{num} -> Track ID {tid}  (baseline yaw: {by:+.3f})")
+    return student_map, baseline_yaw_map
 
 
 # ── Main Detection Loop ──────────────────────────────────────
-def run_detection(cap, model, tracker_cfg, student_map, video_path):
+def run_detection(cap, model, tracker_cfg, student_map, video_path,
+                   baseline_yaw_map=None):
     """
     Run the live detection window with behavior analysis.
     Expects cap already open (positioned at frame 2+) and model.track()
     state preserved from the assignment phase so track IDs stay consistent.
+    baseline_yaw_map: {track_id: signed_yaw_ratio} from assignment phase.
     """
+    if baseline_yaw_map is None:
+        baseline_yaw_map = {}
     video_name = Path(video_path).stem
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -509,7 +545,10 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
     # Build student states from the assignment map
     students: dict[int, StudentState] = {}
     for tid, num in student_map.items():
-        students[tid] = StudentState(track_id=tid, student_num=num)
+        students[tid] = StudentState(
+            track_id=tid, student_num=num,
+            baseline_yaw=baseline_yaw_map.get(tid, 0.0),
+        )
 
     frame_idx = 1  # frame 1 was already processed during assignment
     paused = False
@@ -580,7 +619,8 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
                 draw_skeleton(annotated, kp_xy, kp_conf)
 
                 # ── 1. Head Tilt (roll + yaw) ────────────────
-                is_tilted, tilt_score = detect_head_tilt(kp_xy, kp_conf)
+                is_tilted, tilt_score = detect_head_tilt(
+                    kp_xy, kp_conf, baseline_yaw=state.baseline_yaw)
 
                 if is_tilted:
                     if state.head_tilt_start < 0:
@@ -807,7 +847,8 @@ def main():
     print()
 
     # ── Assignment phase ─────────────────────────────────────
-    student_map = run_assignment_phase(first_frame, initial_results, disp_scale)
+    student_map, baseline_yaw_map = run_assignment_phase(
+        first_frame, initial_results, disp_scale)
     if student_map is None:
         cap.release()
         log_info("Assignment cancelled. Exiting.")
@@ -821,7 +862,8 @@ def main():
     # Cap is still open at frame 2. Tracker state from model.track()
     # persists so track IDs assigned during assignment stay consistent.
     log_info("Starting detection...")
-    run_detection(cap, model, tracker_cfg, student_map, video_path)
+    run_detection(cap, model, tracker_cfg, student_map, video_path,
+                  baseline_yaw_map)
     cap.release()
     log_info("Done!")
 
