@@ -33,7 +33,7 @@
 The study is centered on a visual detection system deployed within a controlled simulation environment.
 
 - **Behaviors Detected**: The system is trained to identify specific visual cues associated with cheating:
-  - Abnormal head tilting or sustained head turning towards a neighbor (Front Node — pose estimation).
+  - Abnormal head tilting (Front Node — pose estimation).
   - Hands under the table (Front Node — wrist keypoint disappearance from pose estimation; Mid Node — hand presence-then-absence monitoring per desk zone).
   - Presence and usage of cellphones (Front Node — object detection on all 20 students; Mid Node — object detection on the back 12 students).
   - Usage of cheat sheets (Front Node — object detection on all 20 students; Mid Node — object detection on the back 12 students).
@@ -74,7 +74,7 @@ The Front Node handles the computationally intensive workload, leveraging the AI
   - **YOLOv11n-pose (Pose Estimation)** — Runs on Hailo or CPU at 7–8 FPS (alternating with detection model). Provides facial and upper-body keypoints (nose, eyes, ears, shoulders, wrists) for head tilt, head turn, and hands-under-table analysis.
 - **Tracking**: ByteTrack for persistent student identification across frames.
 - **Export Format**: HEF (Hailo Executable Format).
-- **Detection Responsibilities**: Cellphone usage, cheat sheet usage, head tilting, looking at a neighbor's paper, hands under the table (wrist keypoints from pose estimation disappear or drop below desk zone boundary), passing papers (wrist keypoint lateral exit from student's person bounding box toward a side-by-side neighbor).
+- **Detection Responsibilities**: Cellphone usage, cheat sheet usage, head tilting, hands under the table (wrist keypoints from pose estimation disappear or drop below desk zone boundary), passing papers (wrist keypoint lateral exit from student's person bounding box toward a side-by-side neighbor).
 
 ### 2. Mid Node (Mid-Room View — CPU-Only)
 
@@ -108,7 +108,7 @@ To maximize coverage in the 7m × 9m room:
   - **Location**: Mounted at the front of the room.
   - **Height**: 2.5 meters.
   - **Angle**: Angled downwards at 15 degrees.
-  - **Purpose**: Covers all 20 students. Handles object detection (cellphones, cheat sheets, hands) and pose-based behavioral analysis (head tilt, looking at neighbor, hands under table via wrist keypoints below desk zone).
+  - **Purpose**: Covers all 20 students. Handles object detection (cellphones, cheat sheets, hands) and pose-based behavioral analysis (head tilt, hands under table via wrist keypoints below desk zone).
 
 - **Mid Camera**:
   - **Location**: Mounted in the middle of the room (ceiling or elevated mount), facing the back half.
@@ -181,7 +181,7 @@ aisentinel/
 
 - **Resolution**: 640×640
 - **Target FPS**: 7–8 (runs on every 4th frame, alternating with detection model)
-- **Purpose**: Provides keypoints (nose, eyes, ears, shoulders, **wrists**) for head orientation and hands-under-table analysis.
+- **Purpose**: Provides keypoints (nose, eyes, ears, shoulders, **wrists**) for head tilt and hands-under-table analysis.
 - **No custom training required** — uses pretrained YOLOv11n-pose weights.
 - **Desk Zone Boundary**: A horizontal line is defined per student seat representing the desk edge. When a tracked student's wrist keypoints drop below this boundary for a sustained period, a "hands under table" flag is raised.
 
@@ -204,7 +204,6 @@ Each tracked student maintains an independent state machine:
 | **Cellphone usage**        | Direct detection of `cell_phone` at high confidence                                                               | Confidence ≥ 0.6, immediate flag           |
 | **Cheat sheet usage**      | Direct detection of `cheat_sheet` at high confidence                                                              | Confidence ≥ 0.5, immediate flag           |
 | **Head tilting**           | Ear-to-ear angle from pose keypoints: `atan2(right_ear.y - left_ear.y, right_ear.x - left_ear.x)`                | Angle > 25–30° sustained for 3–5 seconds   |
-| **Looking at neighbor**    | Nose position offset from shoulder midpoint: `abs(nose.x - shoulder_center.x)`                                    | Offset exceeds threshold for 3–5 seconds   |
 | **Hands under table**      | Wrist keypoints (left/right wrist) from pose drop below the per-seat desk zone line, or become undetected (low confidence) after being consistently tracked above the desk | Sustained for 5–8 seconds |
 | **Passing papers**         | A tracked student's wrist keypoint exits their own `person` bounding box laterally (left or right edge). The exit direction determines which side-by-side neighbor is involved. The nearest tracked neighbor in that lateral direction (matched by similar y-center within a row tolerance) is identified. Both students are flagged as a linked event. Confidence is boosted if a `hand` or `cheat_sheet` detection overlaps the wrist's exit region. | Immediate flag: base confidence 0.7, reinforced confidence 0.85 if `hand`/`cheat_sheet` overlaps exit region. Front Node only — Mid Node does not attempt this detection. |
 
@@ -359,12 +358,11 @@ timedatectl status
 3. **Pilot Run**: Conduct a mock exam with 20 participants.
 4. **Scenario Testing**: Instruct participants to act out specific scenarios:
    - *Scenario A*: Student tilts head to look at a neighbor's paper (Front Node — pose estimation).
-   - *Scenario B*: Student turns head sustained toward a neighbor (Front Node — pose estimation).
-   - *Scenario C*: Student hides hands under the table for extended period (Front Node — wrist keypoints disappear from pose; Mid Node — hand absence from desk zone triggers flag).
-   - *Scenario D*: Student uses a cellphone on or near desk (Front Node — object detection for all 20; Mid Node — object detection for back 12).
-   - *Scenario E*: Student uses a cheat sheet on or near desk (Front Node — object detection for all 20; Mid Node — object detection for back 12).
-   - *Scenario F*: Student in the front 8 seats hides hands under table (Front Node only — verifies front coverage without Mid Node overlap).
-   - *Scenario G*: Student directly hands a paper/note to the neighbor sitting beside them in the same row (Front Node only — wrist keypoint exits person bounding box laterally toward neighbor; both students flagged as a linked event).
+   - *Scenario B*: Student hides hands under the table for extended period (Front Node — wrist keypoints disappear from pose; Mid Node — hand absence from desk zone triggers flag).
+   - *Scenario C*: Student uses a cellphone on or near desk (Front Node — object detection for all 20; Mid Node — object detection for back 12).
+   - *Scenario D*: Student uses a cheat sheet on or near desk (Front Node — object detection for all 20; Mid Node — object detection for back 12).
+   - *Scenario E*: Student in the front 8 seats hides hands under table (Front Node only — verifies front coverage without Mid Node overlap).
+   - *Scenario F*: Student directly hands a paper/note to the neighbor sitting beside them in the same row (Front Node only — wrist keypoint exits person bounding box laterally toward neighbor; both students flagged as a linked event).
 5. **Evidence Merge Test**: Run the merge script on the collected evidence. Verify that:
    - Events from both nodes appear in the correct chronological order.
    - Duplicate detections of the same event are properly deduplicated.

@@ -2,10 +2,10 @@
 """
 Head Behavior Detection Test - PC Test Program
 ================================================
-Detects two pose-based cheating behaviors from PROJECT.md:
+Detects two pose-based cheating behaviors:
 
-  1. Head Tilting        - ear-to-ear angle > threshold, sustained
-  2. Looking at Neighbor - nose offset from shoulder midpoint, sustained
+  1. Head Tilting            - ear-to-ear angle > threshold, sustained
+  2. Shoulder Turn (OVERHEAD)- shoulder-line angle deviation, sustained
 
 Both behaviors must be sustained for 4 seconds (configurable) before
 triggering an alert and saving an evidence screenshot.
@@ -59,9 +59,9 @@ KP_LEFT_SHOULDER = 5
 KP_RIGHT_SHOULDER = 6
 
 # ── Behavior Thresholds ─────────────────────────────────────
-HEAD_TILT_ANGLE_DEG = 30.0      # middle of 25-30 range from PROJECT.md
-LOOK_NEIGHBOR_RATIO = 0.26      # nose offset / shoulder width
-EAR_SYMMETRY_THRESH = 0.6       # below this, body is turned → suppress look detection
+HEAD_TILT_ANGLE_DEG = 30.0      # ear-to-ear roll angle threshold
+HEAD_TURN_RATIO = 0.26          # nose offset / shoulder width threshold for yaw detection
+SHOULDER_TURN_ANGLE_DEG = 20.0  # shoulder-line deviation from horizontal (overhead cam)
 SUSTAINED_SEC = 3.0             # seconds before flagging
 EVENT_COOLDOWN_SEC = 10.0       # cooldown between repeated flags
 KP_CONF_THRESH = 0.3            # minimum keypoint confidence
@@ -71,7 +71,7 @@ COL_NORMAL = (0, 255, 0)
 COL_UNASSIGNED = (128, 128, 128)
 COL_SELECTED = (255, 255, 0)     # cyan
 COL_HEAD_TILT = (0, 165, 255)    # orange
-COL_LOOK_NEIGHBOR = (255, 0, 255)  # magenta
+COL_SHOULDER_TURN = (255, 191, 0)  # deep sky blue (BGR)
 COL_FLAGGED = (0, 0, 255)        # red
 
 # ── Skeleton for drawing ─────────────────────────────────────
@@ -159,14 +159,14 @@ class StudentState:
     head_tilt_start: float = -1.0
     head_tilt_flagged_at: float = -999.0
 
-    # Looking at neighbor tracking
-    look_neighbor_start: float = -1.0
-    look_neighbor_flagged_at: float = -999.0
+    # Shoulder turn tracking (overhead camera)
+    shoulder_turn_start: float = -1.0
+    shoulder_turn_flagged_at: float = -999.0
 
     def can_flag(self, behavior: str, now: float) -> bool:
         last = {
             "head_tilt": self.head_tilt_flagged_at,
-            "looking_at_neighbor": self.look_neighbor_flagged_at,
+            "shoulder_turn": self.shoulder_turn_flagged_at,
         }.get(behavior, -999.0)
         return (now - last) > EVENT_COOLDOWN_SEC
 
@@ -174,84 +174,103 @@ class StudentState:
 # ── Behavior Detection ───────────────────────────────────────
 def detect_head_tilt(kp_xy, kp_conf):
     """
-    Ear-to-ear angle (PROJECT.md formula):
-        angle = atan2(right_ear.y - left_ear.y, right_ear.x - left_ear.x)
-    Returns (is_tilted, angle_degrees).
+    Detects head tilting via two complementary signals:
+
+    1. Roll (sideways lean): ear-to-ear angle vs horizontal.
+       Triggers when angle > HEAD_TILT_ANGLE_DEG.
+
+    2. Yaw (turning left/right): nose offset from shoulder midpoint,
+       normalized by shoulder width.  Triggers when ratio > HEAD_TURN_RATIO.
+       When the head turns, one ear gets occluded by the head so the
+       ear-to-ear angle alone misses this motion.
+
+    Returns (is_tilted, score) where score is the higher of the two
+    normalized signals (0.0 = neutral, 1.0 = at threshold, >1.0 = exceeded).
     """
-    if kp_conf[KP_LEFT_EAR] < KP_CONF_THRESH or kp_conf[KP_RIGHT_EAR] < KP_CONF_THRESH:
+    roll_score = 0.0
+    yaw_score = 0.0
+
+    # ── Roll detection (ear-to-ear angle) ──────────────────────
+    if (kp_conf[KP_LEFT_EAR] >= KP_CONF_THRESH and
+            kp_conf[KP_RIGHT_EAR] >= KP_CONF_THRESH):
+        le = kp_xy[KP_LEFT_EAR]
+        re = kp_xy[KP_RIGHT_EAR]
+        raw = abs(math.degrees(
+            math.atan2(float(re[1]) - float(le[1]),
+                       float(re[0]) - float(le[0]))
+        ))
+        angle = raw if raw <= 90 else 180 - raw
+        roll_score = angle / HEAD_TILT_ANGLE_DEG if HEAD_TILT_ANGLE_DEG > 0 else 0.0
+
+    # ── Yaw detection (nose offset from shoulder center) ───────
+    if (kp_conf[KP_NOSE] >= KP_CONF_THRESH and
+            kp_conf[KP_LEFT_SHOULDER] >= KP_CONF_THRESH and
+            kp_conf[KP_RIGHT_SHOULDER] >= KP_CONF_THRESH):
+        nose_x = float(kp_xy[KP_NOSE][0])
+        ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
+        rs_x = float(kp_xy[KP_RIGHT_SHOULDER][0])
+        shoulder_width = abs(rs_x - ls_x)
+        if shoulder_width >= 5:
+            shoulder_center_x = (ls_x + rs_x) / 2.0
+            offset_ratio = abs(nose_x - shoulder_center_x) / shoulder_width
+            yaw_score = offset_ratio / HEAD_TURN_RATIO if HEAD_TURN_RATIO > 0 else 0.0
+
+    # No valid signal from either method
+    if roll_score == 0.0 and yaw_score == 0.0:
         return False, 0.0
-    le = kp_xy[KP_LEFT_EAR]
-    re = kp_xy[KP_RIGHT_EAR]
-    raw = abs(math.degrees(
-        math.atan2(float(re[1]) - float(le[1]),
-                   float(re[0]) - float(le[0]))
-    ))
-    # Normalize: 0° = level head, 90° = fully sideways.
-    # atan2 gives ~0 or ~180 for level ears depending on mirrored
-    # ear ordering in the image, so map >90 back toward 0.
-    angle = raw if raw <= 90 else 180 - raw
-    return angle > HEAD_TILT_ANGLE_DEG, angle
+
+    score = max(roll_score, yaw_score)
+    return score > 1.0, score
 
 
-def detect_looking_at_neighbor(kp_xy, kp_conf):
+def detect_shoulder_turn(kp_xy, kp_conf):
     """
-    Nose offset from shoulder midpoint (PROJECT.md formula):
-        offset = abs(nose.x - shoulder_center.x)
-    Normalized by shoulder width for scale invariance.
+    Shoulder angle detection optimized for OVERHEAD camera.
 
-    Compensates for body orientation: when a person's body is turned
-    (one ear occluded), nose offset in the turn direction is natural
-    posture, not looking at a neighbor.
+    From a top-down view, a student sitting normally has their shoulder
+    line roughly horizontal (parallel to the desk edge).  When they
+    turn their head/torso to look at a neighbor, the shoulder line
+    rotates noticeably.
 
-    Returns (is_looking, offset_ratio, direction).
+    Algorithm:
+        1. Get left & right shoulder keypoints.
+        2. Compute the angle of the shoulder line vs. horizontal.
+        3. If the angle exceeds SHOULDER_TURN_ANGLE_DEG, the student
+           is turning to look sideways.
+
+    Returns (is_turned, angle_degrees, direction).
     """
-    if kp_conf[KP_NOSE] < KP_CONF_THRESH:
-        return False, 0.0, ""
     if (kp_conf[KP_LEFT_SHOULDER] < KP_CONF_THRESH or
             kp_conf[KP_RIGHT_SHOULDER] < KP_CONF_THRESH):
         return False, 0.0, ""
 
-    nose_x = float(kp_xy[KP_NOSE][0])
     ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
+    ls_y = float(kp_xy[KP_LEFT_SHOULDER][1])
     rs_x = float(kp_xy[KP_RIGHT_SHOULDER][0])
+    rs_y = float(kp_xy[KP_RIGHT_SHOULDER][1])
 
-    shoulder_center_x = (ls_x + rs_x) / 2.0
-    shoulder_width = abs(rs_x - ls_x)
-
-    if shoulder_width < 5:  # too small / unreliable
+    # Distance between shoulders — skip if too small / unreliable
+    shoulder_dist = math.hypot(rs_x - ls_x, rs_y - ls_y)
+    if shoulder_dist < 10:
         return False, 0.0, ""
 
-    offset = nose_x - shoulder_center_x
-    offset_ratio = abs(offset) / shoulder_width
+    # Angle of shoulder line relative to horizontal.
+    # atan2 gives 0° when perfectly horizontal.
+    raw_angle = math.degrees(
+        math.atan2(rs_y - ls_y, rs_x - ls_x)
+    )
+    # Normalize to 0-90 range (we only care about deviation magnitude)
+    angle = abs(raw_angle) if abs(raw_angle) <= 90 else 180 - abs(raw_angle)
 
-    direction = "RIGHT" if offset > 0 else "LEFT"
+    # Direction: positive raw_angle → right shoulder is lower in image
+    # (from overhead, this typically means turning RIGHT)
+    if raw_angle > 0:
+        direction = "RIGHT"
+    else:
+        direction = "LEFT"
 
-    # ── Body-orientation compensation ──────────────────────────
-    # When a person's body is angled to the camera, one ear becomes
-    # occluded while the other stays visible.  The nose naturally
-    # shifts toward the visible-ear side.  If the nose offset aligns
-    # with this body turn, it's posture — not looking at a neighbor.
-    left_ear_conf = float(kp_conf[KP_LEFT_EAR])
-    right_ear_conf = float(kp_conf[KP_RIGHT_EAR])
-    max_ear = max(left_ear_conf, right_ear_conf)
-    min_ear = min(left_ear_conf, right_ear_conf)
-
-    if max_ear > KP_CONF_THRESH:
-        ear_symmetry = min_ear / max_ear  # 1.0 = both ears equally visible
-
-        # Determine which way the body is turned based on ear visibility.
-        # Low left-ear conf → body turned RIGHT (left ear occluded),
-        # low right-ear conf → body turned LEFT  (right ear occluded).
-        if ear_symmetry < EAR_SYMMETRY_THRESH:
-            # Body is significantly turned to one side
-            body_turn_dir = "RIGHT" if left_ear_conf < right_ear_conf else "LEFT"
-
-            if direction == body_turn_dir:
-                # Nose offset matches body orientation — this is natural
-                # posture, not head-turning.  Suppress the detection.
-                return False, offset_ratio, direction
-
-    return offset_ratio > LOOK_NEIGHBOR_RATIO, offset_ratio, direction
+    is_turned = angle > SHOULDER_TURN_ANGLE_DEG
+    return is_turned, angle, direction
 
 
 # ── File Dialog ──────────────────────────────────────────────
@@ -479,8 +498,9 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
     print(f"  Video    : {Path(video_path).name}")
     print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
     print(f"  Students : {len(student_map)} assigned")
-    print(f"  Head tilt      : >{HEAD_TILT_ANGLE_DEG:.0f} deg, sustained {SUSTAINED_SEC}s")
-    print(f"  Look neighbor  : >{LOOK_NEIGHBOR_RATIO:.0%} offset ratio, sustained {SUSTAINED_SEC}s")
+    print(f"  Head tilt roll : >{HEAD_TILT_ANGLE_DEG:.0f} deg (ear-to-ear), sustained {SUSTAINED_SEC}s")
+    print(f"  Head tilt yaw  : >{HEAD_TURN_RATIO:.0%} offset ratio (nose/shoulder), sustained {SUSTAINED_SEC}s")
+    print(f"  Shoulder turn  : >{SHOULDER_TURN_ANGLE_DEG:.0f} deg (overhead), sustained {SUSTAINED_SEC}s")
     print(f"  Cooldown       : {EVENT_COOLDOWN_SEC}s between repeated flags")
     print(f"  Evidence dir   : {EVIDENCE_DIR}")
     print("=" * 70)
@@ -559,43 +579,77 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
                 # Draw skeleton
                 draw_skeleton(annotated, kp_xy, kp_conf)
 
-                # ── 1. Looking at Neighbor ───────────────────
-                is_looking, offset_ratio, direction = detect_looking_at_neighbor(
-                    kp_xy, kp_conf)
+                # ── 1. Head Tilt (roll + yaw) ────────────────
+                is_tilted, tilt_score = detect_head_tilt(kp_xy, kp_conf)
 
-                if is_looking:
-                    if state.look_neighbor_start < 0:
-                        state.look_neighbor_start = ts_sec
-                    elapsed = ts_sec - state.look_neighbor_start
+                if is_tilted:
+                    if state.head_tilt_start < 0:
+                        state.head_tilt_start = ts_sec
+                    elapsed = ts_sec - state.head_tilt_start
 
-                    if elapsed >= SUSTAINED_SEC and state.can_flag("looking_at_neighbor", ts_sec):
-                        state.look_neighbor_flagged_at = ts_sec
-                        stats["looking_at_neighbor"] += 1
+                    if elapsed >= SUSTAINED_SEC and state.can_flag("head_tilt", ts_sec):
+                        state.head_tilt_flagged_at = ts_sec
+                        stats["head_tilt"] += 1
                         total_alerts += 1
-                        log_alert("LOOKING AT NEIGHBOR", state.student_num, ts_sec,
-                                  f"direction={direction}, offset={offset_ratio:.0%}, "
+                        log_alert("HEAD TILT", state.student_num, ts_sec,
+                                  f"score={tilt_score:.2f}, "
                                   f"sustained {elapsed:.1f}s",
-                                  TC.MAGENTA)
-                        frame_events.append(("looking_at_neighbor", state.student_num))
+                                  TC.YELLOW)
+                        frame_events.append(("head_tilt", state.student_num))
 
                     if elapsed >= 1.0:
                         behavior_labels.append(
-                            f"LOOKING {direction} ({elapsed:.1f}s)")
+                            f"HEAD TILT {tilt_score:.1f}x ({elapsed:.1f}s)")
                         if box_color == COL_NORMAL:
-                            box_color = COL_LOOK_NEIGHBOR
+                            box_color = COL_HEAD_TILT
                         if elapsed >= SUSTAINED_SEC:
                             box_color = COL_FLAGGED
-
-                    # Draw nose-to-shoulder-center line
-                    if (kp_conf[KP_NOSE] > KP_CONF_THRESH and
-                            kp_conf[KP_LEFT_SHOULDER] > KP_CONF_THRESH and
-                            kp_conf[KP_RIGHT_SHOULDER] > KP_CONF_THRESH):
-                        nose = (int(kp_xy[KP_NOSE][0]), int(kp_xy[KP_NOSE][1]))
-                        sc_x = int((kp_xy[KP_LEFT_SHOULDER][0] + kp_xy[KP_RIGHT_SHOULDER][0]) / 2)
-                        sc_y = int((kp_xy[KP_LEFT_SHOULDER][1] + kp_xy[KP_RIGHT_SHOULDER][1]) / 2)
-                        cv2.line(annotated, nose, (sc_x, sc_y), COL_LOOK_NEIGHBOR, 2, cv2.LINE_AA)
                 else:
-                    state.look_neighbor_start = -1.0
+                    state.head_tilt_start = -1.0
+
+                # ── 2. Shoulder Turn (overhead camera) ────────
+                is_turned, shoulder_angle, turn_dir = detect_shoulder_turn(
+                    kp_xy, kp_conf)
+
+                # Always draw shoulder debug overlay when shoulders visible
+                if (kp_conf[KP_LEFT_SHOULDER] > KP_CONF_THRESH and
+                        kp_conf[KP_RIGHT_SHOULDER] > KP_CONF_THRESH):
+                    ls_pt = (int(kp_xy[KP_LEFT_SHOULDER][0]), int(kp_xy[KP_LEFT_SHOULDER][1]))
+                    rs_pt = (int(kp_xy[KP_RIGHT_SHOULDER][0]), int(kp_xy[KP_RIGHT_SHOULDER][1]))
+                    shoulder_color = COL_SHOULDER_TURN if is_turned else (100, 200, 100)
+                    cv2.line(annotated, ls_pt, rs_pt, shoulder_color, 3, cv2.LINE_AA)
+                    mid_x = (ls_pt[0] + rs_pt[0]) // 2
+                    mid_y = (ls_pt[1] + rs_pt[1]) // 2
+                    angle_txt = f"S:{shoulder_angle:.0f}deg"
+                    cv2.putText(annotated, angle_txt,
+                                (mid_x + 5, mid_y - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                                shoulder_color, 1, cv2.LINE_AA)
+
+                if is_turned:
+                    if state.shoulder_turn_start < 0:
+                        state.shoulder_turn_start = ts_sec
+                    elapsed = ts_sec - state.shoulder_turn_start
+
+                    if elapsed >= SUSTAINED_SEC and state.can_flag("shoulder_turn", ts_sec):
+                        state.shoulder_turn_flagged_at = ts_sec
+                        stats["shoulder_turn"] += 1
+                        total_alerts += 1
+                        log_alert("SHOULDER TURN", state.student_num, ts_sec,
+                                  f"direction={turn_dir}, angle={shoulder_angle:.1f}°, "
+                                  f"sustained {elapsed:.1f}s",
+                                  TC.CYAN)
+                        frame_events.append(("shoulder_turn", state.student_num))
+
+                    if elapsed >= 1.0:
+                        behavior_labels.append(
+                            f"SHOULDER {turn_dir} {shoulder_angle:.0f}° ({elapsed:.1f}s)")
+                        if box_color == COL_NORMAL:
+                            box_color = COL_SHOULDER_TURN
+                        if elapsed >= SUSTAINED_SEC:
+                            box_color = COL_FLAGGED
+                else:
+                    state.shoulder_turn_start = -1.0
 
                 # ── Draw person box + student label ──────────
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
@@ -681,7 +735,7 @@ def main():
     print()
     print("=" * 60)
     print("  AISENTINEL - Head Behavior Detection Test (PC)")
-    print("  Detects: Head Tilting | Looking at Neighbor")
+    print("  Detects: Head Tilting | Shoulder Turn")
     print("=" * 60)
     print()
 
