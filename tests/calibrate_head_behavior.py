@@ -7,14 +7,14 @@ OpenCV trackbar sliders for tuning detection thresholds.
 
 Displays:
   - Head tilt angle (ear-to-ear)
-  - Shoulder turn angle (shoulder-line deviation for overhead camera)
+  - Look-at-neighbor offset ratio (nose vs shoulder midpoint)
   - Visual indicators showing when thresholds are exceeded
 
 Use the sliders to find the right threshold values, then copy
 them into front_node_head_behavior_pc.py.
 
 Controls:
-    Trackbars  - adjust HEAD_TILT_ANGLE_DEG, SHOULDER_TURN_ANGLE_DEG, KP_CONF_THRESH
+    Trackbars  - adjust HEAD_TILT_ANGLE_DEG, LOOK_NEIGHBOR_RATIO, KP_CONF_THRESH
     Q / ESC    - quit and print final threshold values
     SPACE      - freeze / unfreeze frame for inspection
 
@@ -23,7 +23,6 @@ Requirements:
 """
 
 import sys
-import math
 from pathlib import Path
 
 import cv2
@@ -45,7 +44,7 @@ KP_RIGHT_SHOULDER = 6
 # ── Colors (BGR) ─────────────────────────────────────────────
 COL_NORMAL = (0, 255, 0)
 COL_HEAD_TILT = (0, 165, 255)       # orange
-COL_SHOULDER_TURN = (255, 191, 0)   # deep sky blue (BGR)
+COL_LOOK_NEIGHBOR = (255, 0, 255)   # magenta
 COL_TRIGGERED = (0, 0, 255)         # red
 COL_GUIDE = (255, 255, 0)           # cyan
 COL_DIM = (100, 100, 100)
@@ -63,13 +62,13 @@ SKELETON = [
 
 # ── Default slider ranges ───────────────────────────────────
 # Sliders use integers; we scale floats by a multiplier.
-TILT_SLIDER_MAX = 90        # degrees (ear-to-ear roll)
-TURN_SLIDER_MAX = 100       # percent (nose offset / shoulder width, displayed as 0.00-1.00)
-SHOULDER_SLIDER_MAX = 90    # degrees
+TILT_SLIDER_MAX = 90        # degrees
+RATIO_SLIDER_MAX = 100      # percent (displayed as 0.00-1.00)
 CONF_SLIDER_MAX = 100       # percent
+EAR_SYM_SLIDER_MAX = 100    # percent (displayed as 0.00-1.00)
+
 TILT_DEFAULT = 30           # degrees
-TURN_DEFAULT = 26           # percent -> 0.26
-SHOULDER_DEFAULT = 20       # degrees (overhead camera)
+RATIO_DEFAULT = 35          # percent -> 0.35
 CONF_DEFAULT = 30           # percent -> 0.30
 
 CAMERA_INDEX = 0
@@ -96,80 +95,30 @@ def draw_label(img, text, x, y, bg, fg=(255, 255, 255)):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, fg, 1, cv2.LINE_AA)
 
 
-def draw_gauge(img, x, y, value, threshold, label, max_val,
-               color_normal, color_triggered):
-    """Draw a horizontal bar gauge showing value vs threshold."""
-    bar_w, bar_h = 200, 16
-    # Background
-    cv2.rectangle(img, (x, y), (x + bar_w, y + bar_h), (40, 40, 40), -1)
-    cv2.rectangle(img, (x, y), (x + bar_w, y + bar_h), (80, 80, 80), 1)
-
-    # Value fill
-    fill = min(value / max_val, 1.0) if max_val > 0 else 0
-    triggered = value > threshold
-    color = color_triggered if triggered else color_normal
-    cv2.rectangle(img, (x, y), (x + int(bar_w * fill), y + bar_h), color, -1)
-
-    # Threshold marker
-    thresh_x = x + int((threshold / max_val) * bar_w)
-    cv2.line(img, (thresh_x, y - 2), (thresh_x, y + bar_h + 2),
-             (255, 255, 255), 2)
-
-    # Label
-    status = "TRIGGERED" if triggered else "ok"
-    text = f"{label}: {value:.1f} (thresh: {threshold:.1f}) [{status}]"
-    cv2.putText(img, text, (x, y - 6),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                color_triggered if triggered else (220, 220, 220),
-                1, cv2.LINE_AA)
-
-
 # ── Pose measurement functions ───────────────────────────────
 def measure_head_tilt(kp_xy, kp_conf, conf_thresh):
-    """Returns (valid, roll_angle, yaw_ratio).
-    roll_angle: ear-to-ear angle in degrees (0 = level).
-    yaw_ratio: nose offset / shoulder width (0 = centered).
-    Either or both may be valid; valid=True if at least one signal exists.
-    """
-    roll_angle = 0.0
-    yaw_ratio = 0.0
-    has_roll = False
-    has_yaw = False
-
-    # Roll: ear-to-ear angle
-    if (kp_conf[KP_LEFT_EAR] >= conf_thresh and
-            kp_conf[KP_RIGHT_EAR] >= conf_thresh):
-        le = kp_xy[KP_LEFT_EAR]
-        re = kp_xy[KP_RIGHT_EAR]
-        raw = abs(math.degrees(
-            math.atan2(float(re[1]) - float(le[1]),
-                       float(re[0]) - float(le[0]))
-        ))
-        roll_angle = raw if raw <= 90 else 180 - raw
-        has_roll = True
-
-    # Yaw: nose offset from shoulder center
-    if (kp_conf[KP_NOSE] >= conf_thresh and
-            kp_conf[KP_LEFT_SHOULDER] >= conf_thresh and
-            kp_conf[KP_RIGHT_SHOULDER] >= conf_thresh):
-        nose_x = float(kp_xy[KP_NOSE][0])
-        ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
-        rs_x = float(kp_xy[KP_RIGHT_SHOULDER][0])
-        shoulder_width = abs(rs_x - ls_x)
-        if shoulder_width >= 5:
-            shoulder_center_x = (ls_x + rs_x) / 2.0
-            yaw_ratio = abs(nose_x - shoulder_center_x) / shoulder_width
-            has_yaw = True
-
-    return (has_roll or has_yaw), roll_angle, yaw_ratio
+    """Returns (valid, angle_degrees)."""
+    if (kp_conf[KP_LEFT_EAR] < conf_thresh or
+            kp_conf[KP_RIGHT_EAR] < conf_thresh):
+        return False, 0.0
+    le = kp_xy[KP_LEFT_EAR]
+    re = kp_xy[KP_RIGHT_EAR]
+    raw = abs(math.degrees(
+        math.atan2(float(re[1]) - float(le[1]),
+                   float(re[0]) - float(le[0]))
+    ))
+    # Normalize: 0° = level head, 90° = fully sideways.
+    # atan2 gives ~0 or ~180 for level ears depending on ear ordering
+    # in the image (mirrored), so map >90 back toward 0.
+    angle = raw if raw <= 90 else 180 - raw
+    return True, angle
 
 
-def measure_shoulder_turn(kp_xy, kp_conf, conf_thresh):
-    """
-    Shoulder angle measurement for OVERHEAD camera calibration.
-    Measures the angle of the shoulder line relative to horizontal.
-    Returns (valid, angle_degrees, direction).
-    """
+def measure_look_neighbor(kp_xy, kp_conf, conf_thresh, ear_sym_thresh):
+    """Returns (valid, offset_ratio, direction, nose_x, shoulder_center_x,
+               ear_symmetry, body_suppressed)."""
+    if kp_conf[KP_NOSE] < conf_thresh:
+        return False, 0.0, "", 0, 0, 0.0, False
     if (kp_conf[KP_LEFT_SHOULDER] < conf_thresh or
             kp_conf[KP_RIGHT_SHOULDER] < conf_thresh):
         return False, 0.0, ""
@@ -229,8 +178,8 @@ def main():
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
 
     cv2.createTrackbar("Head Tilt (deg)", win, TILT_DEFAULT, TILT_SLIDER_MAX, _noop)
-    cv2.createTrackbar("Head Turn (%)", win, TURN_DEFAULT, TURN_SLIDER_MAX, _noop)
-    cv2.createTrackbar("Shoulder Turn (deg)", win, SHOULDER_DEFAULT, SHOULDER_SLIDER_MAX, _noop)
+    cv2.createTrackbar("Look Ratio (%)", win, RATIO_DEFAULT, RATIO_SLIDER_MAX, _noop)
+    cv2.createTrackbar("Ear Sym (%)", win, EAR_SYM_DEFAULT, EAR_SYM_SLIDER_MAX, _noop)
     cv2.createTrackbar("KP Conf (%)", win, CONF_DEFAULT, CONF_SLIDER_MAX, _noop)
 
     print()
@@ -252,13 +201,13 @@ def main():
 
         # Read current slider values
         tilt_thresh = cv2.getTrackbarPos("Head Tilt (deg)", win)
-        turn_thresh_pct = cv2.getTrackbarPos("Head Turn (%)", win)
-        shoulder_thresh = cv2.getTrackbarPos("Shoulder Turn (deg)", win)
+        ratio_thresh_pct = cv2.getTrackbarPos("Look Ratio (%)", win)
+        ear_sym_thresh_pct = cv2.getTrackbarPos("Ear Sym (%)", win)
         conf_thresh_pct = cv2.getTrackbarPos("KP Conf (%)", win)
 
         tilt_thresh = max(tilt_thresh, 1)
-        turn_thresh = turn_thresh_pct / 100.0
-        shoulder_thresh = max(shoulder_thresh, 1)
+        ratio_thresh = ratio_thresh_pct / 100.0
+        ear_sym_thresh = ear_sym_thresh_pct / 100.0
         conf_thresh = conf_thresh_pct / 100.0
 
         # Run pose detection
@@ -286,46 +235,47 @@ def main():
                 kp_conf = kps_conf[i]
                 x1, y1, x2, y2 = [int(v) for v in bboxes[i]]
 
-                # Measure head tilt (roll + yaw)
-                tilt_valid, roll_angle, yaw_ratio = measure_head_tilt(
+                # Measure head tilt
+                tilt_valid, tilt_angle = measure_head_tilt(
                     kp_xy, kp_conf, conf_thresh)
-                roll_triggered = roll_angle > tilt_thresh
-                yaw_triggered = yaw_ratio > turn_thresh
-                tilt_triggered = tilt_valid and (roll_triggered or yaw_triggered)
+                tilt_triggered = tilt_valid and tilt_angle > tilt_thresh
 
-                # Measure shoulder turn (overhead camera)
-                shoulder_valid, shoulder_angle, shoulder_dir = \
-                    measure_shoulder_turn(kp_xy, kp_conf, conf_thresh)
-                shoulder_triggered = (shoulder_valid
-                                      and shoulder_angle > shoulder_thresh)
+                # Measure look-at-neighbor
+                look_valid, look_ratio, look_dir, nose_x, sc_x, \
+                    ear_sym, body_suppressed = \
+                    measure_look_neighbor(kp_xy, kp_conf, conf_thresh,
+                                         ear_sym_thresh)
+                look_triggered = (look_valid and look_ratio > ratio_thresh
+                                  and not body_suppressed)
 
-                # Determine box color (priority: triggered > individual)
-                any_triggered = (tilt_triggered or shoulder_triggered)
-                if any_triggered:
+                # Determine box color
+                if tilt_triggered and look_triggered:
                     box_color = COL_TRIGGERED
-                elif shoulder_triggered:
-                    box_color = COL_SHOULDER_TURN
+                elif tilt_triggered:
+                    box_color = COL_HEAD_TILT
+                elif look_triggered:
+                    box_color = COL_LOOK_NEIGHBOR
                 else:
                     box_color = COL_NORMAL
 
-                # Draw skeleton
+                # Draw skeleton (thin lines to keep view clear)
                 draw_skeleton(annotated, kp_xy, kp_conf, conf_thresh,
                               color=box_color)
 
                 # Draw bounding box
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
 
-                # Draw ear-to-ear line (roll)
-                if (kp_conf[KP_LEFT_EAR] >= conf_thresh and
-                        kp_conf[KP_RIGHT_EAR] >= conf_thresh):
+                # Draw ear-to-ear line if tilt is valid
+                if tilt_valid:
                     le = (int(kp_xy[KP_LEFT_EAR][0]),
                           int(kp_xy[KP_LEFT_EAR][1]))
                     re = (int(kp_xy[KP_RIGHT_EAR][0]),
                           int(kp_xy[KP_RIGHT_EAR][1]))
-                    line_col = COL_TRIGGERED if roll_triggered else COL_HEAD_TILT
+                    line_col = COL_TRIGGERED if tilt_triggered else COL_HEAD_TILT
                     cv2.line(annotated, le, re, line_col, 2, cv2.LINE_AA)
+                    # Angle text near ear
                     mid_ear = ((le[0] + re[0]) // 2, (le[1] + re[1]) // 2 - 10)
-                    cv2.putText(annotated, f"{roll_angle:.1f} deg", mid_ear,
+                    cv2.putText(annotated, f"{tilt_angle:.1f} deg", mid_ear,
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, line_col,
                                 1, cv2.LINE_AA)
 
@@ -339,38 +289,28 @@ def main():
                                 kp_xy[KP_RIGHT_SHOULDER][0]) / 2)
                     sc_y = int((kp_xy[KP_LEFT_SHOULDER][1] +
                                 kp_xy[KP_RIGHT_SHOULDER][1]) / 2)
-                    yaw_col = COL_TRIGGERED if yaw_triggered else COL_HEAD_TILT
-                    cv2.line(annotated, nose_pt, (sc_x, sc_y), yaw_col, 2,
+                    sc_pt = (int(sc_x), sc_y)
+                    line_col = (COL_TRIGGERED if look_triggered
+                                else COL_LOOK_NEIGHBOR)
+                    cv2.line(annotated, nose_pt, sc_pt, line_col, 2,
                              cv2.LINE_AA)
-                    cv2.putText(annotated, f"{yaw_ratio:.2f}",
-                                (nose_pt[0] + 5, nose_pt[1] - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, yaw_col,
-                                1, cv2.LINE_AA)
-
-                # Draw shoulder line if shoulder measurement is valid
-                if shoulder_valid:
-                    ls_pt = (int(kp_xy[KP_LEFT_SHOULDER][0]),
-                             int(kp_xy[KP_LEFT_SHOULDER][1]))
-                    rs_pt = (int(kp_xy[KP_RIGHT_SHOULDER][0]),
-                             int(kp_xy[KP_RIGHT_SHOULDER][1]))
-                    s_col = (COL_TRIGGERED if shoulder_triggered
-                             else COL_SHOULDER_TURN)
-                    cv2.line(annotated, ls_pt, rs_pt, s_col, 3, cv2.LINE_AA)
-                    mid_s = ((ls_pt[0] + rs_pt[0]) // 2,
-                             (ls_pt[1] + rs_pt[1]) // 2 - 12)
-                    cv2.putText(annotated,
-                                f"{shoulder_angle:.1f} deg ({shoulder_dir})",
-                                mid_s, cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                                s_col, 1, cv2.LINE_AA)
+                    # Ratio text near nose
+                    cv2.putText(
+                        annotated,
+                        f"{look_ratio:.2f} ({look_dir})",
+                        (nose_pt[0] + 5, nose_pt[1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, line_col,
+                        1, cv2.LINE_AA)
 
                 # Per-person label
                 labels = [f"Person {i}"]
                 if tilt_valid:
-                    labels.append(f"Roll: {roll_angle:.1f} deg")
-                    labels.append(f"Yaw: {yaw_ratio:.2f}")
-                if shoulder_valid:
+                    labels.append(f"Tilt: {tilt_angle:.1f} deg")
+                if look_valid:
+                    sup_tag = " [SUPPRESSED]" if body_suppressed else ""
                     labels.append(
-                        f"Shoulder: {shoulder_angle:.1f} deg {shoulder_dir}")
+                        f"Look: {look_ratio:.2f} {look_dir}{sup_tag}")
+                    labels.append(f"EarSym: {ear_sym:.2f}")
 
                 lbl_y = y1 - 5
                 for lbl in labels:
@@ -380,15 +320,14 @@ def main():
                 person_measurements.append({
                     "idx": i,
                     "tilt_valid": tilt_valid,
-                    "roll_angle": roll_angle,
-                    "roll_triggered": roll_triggered,
-                    "yaw_ratio": yaw_ratio,
-                    "yaw_triggered": yaw_triggered,
+                    "tilt_angle": tilt_angle,
                     "tilt_triggered": tilt_triggered,
-                    "shoulder_valid": shoulder_valid,
-                    "shoulder_angle": shoulder_angle,
-                    "shoulder_dir": shoulder_dir,
-                    "shoulder_triggered": shoulder_triggered,
+                    "look_valid": look_valid,
+                    "look_ratio": look_ratio,
+                    "look_dir": look_dir,
+                    "look_triggered": look_triggered,
+                    "ear_sym": ear_sym,
+                    "body_suppressed": body_suppressed,
                 })
 
         # ── HUD Panel (bottom-left) ─────────────────────────────
@@ -412,13 +351,13 @@ def main():
                     (panel_x + 5, panel_y + 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_HEAD_TILT, 1)
         cv2.putText(annotated,
-                    f"HEAD_TURN_RATIO     = {turn_thresh:.2f}",
+                    f"LOOK_NEIGHBOR_RATIO = {ratio_thresh:.2f}",
                     (panel_x + 5, panel_y + 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_HEAD_TILT, 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_LOOK_NEIGHBOR, 1)
         cv2.putText(annotated,
-                    f"SHOULDER_TURN_DEG   = {shoulder_thresh:.1f}",
+                    f"EAR_SYMMETRY_THRESH = {ear_sym_thresh:.2f}",
                     (panel_x + 5, panel_y + 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_SHOULDER_TURN, 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 220, 255), 1)
         cv2.putText(annotated,
                     f"KP_CONF_THRESH      = {conf_thresh:.2f}",
                     (panel_x + 5, panel_y + 100),
@@ -430,38 +369,40 @@ def main():
             y_off = panel_y + 125
             if pm["tilt_valid"]:
                 cv2.putText(annotated,
-                            f"Live Roll: {pm['roll_angle']:.1f} deg",
+                            f"Live Tilt: {pm['tilt_angle']:.1f} deg",
                             (panel_x + 5, y_off),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            COL_TRIGGERED if pm["roll_triggered"]
-                            else COL_NORMAL, 1)
-                y_off += 22
-                cv2.putText(annotated,
-                            f"Live Yaw: {pm['yaw_ratio']:.2f}",
-                            (panel_x + 5, y_off),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            COL_TRIGGERED if pm["yaw_triggered"]
+                            COL_TRIGGERED if pm["tilt_triggered"]
                             else COL_NORMAL, 1)
             else:
                 cv2.putText(annotated, "Live Tilt: -- (low conf)",
                             (panel_x + 5, y_off),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_DIM, 1)
             y_off += 22
-            if pm["shoulder_valid"]:
+            if pm["look_valid"]:
+                sup_tag = " SUPPRESSED" if pm["body_suppressed"] else ""
+                look_col = (COL_TRIGGERED if pm["look_triggered"]
+                            else (COL_DIM if pm["body_suppressed"]
+                                  else COL_NORMAL))
                 cv2.putText(annotated,
-                            f"Live Shoulder: {pm['shoulder_angle']:.1f} deg "
-                            f"{pm['shoulder_dir']}",
+                            f"Live Look: {pm['look_ratio']:.2f} "
+                            f"{pm['look_dir']}{sup_tag}",
+                            (panel_x + 5, y_off),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, look_col, 1)
+                y_off += 22
+                cv2.putText(annotated,
+                            f"Live EarSym: {pm['ear_sym']:.2f}",
                             (panel_x + 5, y_off),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            COL_TRIGGERED if pm["shoulder_triggered"]
-                            else COL_NORMAL, 1)
+                            (COL_DIM if pm["ear_sym"] < ear_sym_thresh
+                             else COL_NORMAL), 1)
             else:
-                cv2.putText(annotated, "Live Shoulder: -- (low conf)",
+                cv2.putText(annotated, "Live Look: -- (low conf)",
                             (panel_x + 5, y_off),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_DIM, 1)
         else:
             cv2.putText(annotated, "No person detected",
-                        (panel_x + 5, panel_y + 125),
+                        (panel_x + 5, panel_y + 105),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, COL_DIM, 1)
 
         # ── Gauges (top-right) ──────────────────────────────────
@@ -470,18 +411,19 @@ def main():
             gauge_x = cam_w - 380
             if pm["tilt_valid"]:
                 draw_gauge(annotated, gauge_x, 30,
-                           pm["roll_angle"], float(tilt_thresh),
-                           "Head Roll", 90.0,
+                           pm["tilt_angle"], float(tilt_thresh),
+                           "Head Tilt", 90.0,
                            COL_HEAD_TILT, COL_TRIGGERED)
+            if pm["look_valid"]:
                 draw_gauge(annotated, gauge_x, 75,
-                           pm["yaw_ratio"] * 100, turn_thresh_pct,
-                           "Head Yaw", 100.0,
-                           COL_HEAD_TILT, COL_TRIGGERED)
-            if pm["shoulder_valid"]:
+                           pm["look_ratio"] * 100, ratio_thresh_pct,
+                           "Look Ratio", 100.0,
+                           COL_LOOK_NEIGHBOR, COL_TRIGGERED)
+                # Ear symmetry gauge (inverted: low = body turned)
                 draw_gauge(annotated, gauge_x, 120,
-                           pm["shoulder_angle"], float(shoulder_thresh),
-                           "Shoulder Turn", 90.0,
-                           COL_SHOULDER_TURN, COL_TRIGGERED)
+                           pm["ear_sym"] * 100, ear_sym_thresh_pct,
+                           "Ear Symmetry", 100.0,
+                           (180, 220, 255), COL_DIM)
 
         # Frozen indicator
         if frozen:
@@ -510,8 +452,8 @@ def main():
 
     # Read final slider positions
     final_tilt = tilt_thresh
-    final_turn = turn_thresh
-    final_shoulder = shoulder_thresh
+    final_ratio = ratio_thresh
+    final_ear_sym = ear_sym_thresh
     final_conf = conf_thresh
 
     print()
@@ -521,10 +463,10 @@ def main():
     print()
     print("  Copy these into front_node_head_behavior_pc.py:")
     print()
-    print(f"  HEAD_TILT_ANGLE_DEG      = {final_tilt:.1f}")
-    print(f"  HEAD_TURN_RATIO          = {final_turn:.2f}")
-    print(f"  SHOULDER_TURN_ANGLE_DEG  = {final_shoulder:.1f}")
-    print(f"  KP_CONF_THRESH           = {final_conf:.2f}")
+    print(f"  HEAD_TILT_ANGLE_DEG  = {final_tilt:.1f}")
+    print(f"  LOOK_NEIGHBOR_RATIO  = {final_ratio:.2f}")
+    print(f"  EAR_SYMMETRY_THRESH  = {final_ear_sym:.2f}")
+    print(f"  KP_CONF_THRESH       = {final_conf:.2f}")
     print()
     print("=" * 60)
 
