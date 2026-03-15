@@ -71,7 +71,7 @@ The Front Node handles the computationally intensive workload, leveraging the AI
 - **Accelerator**: Raspberry Pi AI HAT+ (26 TOPS).
 - **Models**:
   - **YOLOv11n (Object Detection)** — Runs on Hailo at 25–30 FPS, 640×640 resolution. Detects: `person`, `hand`, `cell_phone`, `cheat_sheet`.
-  - **YOLOv11n-pose (Pose Estimation)** — Runs on Hailo or CPU at 7–8 FPS (alternating with detection model). Provides facial and upper-body keypoints (nose, eyes, ears, shoulders, wrists) for head tilt, head turn, and hands-under-table analysis.
+  - **YOLOv11n-pose (Pose Estimation)** — Runs on Hailo or CPU at 7–8 FPS (alternating with detection model). Provides facial and upper-body keypoints (nose, eyes, ears, shoulders, wrists) for head tilt and hands-under-table analysis.
 - **Tracking**: ByteTrack for persistent student identification across frames.
 - **Export Format**: HEF (Hailo Executable Format).
 - **Detection Responsibilities**: Cellphone usage, cheat sheet usage, head tilting, hands under the table (wrist keypoints from pose estimation disappear or drop below desk zone boundary), passing papers (wrist keypoint lateral exit from student's person bounding box toward a side-by-side neighbor).
@@ -383,4 +383,4 @@ The system will be evaluated based on:
 6. **Thermal Stability**: Ensuring both Raspberry Pi 5 units can run their respective inference workloads for the full 1.5-hour exam duration without throttling.
    - **Front Node**: Pi 5 + AI HAT+ running dual models (detection + pose).
    - **Mid Node**: Pi 5 CPU running continuous NCNN inference.
-7. **Coverage Completeness**: Evaluating whether the dual-camera setup eliminates significant blind spots. The Front Node covers all 20 students for both object detection (cellphones, cheat sheets, hands) and pose-based behavioral analysis (head tilt, looking at neighbor, hands under table). The Mid Node provides supplemental close-range coverage of the back 12 students for small-object detection (cellphones, cheat sheets, hands below desk zone), improving detection reliability for students farther from the front camera.
+7. **Coverage Completeness**: Evaluating whether the dual-camera setup eliminates significant blind spots. The Front Node covers all 20 students for both object detection (cellphones, cheat sheets, hands) and pose-based behavioral analysis (head tilt, hands under table). The Mid Node provides supplemental close-range coverage of the back 12 students for small-object detection (cellphones, cheat sheets, hands below desk zone), improving detection reliability for students farther from the front camera.
