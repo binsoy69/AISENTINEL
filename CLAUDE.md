@@ -29,6 +29,9 @@ python tests/front_node_hands_under_table_pc.py
 # Cellphone / cheat sheet object detection
 python tests/front_node_cellphone_cheat_pc.py
 
+# Passing papers detection (wrist lateral exit toward neighbor)
+python tests/front_node_passing_papers_pc.py
+
 # USB camera diagnostics (list cameras, benchmark FPS, capture test images)
 python tests/camera_test.py
 
@@ -58,6 +61,12 @@ Each `front_node_*_pc.py` test follows the same pattern:
 4. **Alerting**: behavior must exceed threshold AND be sustained ≥ `SUSTAINED_SEC` (3s) before flagging; then `EVENT_COOLDOWN_SEC` (10s) between repeated flags
 5. **Evidence**: annotated screenshots saved to `tests/evidence/`
 
+Exception: `front_node_hands_under_table_pc.py` uses a different flow:
+1. **Video selection** → file dialog
+2. **Desk ROI calibration** → `calibrate_desk_rois()`: user draws polygon ROIs for each desk on the first frame (left-click vertices, right-click to close polygon)
+3. **Detection loop** → `model.track(persist=True)` tracks students; students are assigned to desks via bbox/polygon intersection area; hands are associated to the nearest student (center inside bbox or within `HAND_ASSOC_MARGIN_PX`); per-`DeskState` sliding-window majority vote smooths detections before sustained timer
+4. **Evidence**: both annotated + raw frames saved to `tests/evidence_hands/`
+
 ### Key Thresholds (in `front_node_head_behavior_pc.py`)
 
 | Behavior | Parameter | Value |
@@ -71,16 +80,47 @@ Each `front_node_*_pc.py` test follows the same pattern:
 
 Use `calibrate_head_behavior.py` with live trackbars to find optimal values for a new camera angle before hardcoding.
 
+### Key Thresholds (in `front_node_hands_under_table_pc.py`)
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| `HANDS_MISSING_SUSTAIN_SEC` | 3.0s | Sustained duration before alert |
+| `EVENT_COOLDOWN_SEC` | 10.0s | Cooldown between repeated alerts |
+| `HAND_ASSOC_MARGIN_PX` | 60px | Max distance from student bbox to claim a hand |
+| `SMOOTH_WINDOW_FRAMES` | 12 | Sliding window for majority vote |
+| `SMOOTH_MISSING_RATIO` | 0.6 | Fraction of window that must be "missing" |
+| `STUDENT_ABSENT_RESET_SEC` | 2.0s | Reset desk state if student undetected |
+| `CONFIDENCE_THRESHOLDS` | student=0.5, hand=0.5 | Min detection confidence |
+
+### Key Thresholds (in `front_node_passing_papers_pc.py`)
+
+Uses multi-signal interaction detection (arm extension + wrist velocity + wrist proximity).
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| `ARM_EXTENSION_RATIO` | 1.2 | shoulder-wrist / shoulder-hip ratio to count as "extended" |
+| `WRIST_PROXIMITY_PX` | 120px | Max wrist-to-wrist distance for proximity signal |
+| `WRIST_VELOCITY_TOWARD_THRESH` | 3.0 px/frame | Min wrist speed toward neighbor |
+| `MIN_INTERACTION_SEC` | 0.4s | Minimum proximity duration to trigger alert |
+| `MAX_INTERACTION_SEC` | 4.0s | Interactions longer than this are not passing |
+| `INTERACTION_SIGNAL_THRESH` | 2 of 3 | How many signals must be active to track |
+| `EVENT_COOLDOWN_SEC` | 10.0s | Cooldown between repeated flags for same pair |
+| `KP_CONF_THRESH` | 0.3 | Minimum keypoint confidence |
+| `ROW_TOLERANCE_PX` | 80px | Max y-center difference to consider students in same row |
+
 ### COCO Keypoint Indices Used
 
 ```
 KP_NOSE=0, KP_LEFT_EAR=3, KP_RIGHT_EAR=4, KP_LEFT_SHOULDER=5, KP_RIGHT_SHOULDER=6
+KP_LEFT_ELBOW=7, KP_RIGHT_ELBOW=8, KP_LEFT_WRIST=9, KP_RIGHT_WRIST=10
+KP_LEFT_HIP=11, KP_RIGHT_HIP=12
 ```
 
 ### Model Files
 
 - `yolo26s-pose.pt` — repo root, pose model for front node (auto-downloaded by Ultralytics if missing)
 - `yolo11n.pt` — object detection model (auto-downloaded)
+- `models/front_node/my_model.pt` — custom object detection model with `student` and `hand` classes, used by `front_node_hands_under_table_pc.py`
 - Hailo `.hef` files — Hailo Model Zoo pre-compiled models, referenced in Hailo test scripts
 
 ### Tracking Configuration
