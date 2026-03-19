@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AISENTINEL is a dual-node real-time exam proctoring system using YOLO pose estimation and object detection to detect cheating behaviors. It targets two Raspberry Pi 5 units:
+AISENTINEL is a dual-node real-time exam proctoring system using YOLO pose estimation and object detection to detect cheating behaviors. It targets two Raspberry Pi 5 units, both equipped with a Hailo-8 AI HAT+ (26 TOPS):
 
-- **Front Node**: Hailo-8 AI HAT+ (26 TOPS) — covers all 20 students, runs pose + detection
-- **Mid Node**: CPU-only (NCNN) — supplemental coverage of back 12 students, desk zone monitoring
+- **Front Node**: Covers the front 8 students (students 1–8), runs pose + detection
+- **Mid Node**: Covers the back 12 students (students 9–20), runs the same full pipeline (pose + detection)
 
 ## Running Tests
 
@@ -34,10 +34,6 @@ python tests/front_node_passing_papers_pc.py
 
 # USB camera diagnostics (list cameras, benchmark FPS, capture test images)
 python tests/camera_test.py
-
-# Mid Node inference test (.pt or NCNN)
-python tests/BackNodeTest.py
-python tests/BackNodeTest.py --export-ncnn   # also export to NCNN format
 ```
 
 Each PC test script opens a **file dialog** to select a video file, then an interactive student assignment window before starting detection.
@@ -48,7 +44,7 @@ Each PC test script opens a **file dialog** to select a video file, then an inte
 pip install ultralytics opencv-python numpy lap
 ```
 
-For Hailo hardware tests (Raspberry Pi only): `hailo-platform`, `hailort`. For Mid Node: `ncnn`.
+For Hailo hardware tests (Raspberry Pi only): `hailo-platform`, `hailort`.
 
 ## Architecture
 
@@ -129,7 +125,7 @@ KP_LEFT_HIP=11, KP_RIGHT_HIP=12
 
 ### Desk Zones
 
-`tests/Frontcam-set1-001_desk_zones.json` — 20 calibrated (p1, p2) bounding boxes for student desk surfaces, used by the Mid Node for presence-then-absence hand monitoring.
+`tests/Frontcam-set1-001_desk_zones.json` — calibrated (p1, p2) bounding boxes for student desk surfaces, used for object-detection-based hand presence-then-absence monitoring.
 
 ### Evidence Merge (Post-Exam)
 
@@ -140,4 +136,4 @@ After exam completion, evidence from both nodes is merged chronologically with a
 - `PROJECT.md` — master spec: full algorithm formulas, detection logic, dual-node architecture
 - `CAMERA_SETUP_GUIDE.md` — USB camera setup and testing on Raspberry Pi
 - `POSE_MODEL_SETUP.md` — Hailo pose model compilation and API
-- `BACK_NODE_SETUP.md` — Mid Node environment setup (NCNN, venv)
+- `MID_NODE_SETUP.md` — Mid Node environment setup (Hailo AI HAT+)

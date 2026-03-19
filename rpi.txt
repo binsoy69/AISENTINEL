@@ -4,7 +4,7 @@ hostname: aisentinel-1
 username: sentinel
 password: pass123
 
-- Back Node:
+- Mid Node:
 hostname: aisentinel-2
 username: sentinel
 password: pass123

@@ -7,3 +7,5 @@ tests/evidence_obj/*
 tests/evidence_hands/*
 tests/evidence_pose/*
 tests/evidence/*
+model_conversion/*
+notebooks/*
