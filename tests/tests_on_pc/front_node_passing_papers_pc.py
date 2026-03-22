@@ -18,7 +18,10 @@ Algorithm (multi-signal interaction detection):
   4. A passing event is triggered when >= 2 signals are active,
      proximity has been observed, and the interaction exceeds a
      minimum duration (0.4s default).
-  5. Per-pair cooldown prevents duplicate alerts.
+  5. All pixel thresholds (row tolerance, wrist proximity, wrist velocity)
+     are scaled by person bbox height relative to REFERENCE_BBOX_HEIGHT
+     to handle perspective distortion from elevated camera angles.
+  6. Per-pair cooldown prevents duplicate alerts.
 
 Workflow:
   1. File dialog opens to select a video file
@@ -77,7 +80,8 @@ KP_RIGHT_HIP = 12
 # -- Behavior Thresholds -----------------------------------------
 EVENT_COOLDOWN_SEC = 10.0       # cooldown between repeated flags for same student pair
 KP_CONF_THRESH = 0.3            # minimum keypoint confidence
-ROW_TOLERANCE_PX = 80           # max vertical (y-center) difference to be in same "row"
+ROW_TOLERANCE_PX = 80           # max vertical (y-center) difference to be in same "row" (at reference scale)
+REFERENCE_BBOX_HEIGHT = 300.0   # approx bbox height (px) for front-row student; thresholds scale relative to this
 
 # -- Multi-Signal Interaction Thresholds --------------------------
 ARM_EXTENSION_RATIO = 1.2       # shoulder-wrist / shoulder-hip ratio to count as "extended"
@@ -266,6 +270,13 @@ def _dist(p1, p2):
     return math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
 
 
+def _perspective_scale(bbox_height):
+    """Scale factor based on person bbox height relative to reference.
+    Larger person (closer to camera) -> larger scale -> larger pixel thresholds.
+    """
+    return max(bbox_height, 50.0) / REFERENCE_BBOX_HEIGHT
+
+
 def _kp_pos(kp_xy, kp_conf, idx):
     """Return (x, y) for a keypoint if confident, else None."""
     if idx < len(kp_conf) and kp_conf[idx] > KP_CONF_THRESH:
@@ -305,16 +316,18 @@ def compute_arm_extension(kp_xy, kp_conf):
 
 
 # -- Signal 2: Wrist Velocity Toward Neighbor ---------------------
-def wrist_moves_toward(wrist_pos, wrist_vel, neighbor_center):
+def wrist_moves_toward(wrist_pos, wrist_vel, neighbor_center,
+                       speed_thresh=WRIST_VELOCITY_TOWARD_THRESH):
     """
     Check if the wrist velocity vector points toward the neighbor.
     Returns True if the wrist is moving toward neighbor_center.
+    speed_thresh can be scaled for perspective-adaptive detection.
     """
     if wrist_pos is None or wrist_vel is None:
         return False
     vx, vy = wrist_vel
     speed = math.sqrt(vx * vx + vy * vy)
-    if speed < WRIST_VELOCITY_TOWARD_THRESH:
+    if speed < speed_thresh:
         return False
     # Direction from wrist to neighbor
     dx = neighbor_center[0] - wrist_pos[0]
@@ -362,6 +375,7 @@ def find_row_neighbors(source_tid, all_student_bboxes, students):
     sx1, sy1, sx2, sy2 = all_student_bboxes[source_tid]
     source_cy = (sy1 + sy2) / 2.0
     source_cx = (sx1 + sx2) / 2.0
+    source_h = sy2 - sy1
 
     neighbors = []
     for tid, bbox in all_student_bboxes.items():
@@ -370,7 +384,11 @@ def find_row_neighbors(source_tid, all_student_bboxes, students):
         nx1, ny1, nx2, ny2 = bbox
         neighbor_cy = (ny1 + ny2) / 2.0
         neighbor_cx = (nx1 + nx2) / 2.0
-        if abs(neighbor_cy - source_cy) > ROW_TOLERANCE_PX:
+        neighbor_h = ny2 - ny1
+        # Scale row tolerance by average person size (perspective adaptation)
+        avg_h = (source_h + neighbor_h) / 2.0
+        scaled_row_tol = ROW_TOLERANCE_PX * _perspective_scale(avg_h)
+        if abs(neighbor_cy - source_cy) > scaled_row_tol:
             continue
         direction = "LEFT" if neighbor_cx < source_cx else "RIGHT"
         neighbors.append((tid, direction))
@@ -576,10 +594,11 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
     print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
     print(f"  Students : {len(student_map)} assigned")
     print(f"  Arm extension ratio : {ARM_EXTENSION_RATIO}")
-    print(f"  Wrist proximity     : {WRIST_PROXIMITY_PX}px")
+    print(f"  Wrist proximity     : {WRIST_PROXIMITY_PX}px (at ref scale)")
     print(f"  Interaction duration: {MIN_INTERACTION_SEC}-{MAX_INTERACTION_SEC}s")
     print(f"  Signal threshold    : {INTERACTION_SIGNAL_THRESH} of 3 signals")
-    print(f"  Row tolerance       : {ROW_TOLERANCE_PX}px (y-center)")
+    print(f"  Row tolerance       : {ROW_TOLERANCE_PX}px (perspective-scaled)")
+    print(f"  Reference bbox h    : {REFERENCE_BBOX_HEIGHT}px")
     print(f"  Cooldown            : {EVENT_COOLDOWN_SEC}s between repeated flags")
     print(f"  Evidence dir        : {EVIDENCE_DIR}")
     print("=" * 70)
@@ -770,6 +789,12 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
                     center_b = ((bbox_b[0] + bbox_b[2]) / 2, (bbox_b[1] + bbox_b[3]) / 2)
                     center_a = ((bbox_a[0] + bbox_a[2]) / 2, (bbox_a[1] + bbox_a[3]) / 2)
 
+                    # Perspective-adaptive thresholds based on average bbox height
+                    avg_pair_h = ((bbox_a[3] - bbox_a[1]) + (bbox_b[3] - bbox_b[1])) / 2.0
+                    pscale = _perspective_scale(avg_pair_h)
+                    scaled_prox_px = WRIST_PROXIMITY_PX * pscale
+                    scaled_vel_thresh = WRIST_VELOCITY_TOWARD_THRESH * pscale
+
                     # Reset per-frame signals
                     ps.frame_arm_ext = False
                     ps.frame_approach = False
@@ -797,17 +822,17 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
                     # Check A's wrists moving toward B
                     lw_a = _kp_pos(kp_a_xy, kp_a_conf, KP_LEFT_WRIST)
                     rw_a = _kp_pos(kp_a_xy, kp_a_conf, KP_RIGHT_WRIST)
-                    if wrist_moves_toward(rw_a, state_a.right_wrist_velocity, center_b):
+                    if wrist_moves_toward(rw_a, state_a.right_wrist_velocity, center_b, scaled_vel_thresh):
                         a_moves_toward_b = True
-                    if wrist_moves_toward(lw_a, state_a.left_wrist_velocity, center_b):
+                    if wrist_moves_toward(lw_a, state_a.left_wrist_velocity, center_b, scaled_vel_thresh):
                         a_moves_toward_b = True
 
                     # Check B's wrists moving toward A
                     lw_b = _kp_pos(kp_b_xy, kp_b_conf, KP_LEFT_WRIST)
                     rw_b = _kp_pos(kp_b_xy, kp_b_conf, KP_RIGHT_WRIST)
-                    if wrist_moves_toward(rw_b, state_b.right_wrist_velocity, center_a):
+                    if wrist_moves_toward(rw_b, state_b.right_wrist_velocity, center_a, scaled_vel_thresh):
                         b_moves_toward_a = True
-                    if wrist_moves_toward(lw_b, state_b.left_wrist_velocity, center_a):
+                    if wrist_moves_toward(lw_b, state_b.left_wrist_velocity, center_a, scaled_vel_thresh):
                         b_moves_toward_a = True
 
                     ps.frame_approach = a_moves_toward_b or b_moves_toward_a
@@ -816,10 +841,10 @@ def run_detection(cap, model, tracker_cfg, student_map, video_path):
                     prox_dist = compute_wrist_proximity(
                         kp_a_xy, kp_a_conf, kp_b_xy, kp_b_conf)
                     ps.frame_proximity_dist = prox_dist
-                    ps.frame_proximity = prox_dist < WRIST_PROXIMITY_PX
+                    ps.frame_proximity = prox_dist < scaled_prox_px
 
                     # Draw proximity line between closest wrists
-                    if prox_dist < WRIST_PROXIMITY_PX * 1.5:
+                    if prox_dist < scaled_prox_px * 1.5:
                         # Find the closest wrist pair for drawing
                         best_pts = None
                         best_d = 9999.0
