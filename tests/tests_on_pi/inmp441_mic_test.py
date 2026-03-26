@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-INMP441 microphone test script for Raspberry Pi.
+INMP441 microphone terminal test for Raspberry Pi.
 
-This script uses ALSA's `arecord` utility so it works on a Raspberry Pi
-without extra Python audio packages.
+This script intentionally uses ALSA's built-in terminal VU meter instead of
+parsing raw PCM in Python. It is more reliable on Raspberry Pi for quick
+hardware validation.
 
 Prerequisites on Raspberry Pi OS:
     sudo apt update
@@ -18,22 +19,15 @@ Notes:
     - The INMP441 is a digital I2S microphone, not an analog mic.
     - The script assumes your Raspberry Pi already exposes the mic as an ALSA
       capture device. Verify with: arecord -l
-    - By default the test runs continuously until you quit with `q` or Ctrl+C.
+    - The monitor does not save any audio files.
+    - Stop the monitor with Ctrl+C.
 """
 
-from __future__ import annotations
-
 import argparse
-import array
-import math
 import re
-import select
 import shutil
 import subprocess
 import sys
-import termios
-import time
-import tty
 from dataclasses import dataclass
 
 
@@ -131,114 +125,6 @@ def choose_device(user_device: str | None, devices: list[CaptureDevice]) -> str:
     sys.exit(1)
 
 
-def dbfs(level: float) -> float:
-    """Convert a linear full-scale value to dBFS."""
-    if level <= 0:
-        return float("-inf")
-    return 20.0 * math.log10(level)
-
-
-def meter(level: float, width: int = 40) -> str:
-    """Return a simple ASCII bar meter."""
-    level = max(0.0, min(level, 1.0))
-    filled = int(round(level * width))
-    return "#" * filled + "-" * (width - filled)
-
-
-def analyze_pcm_bytes(raw_bytes: bytes) -> dict[str, float]:
-    """Analyze a raw 32-bit little-endian PCM chunk."""
-    samples = array.array("i")
-    samples.frombytes(raw_bytes)
-    if sys.byteorder != "little":
-        samples.byteswap()
-
-    if not samples:
-        return {
-            "peak": 0.0,
-            "peak_dbfs": float("-inf"),
-            "rms": 0.0,
-            "rms_dbfs": float("-inf"),
-        }
-
-    max_int = float((1 << 31) - 1)
-    peak = max(abs(sample) for sample in samples)
-    rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
-
-    peak_full_scale = peak / max_int
-    rms_full_scale = rms / max_int
-
-    return {
-        "peak": peak_full_scale,
-        "peak_dbfs": dbfs(peak_full_scale),
-        "rms": rms_full_scale,
-        "rms_dbfs": dbfs(rms_full_scale),
-    }
-
-
-class TerminalKeyReader:
-    """Read single keys from a terminal without blocking."""
-
-    def __init__(self) -> None:
-        self.enabled = False
-        self.fd: int | None = None
-        self.old_settings: list[int] | None = None
-
-    def __enter__(self) -> "TerminalKeyReader":
-        if sys.stdin.isatty():
-            self.fd = sys.stdin.fileno()
-            self.old_settings = termios.tcgetattr(self.fd)
-            tty.setcbreak(self.fd)
-            self.enabled = True
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        if self.enabled and self.fd is not None and self.old_settings is not None:
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
-
-    def quit_requested(self) -> bool:
-        if not self.enabled:
-            return False
-
-        ready, _, _ = select.select([sys.stdin], [], [], 0)
-        if not ready:
-            return False
-
-        key = sys.stdin.read(1)
-        return key.lower() == "q"
-
-
-def print_live_level(elapsed_seconds: float, stats: dict[str, float]) -> None:
-    """Print a live level meter on a single terminal line."""
-    rms_dbfs = stats["rms_dbfs"]
-    peak_dbfs = stats["peak_dbfs"]
-    level = stats["rms"]
-    normalized = 0.0 if rms_dbfs == float("-inf") else min(max((rms_dbfs + 60.0) / 60.0, 0.0), 1.0)
-
-    sys.stdout.write(
-        "\r"
-        f"[{elapsed_seconds:5.1f}s] "
-        f"current RMS: {rms_dbfs:6.1f} dBFS | "
-        f"peak: {peak_dbfs:6.1f} dBFS | "
-        f"[{meter(normalized)}]"
-    )
-    sys.stdout.flush()
-
-
-def print_session_summary(
-    elapsed_seconds: float,
-    session_peak_dbfs: float,
-    session_rms_dbfs: float,
-) -> None:
-    """Print a short summary when monitoring stops."""
-    print("\n" + "=" * 60)
-    print("Live Monitor Summary")
-    print("=" * 60)
-    print(f"Duration         : {elapsed_seconds:.1f} s")
-    print(f"Highest peak     : {session_peak_dbfs:.1f} dBFS")
-    print(f"Highest RMS      : {session_rms_dbfs:.1f} dBFS")
-    print("=" * 60)
-
-
 def monitor_audio(
     device: str,
     sample_rate: int,
@@ -246,88 +132,62 @@ def monitor_audio(
     fmt: str,
     duration: int | None,
 ) -> None:
-    """Monitor live audio level in the terminal without saving files."""
-    if fmt != "S32_LE":
-        print("[ERROR] Live dB monitoring currently expects --format S32_LE.")
-        print("Use the default format or extend the script for other PCM widths.")
-        sys.exit(1)
-
-    bytes_per_sample = 4
-    frames_per_chunk = max(sample_rate // 10, 1024)
-    chunk_bytes = frames_per_chunk * channels * bytes_per_sample
-
+    """Run ALSA's live terminal meter without saving a file."""
     command = [
         "arecord",
-        "-q",
         "-D",
         device,
-        "-f",
-        fmt,
-        "-r",
-        str(sample_rate),
         "-c",
         str(channels),
+        "-r",
+        str(sample_rate),
+        "-f",
+        fmt,
         "-t",
         "raw",
+        "-V",
+        "mono",
+        "-v",
+        "/dev/null",
     ]
 
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
+    if duration is not None:
+        command.extend([
+            "-d",
+            str(duration),
+        ])
+
+    print("\nALSA live meter starting. Press Ctrl+C to stop.\n")
+
+    result = subprocess.run(command, check=False)
+    if result.returncode == 0:
+        return
+
+    print(f"\n[ERROR] arecord exited with code {result.returncode}.")
+    print("Try the same command directly in the terminal to see ALSA's full error output:")
+    print(
+        "  "
+        + " ".join(
+            [
+                "arecord",
+                "-D",
+                device,
+                "-c",
+                str(channels),
+                "-r",
+                str(sample_rate),
+                "-f",
+                fmt,
+                "-t",
+                "raw",
+                "-V",
+                "mono",
+                "-v",
+                "/dev/null",
+            ]
+        )
     )
-
-    start_time = time.time()
-    session_peak_dbfs = float("-inf")
-    session_rms_dbfs = float("-inf")
-
-    try:
-        with TerminalKeyReader() as key_reader:
-            while True:
-                if duration is not None and (time.time() - start_time) >= duration:
-                    break
-
-                chunk = process.stdout.read(chunk_bytes) if process.stdout else b""
-                if not chunk:
-                    break
-
-                live_stats = analyze_pcm_bytes(chunk)
-                session_peak_dbfs = max(session_peak_dbfs, live_stats["peak_dbfs"])
-                session_rms_dbfs = max(session_rms_dbfs, live_stats["rms_dbfs"])
-                print_live_level(time.time() - start_time, live_stats)
-
-                if key_reader.quit_requested():
-                    print("\n[INFO] Quit requested.")
-                    break
-    except KeyboardInterrupt:
-        print("\n[INFO] Monitoring interrupted by user.")
-    finally:
-        if process.poll() is None:
-            process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
-
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-
-    stderr_output = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-    if session_peak_dbfs == float("-inf"):
-        print("[ERROR] Monitoring failed or returned no audio.")
-        if stderr_output.strip():
-            print(stderr_output.strip())
-        print("\nTry listing devices first:")
-        print("  python3 tests/tests_on_pi/inmp441_mic_test.py --list")
-        sys.exit(1)
-
-    print_session_summary(
-        elapsed_seconds=time.time() - start_time,
-        session_peak_dbfs=session_peak_dbfs,
-        session_rms_dbfs=session_rms_dbfs,
-    )
+    sys.exit(result.returncode or 1)
 
 
 def parse_args() -> argparse.Namespace:
@@ -405,10 +265,10 @@ def main() -> int:
     print(f"Format           : {args.format}")
     print(f"Channels         : {args.channels}")
     if duration is None:
-        print("Run mode         : Continuous until `q` or Ctrl+C")
+        print("Run mode         : Continuous until Ctrl+C")
     else:
         print(f"Run mode         : {duration} s")
-    print("\nSpeak or clap near the microphone. Press `q` or Ctrl+C to stop.")
+    print("\nSpeak or clap near the microphone.")
 
     monitor_audio(
         device=device,
