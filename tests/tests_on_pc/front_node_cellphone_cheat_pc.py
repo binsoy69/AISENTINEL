@@ -1,4 +1,4 @@
-q#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Cellphone / Cheat Sheet Detection Test - PC
 =============================================
@@ -28,9 +28,9 @@ from ultralytics import YOLO
 
 # ── Paths ────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
 
-OBJ_MODEL_PATH = REPO_ROOT / "models" / "front_node" / "my_model.pt"
+OBJ_MODEL_PATH = REPO_ROOT / "models" / "sentinel-yolov11n" / "my_model2.pt"
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_obj"
 
 # ── Only these classes matter ────────────────────────────────

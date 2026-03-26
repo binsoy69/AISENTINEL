@@ -9,3 +9,4 @@ tests/evidence_pose/*
 tests/evidence/*
 model_conversion/*
 notebooks/*
+tests/tests_on_pi/__pycache__/*
