@@ -12,12 +12,13 @@ Prerequisites on Raspberry Pi OS:
 Usage examples:
     python3 tests/tests_on_pi/inmp441_mic_test.py --list
     python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0
-    python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0 --duration 8
+    python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0 --duration 10
 
 Notes:
     - The INMP441 is a digital I2S microphone, not an analog mic.
     - The script assumes your Raspberry Pi already exposes the mic as an ALSA
       capture device. Verify with: arecord -l
+    - By default the test runs continuously until you quit with `q` or Ctrl+C.
 """
 
 from __future__ import annotations
@@ -26,14 +27,14 @@ import argparse
 import array
 import math
 import re
+import select
 import shutil
 import subprocess
 import sys
+import termios
 import time
-import wave
+import tty
 from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
 
 
 CAPTURE_DEVICE_PATTERN = re.compile(
@@ -144,48 +145,6 @@ def meter(level: float, width: int = 40) -> str:
     return "#" * filled + "-" * (width - filled)
 
 
-def analyze_wav(path: Path) -> dict[str, float | int]:
-    """Analyze a recorded WAV file and return basic audio statistics."""
-    with wave.open(str(path), "rb") as wav_file:
-        channels = wav_file.getnchannels()
-        sample_width = wav_file.getsampwidth()
-        sample_rate = wav_file.getframerate()
-        frame_count = wav_file.getnframes()
-        frames = wav_file.readframes(frame_count)
-
-    if sample_width != 4:
-        raise ValueError(
-            f"Expected 32-bit PCM data, got sample width {sample_width} bytes."
-        )
-
-    samples = array.array("i")
-    samples.frombytes(frames)
-    if sys.byteorder != "little":
-        samples.byteswap()
-
-    if not samples:
-        raise ValueError("No samples were recorded.")
-
-    max_int = float((1 << 31) - 1)
-    peak = max(abs(sample) for sample in samples)
-    rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
-
-    peak_full_scale = peak / max_int
-    rms_full_scale = rms / max_int
-
-    return {
-        "channels": channels,
-        "sample_width": sample_width,
-        "sample_rate": sample_rate,
-        "frame_count": frame_count,
-        "duration_seconds": frame_count / sample_rate if sample_rate else 0.0,
-        "peak": peak_full_scale,
-        "peak_dbfs": dbfs(peak_full_scale),
-        "rms": rms_full_scale,
-        "rms_dbfs": dbfs(rms_full_scale),
-    }
-
-
 def analyze_pcm_bytes(raw_bytes: bytes) -> dict[str, float]:
     """Analyze a raw 32-bit little-endian PCM chunk."""
     samples = array.array("i")
@@ -216,37 +175,36 @@ def analyze_pcm_bytes(raw_bytes: bytes) -> dict[str, float]:
     }
 
 
-def print_analysis(stats: dict[str, float | int], output_path: Path) -> None:
-    """Print recording summary and a simple pass/fail interpretation."""
-    peak = float(stats["peak"])
-    rms = float(stats["rms"])
-    peak_db = float(stats["peak_dbfs"])
-    rms_db = float(stats["rms_dbfs"])
+class TerminalKeyReader:
+    """Read single keys from a terminal without blocking."""
 
-    print("\n" + "=" * 60)
-    print("Recording Summary")
-    print("=" * 60)
-    print(f"Saved file       : {output_path}")
-    print(f"Sample rate      : {int(stats['sample_rate'])} Hz")
-    print(f"Channels         : {int(stats['channels'])}")
-    print(f"Duration         : {float(stats['duration_seconds']):.2f} s")
-    print(f"Peak level       : {peak:.4f} ({peak_db:.1f} dBFS)")
-    print(f"RMS level        : {rms:.4f} ({rms_db:.1f} dBFS)")
-    print(f"Peak meter       : [{meter(peak)}]")
-    print(f"RMS meter        : [{meter(min(rms * 4.0, 1.0))}]")
+    def __init__(self) -> None:
+        self.enabled = False
+        self.fd: int | None = None
+        self.old_settings: list[int] | None = None
 
-    print("\nAssessment:")
-    if peak >= 0.95:
-        print("- Signal is clipping or very close to clipping. Reduce gain or sound level.")
-    elif peak >= 0.05:
-        print("- Signal level looks healthy. Speak near the mic to confirm waveform quality.")
-    elif peak >= 0.01:
-        print("- Mic is working, but the level is low. Move closer or recheck the module orientation.")
-    else:
-        print("- Signal is extremely low. Wiring, I2S setup, or device selection is likely wrong.")
+    def __enter__(self) -> "TerminalKeyReader":
+        if sys.stdin.isatty():
+            self.fd = sys.stdin.fileno()
+            self.old_settings = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+            self.enabled = True
+        return self
 
-    if rms < 0.001:
-        print("- RMS is close to silence. If you spoke during the test, recheck SCK, WS, and SD wiring.")
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.enabled and self.fd is not None and self.old_settings is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+
+    def quit_requested(self) -> bool:
+        if not self.enabled:
+            return False
+
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if not ready:
+            return False
+
+        key = sys.stdin.read(1)
+        return key.lower() == "q"
 
 
 def print_live_level(elapsed_seconds: float, stats: dict[str, float]) -> None:
@@ -266,30 +224,29 @@ def print_live_level(elapsed_seconds: float, stats: dict[str, float]) -> None:
     sys.stdout.flush()
 
 
-def write_wav(
-    output_path: Path,
-    raw_audio: bytes,
-    channels: int,
-    sample_rate: int,
-    sample_width: int,
+def print_session_summary(
+    elapsed_seconds: float,
+    session_peak_dbfs: float,
+    session_rms_dbfs: float,
 ) -> None:
-    """Write raw PCM bytes to a WAV file."""
-    with wave.open(str(output_path), "wb") as wav_file:
-        wav_file.setnchannels(channels)
-        wav_file.setsampwidth(sample_width)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(raw_audio)
+    """Print a short summary when monitoring stops."""
+    print("\n" + "=" * 60)
+    print("Live Monitor Summary")
+    print("=" * 60)
+    print(f"Duration         : {elapsed_seconds:.1f} s")
+    print(f"Highest peak     : {session_peak_dbfs:.1f} dBFS")
+    print(f"Highest RMS      : {session_rms_dbfs:.1f} dBFS")
+    print("=" * 60)
 
 
-def record_audio(
+def monitor_audio(
     device: str,
-    duration: int,
     sample_rate: int,
     channels: int,
     fmt: str,
-    output_path: Path,
+    duration: int | None,
 ) -> None:
-    """Record audio with a live dB meter, then save it as a WAV file."""
+    """Monitor live audio level in the terminal without saving files."""
     if fmt != "S32_LE":
         print("[ERROR] Live dB monitoring currently expects --format S32_LE.")
         print("Use the default format or extend the script for other PCM widths.")
@@ -298,7 +255,6 @@ def record_audio(
     bytes_per_sample = 4
     frames_per_chunk = max(sample_rate // 10, 1024)
     chunk_bytes = frames_per_chunk * channels * bytes_per_sample
-    target_bytes = duration * sample_rate * channels * bytes_per_sample
 
     command = [
         "arecord",
@@ -322,23 +278,30 @@ def record_audio(
         bufsize=0,
     )
 
-    captured = bytearray()
     start_time = time.time()
+    session_peak_dbfs = float("-inf")
+    session_rms_dbfs = float("-inf")
 
     try:
-        while len(captured) < target_bytes:
-            bytes_left = target_bytes - len(captured)
-            current_chunk_size = min(chunk_bytes, bytes_left)
-            chunk = process.stdout.read(current_chunk_size) if process.stdout else b""
+        with TerminalKeyReader() as key_reader:
+            while True:
+                if duration is not None and (time.time() - start_time) >= duration:
+                    break
 
-            if not chunk:
-                break
+                chunk = process.stdout.read(chunk_bytes) if process.stdout else b""
+                if not chunk:
+                    break
 
-            captured.extend(chunk)
-            live_stats = analyze_pcm_bytes(chunk)
-            print_live_level(time.time() - start_time, live_stats)
+                live_stats = analyze_pcm_bytes(chunk)
+                session_peak_dbfs = max(session_peak_dbfs, live_stats["peak_dbfs"])
+                session_rms_dbfs = max(session_rms_dbfs, live_stats["rms_dbfs"])
+                print_live_level(time.time() - start_time, live_stats)
+
+                if key_reader.quit_requested():
+                    print("\n[INFO] Quit requested.")
+                    break
     except KeyboardInterrupt:
-        print("\n[INFO] Recording interrupted by user.")
+        print("\n[INFO] Monitoring interrupted by user.")
     finally:
         if process.poll() is None:
             process.terminate()
@@ -351,21 +314,19 @@ def record_audio(
     sys.stdout.write("\n")
     sys.stdout.flush()
 
-    if not captured:
-        stderr_output = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-        print("[ERROR] Recording failed or returned no audio.")
+    stderr_output = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+    if session_peak_dbfs == float("-inf"):
+        print("[ERROR] Monitoring failed or returned no audio.")
         if stderr_output.strip():
             print(stderr_output.strip())
         print("\nTry listing devices first:")
         print("  python3 tests/tests_on_pi/inmp441_mic_test.py --list")
         sys.exit(1)
 
-    write_wav(
-        output_path=output_path,
-        raw_audio=bytes(captured),
-        channels=channels,
-        sample_rate=sample_rate,
-        sample_width=bytes_per_sample,
+    print_session_summary(
+        elapsed_seconds=time.time() - start_time,
+        session_peak_dbfs=session_peak_dbfs,
+        session_rms_dbfs=session_rms_dbfs,
     )
 
 
@@ -378,7 +339,7 @@ def parse_args() -> argparse.Namespace:
 Examples:
   python3 tests/tests_on_pi/inmp441_mic_test.py --list
   python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0
-  python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0 --duration 8
+  python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0 --duration 10
 """,
     )
 
@@ -396,8 +357,8 @@ Examples:
     parser.add_argument(
         "--duration",
         type=int,
-        default=5,
-        help="Recording duration in seconds (default: 5)",
+        default=0,
+        help="Optional monitor duration in seconds. Use 0 to run until quit (default: 0)",
     )
     parser.add_argument(
         "--rate",
@@ -416,12 +377,6 @@ Examples:
         type=str,
         default="S32_LE",
         help="ALSA sample format (default: S32_LE)",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Optional output WAV path",
     )
     return parser.parse_args()
 
@@ -443,34 +398,25 @@ def main() -> int:
         return 0
 
     device = choose_device(args.device, devices)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = args.output or Path("test_captures") / f"inmp441_test_{timestamp}.wav"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = args.duration if args.duration > 0 else None
 
     print(f"\nUsing device     : {device}")
-    print(f"Recording length : {args.duration} s")
     print(f"Sample rate      : {args.rate} Hz")
     print(f"Format           : {args.format}")
-    print(f"Output file      : {output_path}")
-    print("\nSpeak or clap near the microphone while the capture is running.")
+    print(f"Channels         : {args.channels}")
+    if duration is None:
+        print("Run mode         : Continuous until `q` or Ctrl+C")
+    else:
+        print(f"Run mode         : {duration} s")
+    print("\nSpeak or clap near the microphone. Press `q` or Ctrl+C to stop.")
 
-    record_audio(
+    monitor_audio(
         device=device,
-        duration=args.duration,
         sample_rate=args.rate,
         channels=args.channels,
         fmt=args.format,
-        output_path=output_path,
+        duration=duration,
     )
-
-    try:
-        stats = analyze_wav(output_path)
-    except ValueError as error:
-        print(f"\n[ERROR] Could not analyze recording: {error}")
-        print("If your device uses another sample format, rerun with a matching `--format`.")
-        return 1
-
-    print_analysis(stats, output_path)
     return 0
 
 
