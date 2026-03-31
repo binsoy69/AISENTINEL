@@ -133,6 +133,8 @@ def monitor_audio(
     duration: int | None,
 ) -> None:
     """Run ALSA's live terminal meter without saving a file."""
+    meter_mode = "stereo" if channels >= 2 else "mono"
+
     command = [
         "arecord",
         "-D",
@@ -146,7 +148,7 @@ def monitor_audio(
         "-t",
         "raw",
         "-V",
-        "mono",
+        meter_mode,
         "-v",
         "/dev/null",
     ]
@@ -157,9 +159,14 @@ def monitor_audio(
             str(duration),
         ])
 
-    print("\nALSA live meter starting. Press Ctrl+C to stop.\n")
+    print(f"\nALSA live meter starting in {meter_mode} mode. Press Ctrl+C to stop.\n")
 
-    result = subprocess.run(command, check=False)
+    try:
+        result = subprocess.run(command, check=False)
+    except KeyboardInterrupt:
+        print("\n[INFO] Monitor stopped.")
+        return
+
     if result.returncode == 0:
         return
 
@@ -181,7 +188,7 @@ def monitor_audio(
                 "-t",
                 "raw",
                 "-V",
-                "mono",
+                meter_mode,
                 "-v",
                 "/dev/null",
             ]

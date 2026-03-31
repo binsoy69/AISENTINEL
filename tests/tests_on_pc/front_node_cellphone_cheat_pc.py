@@ -30,11 +30,22 @@ from ultralytics import YOLO
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
-OBJ_MODEL_PATH = REPO_ROOT / "models" / "sentinel-yolov11n" / "my_model2.pt"
+OBJ_MODEL_DIR = REPO_ROOT / "models" / "yolov11n-sentinel-new"
+OBJ_MODEL_CANDIDATES = (
+    OBJ_MODEL_DIR / "sentinel_new.pt",
+    OBJ_MODEL_DIR / "sentinel-new.pt",
+    OBJ_MODEL_DIR / "train" / "weights" / "best.pt",
+    OBJ_MODEL_DIR / "train" / "weights" / "last.pt",
+)
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_obj"
 
 # ── Only these classes matter ────────────────────────────────
 TARGET_CLASSES = {"cellphone", "cheat_sheet"}
+LABEL_ALIASES = {
+    "phone": "cellphone",
+    "cell_phone": "cellphone",
+    "cell phone": "cellphone",
+}
 
 CONFIDENCE_THRESHOLDS = {
     "cellphone": 0.6,
@@ -80,6 +91,28 @@ def log_alert(label: str, conf: float, ts_sec: float):
 
 def log_info(msg: str):
     print(f"{TC.CYAN}[INFO]{TC.RESET} {msg}")
+
+
+def log_warn(msg: str):
+    print(f"{TC.YELLOW}[WARN]{TC.RESET} {msg}")
+
+
+def resolve_obj_model_path() -> Path | None:
+    for candidate in OBJ_MODEL_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def canonical_label(label: str) -> str:
+    return LABEL_ALIASES.get(label, label)
+
+
+def close_display_windows():
+    try:
+        cv2.destroyAllWindows()
+    except cv2.error:
+        pass
 
 
 # ── Drawing helpers ──────────────────────────────────────────
@@ -138,20 +171,26 @@ def main():
     log_info(f"Selected: {video_path}")
 
     # ── Load model ────────────────────────────────────────────
-    if not OBJ_MODEL_PATH.exists():
-        print(f"{TC.RED}[ERROR] Model not found: {OBJ_MODEL_PATH}{TC.RESET}")
+    obj_model_path = resolve_obj_model_path()
+    if obj_model_path is None:
+        print(f"{TC.RED}[ERROR] Model not found in: {OBJ_MODEL_DIR}{TC.RESET}")
+        print(f"{TC.YELLOW}Checked:{TC.RESET}")
+        for candidate in OBJ_MODEL_CANDIDATES:
+            print(f"  - {candidate}")
         sys.exit(1)
 
-    log_info(f"Loading model: {OBJ_MODEL_PATH.name}")
-    model = YOLO(str(OBJ_MODEL_PATH))
+    log_info(f"Loading model: {obj_model_path.name}")
+    model = YOLO(str(obj_model_path))
     log_info("Model loaded.")
 
     # Show which classes the model knows about
     print(f"\n{TC.BOLD}Model classes:{TC.RESET}")
     for idx, name in model.names.items():
-        marker = "  << TARGET" if name in TARGET_CLASSES else ""
-        thresh = CONFIDENCE_THRESHOLDS.get(name, "-")
-        print(f"  [{idx}] {name} (thresh={thresh}){marker}")
+        canonical = canonical_label(name)
+        marker = "  << TARGET" if canonical in TARGET_CLASSES else ""
+        thresh = CONFIDENCE_THRESHOLDS.get(canonical, "-")
+        alias_note = f" -> {canonical}" if canonical != name else ""
+        print(f"  [{idx}] {name}{alias_note} (thresh={thresh}){marker}")
     print()
 
     # ── Open video ────────────────────────────────────────────
@@ -179,13 +218,24 @@ def main():
     # ── Detection loop ────────────────────────────────────────
     frame_idx = 0
     paused = False
+    display_enabled = True
     stats = defaultdict(int)
     alert_count = 0
     win_name = "AISENTINEL - Cellphone / Cheat Sheet Detection"
 
     while True:
-        if paused:
-            key = cv2.waitKey(100) & 0xFF
+        if display_enabled and paused:
+            try:
+                key = cv2.waitKey(100) & 0xFF
+            except cv2.error as exc:
+                display_enabled = False
+                paused = False
+                log_warn(
+                    "OpenCV display is unavailable; continuing without preview window. "
+                    f"({exc})"
+                )
+                close_display_windows()
+                continue
             if key == ord(" "):
                 paused = False
                 log_info("Resumed.")
@@ -211,7 +261,8 @@ def main():
             for box in boxes:
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
-                label = model.names.get(cls_id, f"class_{cls_id}")
+                raw_label = model.names.get(cls_id, f"class_{cls_id}")
+                label = canonical_label(raw_label)
 
                 # Only care about target classes
                 if label not in TARGET_CLASSES:
@@ -276,14 +327,25 @@ def main():
         if disp_scale < 1.0:
             disp = cv2.resize(annotated,
                               (int(w * disp_scale), int(h * disp_scale)))
-        cv2.imshow(win_name, disp)
-        key = cv2.waitKey(1) & 0xFF
-        if key in (ord("q"), 27):
-            log_info("Quit requested.")
-            break
-        elif key == ord(" "):
-            paused = True
-            log_info("Paused. Press SPACE to resume.")
+        if display_enabled:
+            try:
+                cv2.imshow(win_name, disp)
+                key = cv2.waitKey(1) & 0xFF
+            except cv2.error as exc:
+                display_enabled = False
+                paused = False
+                log_warn(
+                    "OpenCV display is unavailable; continuing without preview window. "
+                    f"({exc})"
+                )
+                close_display_windows()
+            else:
+                if key in (ord("q"), 27):
+                    log_info("Quit requested.")
+                    break
+                elif key == ord(" "):
+                    paused = True
+                    log_info("Paused. Press SPACE to resume.")
 
         # Progress
         if frame_idx % 500 == 0:
@@ -291,7 +353,7 @@ def main():
             log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames})")
 
     cap.release()
-    cv2.destroyAllWindows()
+    close_display_windows()
 
     # ── Summary ───────────────────────────────────────────────
     print()
