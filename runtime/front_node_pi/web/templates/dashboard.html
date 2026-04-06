@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="dashboard-body">
+    <script id="dashboard-bootstrap" type="application/json">{{ dashboard_json|safe }}</script>
+
+    <main class="dashboard-shell">
+        <header class="topbar">
+            <div class="topbar-brand">
+                <div class="brand-mark brand-mark-small">
+                    <span class="brand-mark-inner">S</span>
+                </div>
+                <div>
+                    <p class="topbar-title">Sentinel</p>
+                    <p class="topbar-subtitle" id="session-label">Live monitoring session</p>
+                </div>
+            </div>
+
+            <nav class="topnav">
+                <button class="nav-button is-active" type="button" data-section="overview">Dashboard</button>
+                <button class="nav-button" type="button" data-section="records">Records and Analytics</button>
+                <button class="nav-button" type="button" data-section="system">System Info</button>
+            </nav>
+
+            <div class="topbar-meta">
+                <div class="meta-block">
+                    <span class="meta-label">Schedule</span>
+                    <strong id="schedule-label">--</strong>
+                </div>
+                <div class="meta-block">
+                    <span class="meta-label">Operator</span>
+                    <strong>{{ username }}</strong>
+                </div>
+                <a class="ghost-button" href="{{ url_for('session_setup') }}">Session Setup</a>
+                <span class="status-pill" id="status-pill">Idle</span>
+                <a class="ghost-button" href="{{ url_for('logout') }}">Logout</a>
+            </div>
+        </header>
+
+        <section class="status-banner" id="status-banner">Waiting for runtime data.</section>
+
+        <section class="stats-grid">
+            <article class="stat-card">
+                <span class="stat-label">Total Incidents</span>
+                <strong class="stat-value" id="metric-total-incidents">0</strong>
+                <p class="stat-foot">All alert-level detections for the current session.</p>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">Most Recent Type</span>
+                <strong class="stat-value stat-value-wide" id="metric-last-type">No incidents yet</strong>
+                <p class="stat-foot" id="metric-last-time">No alert received.</p>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">Tracked Students</span>
+                <strong class="stat-value" id="metric-tracked">0 / 0</strong>
+                <p class="stat-foot">Students currently mapped to the live detector.</p>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">Processing FPS</span>
+                <strong class="stat-value" id="metric-fps">0.0</strong>
+                <p class="stat-foot" id="metric-inference">Inference 0 ms</p>
+            </article>
+        </section>
+
+        <section class="overview-grid page-section is-active" id="section-overview">
+            <article class="panel panel-stream">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">Monitoring Feed</p>
+                        <h2>Annotated Detection Stream</h2>
+                    </div>
+                    <span class="status-pill status-pill-quiet" id="feed-pill">Idle</span>
+                </div>
+
+                <div class="stream-stage" id="stream-stage">
+                    <img class="stream-image" id="live-stream" src="{{ url_for('video_feed') }}" alt="Sentinel live stream">
+                    <div class="stream-placeholder" id="stream-placeholder">
+                        Monitoring has not started yet.
+                    </div>
+                </div>
+
+                <div class="panel-footer">
+                    <span class="meta-chip" id="source-label">Source: --</span>
+                    <span class="meta-chip" id="elapsed-label">Elapsed: 00:00:00</span>
+                    <span class="meta-chip" id="update-label">Last update: --</span>
+                </div>
+            </article>
+
+            <article class="panel panel-side">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">Live Detection Feed</p>
+                        <h2>Latest Alerts</h2>
+                    </div>
+                </div>
+                <div class="incident-list" id="live-incidents"></div>
+            </article>
+        </section>
+
+        <section class="page-section" id="section-records">
+            <article class="panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">Records and Analytics</p>
+                        <h2>Saved Incident Evidence</h2>
+                    </div>
+                </div>
+                <div class="history-grid" id="history-grid"></div>
+            </article>
+        </section>
+
+        <section class="page-section" id="section-system">
+            <article class="panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">System Info</p>
+                        <h2>Runtime Status</h2>
+                    </div>
+                </div>
+                <dl class="system-grid" id="system-grid"></dl>
+            </article>
+        </section>
+    </main>
+
+    <div class="incident-modal hidden" id="incident-modal">
+        <div class="incident-modal-backdrop" data-dismiss-popup></div>
+        <div class="incident-modal-card">
+            <div class="incident-modal-header">
+                <p class="modal-kicker">Cheating Detected</p>
+                <button class="modal-close" type="button" data-dismiss-popup>Dismiss</button>
+            </div>
+            <div class="incident-modal-body">
+                <div class="modal-preview">
+                    <img id="modal-preview-image" alt="Incident evidence preview">
+                </div>
+                <div class="modal-copy" id="modal-copy"></div>
+            </div>
+            <div class="incident-modal-actions">
+                <a id="modal-view-link" class="primary-button" href="#" target="_blank" rel="noreferrer">View Evidence</a>
+                <button class="ghost-button" type="button" data-dismiss-popup>Dismiss</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
+</body>
+</html>

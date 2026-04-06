@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="auth-body">
+    <main class="auth-shell">
+        <section class="brand-column">
+            <div class="brand-mark">
+                <span class="brand-mark-inner">S</span>
+            </div>
+            <p class="brand-kicker">Sentinel</p>
+            <h1 class="brand-title">Classroom Monitoring System</h1>
+            <p class="brand-copy">
+                Secure access for live invigilation, incident review, and evidence playback.
+            </p>
+        </section>
+
+        <section class="auth-card">
+            <div class="card-heading">
+                <h2>Sign In</h2>
+                <p>Enter the dashboard credentials configured in the runtime INI file.</p>
+            </div>
+
+            {% if error_message %}
+            <div class="banner banner-danger">{{ error_message }}</div>
+            {% endif %}
+
+            <form method="post" class="form-grid">
+                <input type="hidden" name="next" value="{{ next_path }}">
+
+                <label class="field-label" for="username">Username</label>
+                <input id="username" name="username" class="field-input" type="text" placeholder="Enter username" autocomplete="username" required>
+
+                <label class="field-label" for="password">Password</label>
+                <input id="password" name="password" class="field-input" type="password" placeholder="Enter password" autocomplete="current-password" required>
+
+                <button type="submit" class="primary-button">Sign In</button>
+            </form>
+        </section>
+    </main>
+</body>
+</html>

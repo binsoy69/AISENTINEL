@@ -95,6 +95,14 @@ class EvidenceConfig:
 
 
 @dataclass(frozen=True)
+class WebDashboardConfig:
+    username: str
+    password: str
+    secret_key: str
+    session_ttl_minutes: int
+
+
+@dataclass(frozen=True)
 class FrontNodeRuntimeConfig:
     config_path: Path
     pose_model: Path
@@ -116,6 +124,7 @@ class FrontNodeRuntimeConfig:
     hands_under_table: HandsUnderTableConfig
     object_detection: ObjectDetectionConfig
     evidence: EvidenceConfig
+    web_dashboard: WebDashboardConfig
 
 
 def resolve_cli_path(raw_value: str | None) -> Path | None:
@@ -224,6 +233,12 @@ def load_runtime_config(
         "auto_use_saved_setup",
         True,
         getter_name="getboolean",
+    )
+    dashboard_secret_key = _get_value(
+        parser,
+        ["web_dashboard"],
+        "secret_key",
+        os.environ.get("AISENTINEL_DASHBOARD_SECRET", "change-this-secret-key"),
     )
 
     return FrontNodeRuntimeConfig(
@@ -571,6 +586,31 @@ def load_runtime_config(
                 "post_event_frames",
                 10,
                 getter_name="getint",
+            ),
+        ),
+        web_dashboard=WebDashboardConfig(
+            username=_get_value(
+                parser,
+                ["web_dashboard"],
+                "username",
+                "admin",
+            ),
+            password=_get_value(
+                parser,
+                ["web_dashboard"],
+                "password",
+                "admin123",
+            ),
+            secret_key=dashboard_secret_key.strip() or "change-this-secret-key",
+            session_ttl_minutes=max(
+                1,
+                _get_value(
+                    parser,
+                    ["web_dashboard"],
+                    "session_ttl_minutes",
+                    480,
+                    getter_name="getint",
+                ),
             ),
         ),
     )

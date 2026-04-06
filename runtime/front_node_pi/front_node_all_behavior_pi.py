@@ -27,11 +27,15 @@ Notes:
     hand and object passes for hands-under-table and phone / cheat-sheet.
 """
 
+import json
 import os
+import re
 import sys
 import time
 import socket
 import threading
+from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from collections import defaultdict, deque
 
@@ -64,72 +68,477 @@ EVIDENCE_POST_EVENT_FRAMES = 10
 # ── Shared globals for Flask streaming ───────────────────────
 _latest_frame = None
 _frame_lock = threading.Lock()
+_dashboard_lock = threading.Lock()
 
 try:
-    from flask import Flask, Response, render_template_string
+    from flask import (
+        Flask,
+        Response,
+        abort,
+        jsonify,
+        redirect,
+        render_template,
+        request,
+        send_file,
+        session,
+        url_for,
+    )
     FLASK_AVAILABLE = True
 except ImportError:
     FLASK_AVAILABLE = False
 
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AISENTINEL - All Behavior Detection</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+try:
+    from werkzeug.security import check_password_hash
+except ImportError:  # pragma: no cover - optional dependency surface
+    check_password_hash = None
+
+
+TEMPLATE_DIR = SCRIPT_DIR / "web" / "templates"
+STATIC_DIR = SCRIPT_DIR / "web" / "static"
+EVENTS_DIRNAME = "events"
+VIDEO_UPLOAD_DIR = SCRIPT_DIR / "data" / "session_uploads"
+RECENT_INCIDENT_LIMIT = 40
+HISTORY_INCIDENT_LIMIT = 24
+
+_start_monitoring_callback = None
+_dashboard_require_session_setup = False
+_dashboard_auth = {
+    "username": "admin",
+    "password": "admin123",
+    "secret_key": "change-this-secret-key",
+    "session_ttl_minutes": 480,
+}
+_dashboard_state = {
+    "runtime_mode": "webcam",
+    "source_label": "front_webcam",
+    "config_path": "",
+    "evidence_root": str(EVIDENCE_DIR),
+    "setup_profile_path": "",
+    "status": "idle",
+    "status_message": "Waiting for session setup.",
+    "monitoring_active": False,
+    "system_state": "idle",
+    "session_details": {},
+    "metrics": {},
+    "recent_incident_ids": deque(),
+    "incident_index": {},
+    "saved_incident_ids": [],
+    "saved_index": {},
+    "popup_incident_id": None,
+    "last_update_iso": "",
+    "last_alert_at_iso": "",
+    "current_error": "",
+    "session_form_defaults": {},
+}
+
+
+def _dashboard_now() -> datetime:
+    return datetime.now()
+
+
+def _dashboard_now_iso() -> str:
+    return _dashboard_now().isoformat(timespec="seconds")
+
+
+def _format_clock(dt: datetime | None = None) -> str:
+    value = dt or _dashboard_now()
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _new_dashboard_metrics() -> dict:
+    return {
+        "total_incidents": 0,
+        "head_alerts": 0,
+        "passing_alerts": 0,
+        "hand_alerts": 0,
+        "hand_warnings": 0,
+        "object_alerts": 0,
+        "tracked_students": 0,
+        "assigned_students": 0,
+        "processing_fps": 0.0,
+        "source_fps": 0.0,
+        "inference_ms": 0.0,
+        "frame_idx": 0,
+        "total_frames": 0,
+        "elapsed_text": "00:00:00",
+        "object_confidence_avg": 0.0,
+        "hand_detections": 0,
+        "object_detections": 0,
+        "last_incident_type": "No incidents yet",
+        "last_incident_time": "",
+    }
+
+
+def _default_session_details() -> dict:
+    now = _dashboard_now()
+    return {
+        "subject_code": "",
+        "professor": "",
+        "session_date": now.strftime("%Y-%m-%d"),
+        "start_time": now.strftime("%H:%M"),
+        "end_time": (now + timedelta(hours=2)).strftime("%H:%M"),
+        "video_path": "",
+        "setup_profile_override": "",
+    }
+
+
+def _update_dashboard_timestamp_locked() -> None:
+    _dashboard_state["last_update_iso"] = _dashboard_now_iso()
+
+
+def _merge_session_details(raw_details: dict | None) -> dict:
+    details = _default_session_details()
+    if raw_details:
+        details.update(
+            {
+                key: str(value).strip()
+                for key, value in raw_details.items()
+                if key in details and value is not None
+            }
+        )
+    details["session_label"] = " / ".join(
+        bit for bit in (details["subject_code"], details["professor"]) if bit
+    ) or "Live monitoring session"
+    details["schedule_label"] = (
+        f"{details['session_date']} | {details['start_time']} - {details['end_time']}"
+    )
+    return details
+
+
+def _slugify(raw_text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", raw_text.strip().lower())
+    return slug.strip("-") or "incident"
+
+
+def _incident_public_copy(incident: dict) -> dict:
+    item = dict(incident)
+    for key in ("poster_relpath", "gif_relpath", "manifest_relpath"):
+        relpath = item.get(key)
+        if relpath:
+            public_key = key.replace("_relpath", "_url")
+            item[public_key] = url_for("evidence_file", relative_path=relpath)
+    return item
+
+
+def _sorted_saved_incident_ids(index: dict) -> list[str]:
+    return sorted(
+        index,
+        key=lambda incident_id: index[incident_id].get("created_at", ""),
+        reverse=True,
+    )
+
+
+def _upsert_recent_incident_locked(incident: dict) -> dict:
+    incident_id = incident["id"]
+    existing = _dashboard_state["incident_index"].get(incident_id)
+    if existing is None:
+        existing = {}
+        _dashboard_state["incident_index"][incident_id] = existing
+        _dashboard_state["recent_incident_ids"].appendleft(incident_id)
+    existing.update(incident)
+
+    while len(_dashboard_state["recent_incident_ids"]) > RECENT_INCIDENT_LIMIT:
+        removed_id = _dashboard_state["recent_incident_ids"].pop()
+        _dashboard_state["incident_index"].pop(removed_id, None)
+
+    _dashboard_state["popup_incident_id"] = incident_id
+    _dashboard_state["last_alert_at_iso"] = incident.get("created_at", _dashboard_now_iso())
+    _update_dashboard_timestamp_locked()
+    return existing
+
+
+def _load_manifest(manifest_path: Path) -> dict | None:
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def refresh_saved_incidents() -> None:
+    manifests = []
+    for base_dir in (
+        HEAD_EVIDENCE_DIR,
+        PASSING_EVIDENCE_DIR,
+        HANDS_EVIDENCE_DIR,
+        OBJECT_EVIDENCE_DIR,
+    ):
+        events_dir = base_dir / EVENTS_DIRNAME
+        if events_dir.exists():
+            manifests.extend(events_dir.glob("*/manifest.json"))
+
+    new_index = {}
+    for manifest_path in manifests:
+        payload = _load_manifest(manifest_path)
+        if not payload or "id" not in payload:
+            continue
+        new_index[payload["id"]] = payload
+
+    with _dashboard_lock:
+        _dashboard_state["saved_index"] = new_index
+        _dashboard_state["saved_incident_ids"] = _sorted_saved_incident_ids(new_index)
+        _update_dashboard_timestamp_locked()
+
+
+def configure_web_dashboard(
+    *,
+    auth_config,
+    runtime_mode: str,
+    source_label: str,
+    config_path: Path,
+    evidence_root: Path,
+    setup_profile_path: Path | None = None,
+    start_monitoring_callback=None,
+    require_session_setup: bool = False,
+    session_form_defaults: dict | None = None,
+) -> None:
+    global _start_monitoring_callback, _dashboard_require_session_setup, _latest_frame
+
+    _start_monitoring_callback = start_monitoring_callback
+    _dashboard_require_session_setup = require_session_setup
+    refresh_saved_incidents()
+
+    with _dashboard_lock:
+        _dashboard_auth.update(
+            {
+                "username": str(auth_config.username).strip() or "admin",
+                "password": str(auth_config.password),
+                "secret_key": str(auth_config.secret_key).strip()
+                or "change-this-secret-key",
+                "session_ttl_minutes": max(1, int(auth_config.session_ttl_minutes)),
+            }
+        )
+        _dashboard_state["runtime_mode"] = runtime_mode
+        _dashboard_state["source_label"] = source_label
+        _dashboard_state["config_path"] = str(config_path)
+        _dashboard_state["evidence_root"] = str(evidence_root)
+        _dashboard_state["setup_profile_path"] = (
+            str(setup_profile_path) if setup_profile_path else ""
+        )
+        _dashboard_state["status"] = "idle"
+        _dashboard_state["status_message"] = (
+            "Waiting for session setup."
+            if require_session_setup
+            else "Dashboard ready."
+        )
+        _dashboard_state["monitoring_active"] = False
+        _dashboard_state["system_state"] = "idle"
+        _dashboard_state["session_details"] = {}
+        _dashboard_state["metrics"] = _new_dashboard_metrics()
+        _dashboard_state["recent_incident_ids"].clear()
+        _dashboard_state["incident_index"].clear()
+        _dashboard_state["popup_incident_id"] = None
+        _dashboard_state["current_error"] = ""
+        _dashboard_state["session_form_defaults"] = _merge_session_details(
+            session_form_defaults or {}
+        )
+        _update_dashboard_timestamp_locked()
+
+    with _frame_lock:
+        _latest_frame = None
+
+
+def begin_dashboard_session(session_details: dict | None) -> None:
+    global _latest_frame
+    with _dashboard_lock:
+        _dashboard_state["session_details"] = _merge_session_details(session_details)
+        _dashboard_state["status"] = "starting"
+        _dashboard_state["status_message"] = "Preparing monitoring session..."
+        _dashboard_state["monitoring_active"] = False
+        _dashboard_state["system_state"] = "starting"
+        _dashboard_state["metrics"] = _new_dashboard_metrics()
+        _dashboard_state["recent_incident_ids"].clear()
+        _dashboard_state["incident_index"].clear()
+        _dashboard_state["popup_incident_id"] = None
+        _dashboard_state["current_error"] = ""
+        _update_dashboard_timestamp_locked()
+
+    with _frame_lock:
+        _latest_frame = None
+
+
+def set_dashboard_status(
+    status: str,
+    message: str,
+    *,
+    monitoring_active: bool | None = None,
+    system_state: str | None = None,
+    error_message: str = "",
+) -> None:
+    with _dashboard_lock:
+        _dashboard_state["status"] = status
+        _dashboard_state["status_message"] = message
+        if monitoring_active is not None:
+            _dashboard_state["monitoring_active"] = monitoring_active
+        if system_state is not None:
+            _dashboard_state["system_state"] = system_state
+        _dashboard_state["current_error"] = error_message
+        _update_dashboard_timestamp_locked()
+
+
+def update_dashboard_context(**kwargs) -> None:
+    with _dashboard_lock:
+        for key, value in kwargs.items():
+            if key not in _dashboard_state:
+                continue
+            if isinstance(value, Path):
+                _dashboard_state[key] = str(value)
+            else:
+                _dashboard_state[key] = value
+        _update_dashboard_timestamp_locked()
+
+
+def update_dashboard_metrics(**metrics) -> None:
+    with _dashboard_lock:
+        current = _dashboard_state.setdefault("metrics", _new_dashboard_metrics())
+        current.update(metrics)
+        if current.get("total_incidents", 0) > 0:
+            _dashboard_state["system_state"] = "alert"
+        elif _dashboard_state.get("monitoring_active"):
+            _dashboard_state["system_state"] = "active"
+        _update_dashboard_timestamp_locked()
+
+
+def record_dashboard_incident(incident: dict) -> None:
+    with _dashboard_lock:
+        stored = _upsert_recent_incident_locked(incident)
+        metrics = _dashboard_state.setdefault("metrics", _new_dashboard_metrics())
+        metrics["last_incident_type"] = stored.get("type_label", "Incident")
+        metrics["last_incident_time"] = stored.get("display_time", "")
+        _dashboard_state["system_state"] = "alert"
+
+
+def update_dashboard_incident(incident_id: str, **updates) -> None:
+    with _dashboard_lock:
+        incident = _dashboard_state["incident_index"].get(incident_id)
+        if incident is not None:
+            incident.update(updates)
+        saved = _dashboard_state["saved_index"].get(incident_id)
+        if saved is not None:
+            saved.update(updates)
+        _update_dashboard_timestamp_locked()
+
+
+def dismiss_dashboard_popup(incident_id: str | None = None) -> None:
+    with _dashboard_lock:
+        if incident_id is None or _dashboard_state["popup_incident_id"] == incident_id:
+            _dashboard_state["popup_incident_id"] = None
+        _update_dashboard_timestamp_locked()
+
+
+def _password_matches(configured_password: str, submitted_password: str) -> bool:
+    if configured_password.startswith(("pbkdf2:", "scrypt:", "argon2:")) and check_password_hash:
+        return check_password_hash(configured_password, submitted_password)
+    return configured_password == submitted_password
+
+
+def _is_authenticated() -> bool:
+    return (
+        session.get("authenticated") is True
+        and session.get("username") == _dashboard_auth["username"]
+    )
+
+
+def _login_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not _is_authenticated():
+            return redirect(url_for("login", next=request.path))
+        return view_func(*args, **kwargs)
+
+    return wrapper
+
+
+def _api_login_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not _is_authenticated():
+            return jsonify({"error": "authentication required"}), 401
+        return view_func(*args, **kwargs)
+
+    return wrapper
+
+
+def _dashboard_snapshot() -> dict:
+    with _dashboard_lock:
+        recent_incidents = [
+            _dashboard_state["incident_index"][incident_id]
+            for incident_id in _dashboard_state["recent_incident_ids"]
+            if incident_id in _dashboard_state["incident_index"]
+        ]
+        saved_incidents = [
+            _dashboard_state["saved_index"][incident_id]
+            for incident_id in _dashboard_state["saved_incident_ids"][:HISTORY_INCIDENT_LIMIT]
+            if incident_id in _dashboard_state["saved_index"]
+        ]
+        popup_incident = None
+        popup_id = _dashboard_state.get("popup_incident_id")
+        if popup_id:
+            popup_incident = _dashboard_state["incident_index"].get(popup_id)
+
+        return {
+            "runtime_mode": _dashboard_state["runtime_mode"],
+            "source_label": _dashboard_state["source_label"],
+            "config_path": _dashboard_state["config_path"],
+            "evidence_root": _dashboard_state["evidence_root"],
+            "setup_profile_path": _dashboard_state["setup_profile_path"],
+            "status": _dashboard_state["status"],
+            "status_message": _dashboard_state["status_message"],
+            "monitoring_active": _dashboard_state["monitoring_active"],
+            "system_state": _dashboard_state["system_state"],
+            "session_details": dict(_dashboard_state["session_details"]),
+            "metrics": dict(_dashboard_state.get("metrics", _new_dashboard_metrics())),
+            "recent_incidents": [dict(item) for item in recent_incidents],
+            "saved_incidents": [dict(item) for item in saved_incidents],
+            "popup_incident": dict(popup_incident) if popup_incident else None,
+            "current_error": _dashboard_state["current_error"],
+            "last_update_iso": _dashboard_state["last_update_iso"],
+            "requires_session_setup": _dashboard_require_session_setup,
+            "session_form_defaults": dict(_dashboard_state["session_form_defaults"]),
         }
-        h1 {
-            color: #0ff;
-            text-shadow: 0 0 10px rgba(0,255,255,0.5);
-            margin-bottom: 10px;
-        }
-        .info {
-            color: #aaa;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        .stream-container {
-            border: 2px solid #0ff;
-            border-radius: 8px;
-            box-shadow: 0 0 20px rgba(0,255,255,0.3);
-            overflow: hidden;
-            max-width: 90vw;
-        }
-        .stream-container img {
-            display: block;
-            width: 100%;
-            height: auto;
-        }
-        .footer {
-            margin-top: 20px;
-            color: #666;
-            font-size: 0.9em;
-        }
-    </style>
-</head>
-<body>
-    <h1>AISENTINEL - All Behavior Detection</h1>
-    <p class="info">
-        Raspberry Pi 5 + Hailo AI HAT | Head + Passing + Hands + Phone + Cheat Sheet
-    </p>
-    <div class="stream-container">
-        <img src="/video_feed" alt="Live Stream">
-    </div>
-    <p class="footer">Stream: MJPEG | Press Ctrl+C in terminal to stop</p>
-</body>
-</html>
-"""
+
+
+def _public_dashboard_snapshot() -> dict:
+    snapshot = _dashboard_snapshot()
+    snapshot["recent_incidents"] = [
+        _incident_public_copy(item) for item in snapshot["recent_incidents"]
+    ]
+    snapshot["saved_incidents"] = [
+        _incident_public_copy(item) for item in snapshot["saved_incidents"]
+    ]
+    if snapshot["popup_incident"] is not None:
+        snapshot["popup_incident"] = _incident_public_copy(snapshot["popup_incident"])
+    return snapshot
+
+
+def _safe_evidence_path(relative_path: str) -> Path:
+    candidate = (EVIDENCE_DIR / relative_path).resolve(strict=False)
+    evidence_root = EVIDENCE_DIR.resolve(strict=False)
+    if evidence_root not in candidate.parents and candidate != evidence_root:
+        raise ValueError("Requested evidence path is outside the evidence root.")
+    return candidate
+
+
+def _save_uploaded_video(upload_storage) -> Path:
+    filename = (upload_storage.filename or "").strip()
+    if not filename:
+        raise ValueError("Select a video file to start video monitoring.")
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}:
+        raise ValueError("Unsupported video type. Use MP4, AVI, MOV, MKV, M4V, or WEBM.")
+
+    safe_stem = _slugify(Path(filename).stem)
+    target_name = f"{_dashboard_now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{suffix}"
+    VIDEO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = (VIDEO_UPLOAD_DIR / target_name).resolve(strict=False)
+    upload_storage.save(target_path)
+    return target_path
 
 
 COLOR_PRIORITY = {
@@ -388,6 +797,161 @@ def _evidence_frame_tag(relative_idx):
     return f"f{order_idx:02d}_{phase_tag}"
 
 
+def _relative_evidence_path(path: Path) -> str:
+    return path.resolve(strict=False).relative_to(
+        EVIDENCE_DIR.resolve(strict=False)
+    ).as_posix()
+
+
+def _evidence_group_dir(behavior_type: str) -> Path:
+    if behavior_type == "head":
+        return HEAD_EVIDENCE_DIR / EVENTS_DIRNAME
+    if behavior_type == "passing":
+        return PASSING_EVIDENCE_DIR / EVENTS_DIRNAME
+    if behavior_type == "hands":
+        return HANDS_EVIDENCE_DIR / EVENTS_DIRNAME
+    return OBJECT_EVIDENCE_DIR / EVENTS_DIRNAME
+
+
+def _sequence_type_label(sequence) -> str:
+    if sequence["behavior_type"] == "head":
+        mapping = {
+            "head_tilt": "Head Tilting",
+            "shoulder_turn": "Shoulder Turn",
+        }
+        return mapping.get(sequence["behavior"], "Head Behavior")
+    if sequence["behavior_type"] == "passing":
+        return "Passing Paper"
+    if sequence["behavior_type"] == "hands":
+        return "Hands Missing"
+    mapping = {
+        "phone": "Using Phone",
+        "cheat_sheet": "Cheat Sheet",
+    }
+    return mapping.get(sequence["class_name"], "Object Detection")
+
+
+def _sequence_student_numbers(sequence) -> list[int]:
+    if sequence["behavior_type"] == "passing":
+        return [int(value) for value in sequence["student_nums"]]
+    return [int(sequence["student_num"])]
+
+
+def _sequence_summary(sequence) -> str:
+    type_label = _sequence_type_label(sequence)
+    student_numbers = _sequence_student_numbers(sequence)
+    if sequence["behavior_type"] == "passing":
+        return (
+            f"Students #{student_numbers[0]:02d} and #{student_numbers[1]:02d} "
+            f"{type_label.lower()} detected"
+        )
+    return f"Student #{student_numbers[0]:02d} {type_label.lower()} detected"
+
+
+def _build_sequence_incident(sequence, status: str) -> dict:
+    confidence = sequence.get("confidence")
+    confidence_pct = int(round(confidence * 100)) if confidence is not None else None
+    return {
+        "id": sequence["incident_id"],
+        "created_at": sequence["created_at"],
+        "display_time": sequence["display_time"],
+        "event_clock": sequence["event_clock"],
+        "status": status,
+        "severity": "alert",
+        "behavior_type": sequence["behavior_type"],
+        "type_label": _sequence_type_label(sequence),
+        "summary": _sequence_summary(sequence),
+        "student_numbers": _sequence_student_numbers(sequence),
+        "camera_label": sequence["camera_label"],
+        "session_details": dict(sequence["session_details"]),
+        "confidence": confidence,
+        "confidence_pct": confidence_pct,
+        "poster_relpath": sequence.get("poster_relpath", ""),
+        "gif_relpath": sequence.get("gif_relpath", ""),
+        "manifest_relpath": sequence.get("manifest_relpath", ""),
+        "frame_count": len(sequence.get("frame_paths", [])),
+    }
+
+
+def _ensure_sequence_storage(sequence) -> None:
+    if sequence.get("event_dir") is not None:
+        return
+
+    event_dir = _evidence_group_dir(sequence["behavior_type"]) / sequence["incident_id"]
+    frames_dir = event_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    sequence["event_dir"] = event_dir
+    sequence["frames_dir"] = frames_dir
+    sequence["frame_paths"] = []
+    sequence["poster_relpath"] = ""
+    sequence["gif_relpath"] = ""
+    sequence["manifest_relpath"] = ""
+
+
+def _save_grouped_evidence_frame(sequence, frame, frame_tag: str) -> None:
+    _ensure_sequence_storage(sequence)
+    frame_path = sequence["frames_dir"] / f"{frame_tag}.jpg"
+    cv2.imwrite(str(frame_path), frame)
+    sequence["frame_paths"].append(frame_path)
+    if frame_tag.endswith("event") or not sequence.get("poster_relpath"):
+        sequence["poster_relpath"] = _relative_evidence_path(frame_path)
+
+
+def _write_sequence_gif(sequence) -> str:
+    if not PIL_AVAILABLE or not sequence.get("frame_paths"):
+        return ""
+
+    frames = []
+    for frame_path in sequence["frame_paths"]:
+        with Image.open(frame_path) as image:
+            frames.append(image.convert("P", palette=Image.ADAPTIVE))
+
+    if not frames:
+        return ""
+
+    gif_path = sequence["event_dir"] / "evidence.gif"
+    frames[0].save(
+        gif_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=220,
+        loop=0,
+        optimize=False,
+    )
+    return _relative_evidence_path(gif_path)
+
+
+def _finalize_evidence_sequence(sequence) -> None:
+    sequence["gif_relpath"] = _write_sequence_gif(sequence)
+    manifest_path = sequence["event_dir"] / "manifest.json"
+    manifest_relpath = _relative_evidence_path(manifest_path)
+    sequence["manifest_relpath"] = manifest_relpath
+    manifest = _build_sequence_incident(sequence, status="ready")
+    manifest["manifest_relpath"] = manifest_relpath
+    manifest["frame_relpaths"] = [
+        _relative_evidence_path(frame_path)
+        for frame_path in sequence.get("frame_paths", [])
+    ]
+    manifest["frame_count"] = len(manifest["frame_relpaths"])
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    with _dashboard_lock:
+        _dashboard_state["saved_index"][manifest["id"]] = manifest
+        _dashboard_state["saved_incident_ids"] = _sorted_saved_incident_ids(
+            _dashboard_state["saved_index"]
+        )
+        _update_dashboard_timestamp_locked()
+
+    update_dashboard_incident(
+        sequence["incident_id"],
+        status="ready",
+        poster_relpath=manifest.get("poster_relpath", ""),
+        gif_relpath=manifest.get("gif_relpath", ""),
+        manifest_relpath=manifest_relpath,
+        frame_count=manifest["frame_count"],
+    )
+
+
 def save_head_evidence(frame, student_num, behavior, event_ts_sec, frame_ts_sec,
                        frame_tag):
     os.makedirs(HEAD_EVIDENCE_DIR, exist_ok=True)
@@ -539,16 +1103,34 @@ def save_evidence_sequence_frame(sequence, snapshot, frame_tag):
             frame_tag,
         )
 
+    _save_grouped_evidence_frame(sequence, annotated_frame, frame_tag)
+
 
 def queue_evidence_sequence(sequence_queue, recent_frames, behavior_type,
                             event_ts_sec, **payload):
     """Save buffered pre-event frames, then queue event + post-event frames."""
+    with _dashboard_lock:
+        camera_label = _dashboard_state["source_label"]
+        session_details = dict(_dashboard_state["session_details"])
+
+    incident_seed = payload.get("class_name") or payload.get("behavior") or behavior_type
     sequence = {
+        "incident_id": (
+            f"{behavior_type}-{_slugify(str(incident_seed))}-"
+            f"{_dashboard_now().strftime('%Y%m%d%H%M%S%f')}"
+        ),
         "behavior_type": behavior_type,
+        "created_at": _dashboard_now_iso(),
+        "display_time": _format_clock(),
+        "event_clock": head_mod.fmt_ts(event_ts_sec),
         "event_ts_sec": event_ts_sec,
         "next_relative_idx": 0,
+        "camera_label": camera_label,
+        "session_details": session_details,
+        "event_dir": None,
         **payload,
     }
+    _ensure_sequence_storage(sequence)
 
     pre_count = len(recent_frames)
     for relative_idx, snapshot in zip(range(-pre_count, 0), recent_frames):
@@ -559,6 +1141,7 @@ def queue_evidence_sequence(sequence_queue, recent_frames, behavior_type,
         )
 
     sequence_queue.append(sequence)
+    return sequence
 
 
 def flush_evidence_sequences(sequence_queue, snapshot):
@@ -575,21 +1158,186 @@ def flush_evidence_sequences(sequence_queue, snapshot):
         seq["next_relative_idx"] += 1
         if seq["next_relative_idx"] <= EVIDENCE_POST_EVENT_FRAMES:
             active_sequences.append(seq)
+        else:
+            _finalize_evidence_sequence(seq)
 
     return active_sequences
 
 
 def create_flask_app():
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        template_folder=str(TEMPLATE_DIR),
+        static_folder=str(STATIC_DIR),
+        static_url_path="/static",
+    )
+    app.secret_key = _dashboard_auth["secret_key"]
+    app.permanent_session_lifetime = timedelta(
+        minutes=_dashboard_auth["session_ttl_minutes"]
+    )
     import logging
 
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     @app.route("/")
     def index():
-        return render_template_string(HTML_PAGE)
+        if not _is_authenticated():
+            return redirect(url_for("login"))
+        if _dashboard_require_session_setup and not _dashboard_snapshot()["session_details"]:
+            return redirect(url_for("session_setup"))
+        return redirect(url_for("dashboard"))
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error_message = ""
+        next_path = request.args.get("next", "").strip()
+
+        if request.method == "POST":
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            next_path = request.form.get("next", "").strip()
+
+            if (
+                username == _dashboard_auth["username"]
+                and _password_matches(_dashboard_auth["password"], password)
+            ):
+                session.clear()
+                session.permanent = True
+                session["authenticated"] = True
+                session["username"] = username
+                if next_path.startswith("/"):
+                    return redirect(next_path)
+                return redirect(url_for("index"))
+
+            error_message = "Invalid credentials. Check the configured dashboard username and password."
+
+        return render_template(
+            "login.html",
+            error_message=error_message,
+            next_path=next_path,
+        )
+
+    @app.route("/logout")
+    @_login_required
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
+    @app.route("/session-setup", methods=["GET", "POST"])
+    @_login_required
+    def session_setup():
+        snapshot = _dashboard_snapshot()
+        error_message = ""
+        form_seed = snapshot["session_details"] or snapshot.get("session_form_defaults", {})
+        form_values = _merge_session_details(form_seed)
+
+        if not _dashboard_require_session_setup and _start_monitoring_callback is None:
+            return redirect(url_for("dashboard"))
+
+        if request.method == "POST":
+            if snapshot["status"] in {"starting", "manual_setup", "running"}:
+                error_message = "Monitoring is already active. Open the dashboard to follow the live session."
+            else:
+                submission_payload = {
+                    "subject_code": request.form.get("subject_code", ""),
+                    "professor": request.form.get("professor", ""),
+                    "session_date": request.form.get("session_date", ""),
+                    "start_time": request.form.get("start_time", ""),
+                    "end_time": request.form.get("end_time", ""),
+                    "video_path": request.form.get("existing_video_path", ""),
+                    "setup_profile_override": request.form.get("setup_profile_override", ""),
+                }
+
+                if snapshot["runtime_mode"] == "video":
+                    uploaded_video = request.files.get("video_file")
+                    if uploaded_video is not None and (uploaded_video.filename or "").strip():
+                        try:
+                            stored_video = _save_uploaded_video(uploaded_video)
+                        except ValueError as exc:
+                            error_message = str(exc)
+                        else:
+                            submission_payload["video_path"] = str(stored_video)
+
+                submitted = _merge_session_details(submission_payload)
+                form_values = submitted
+                if (
+                    snapshot["runtime_mode"] == "video"
+                    and not submitted.get("video_path")
+                    and not error_message
+                ):
+                    error_message = "Select a video file before starting video monitoring."
+
+                if not error_message:
+                    begin_dashboard_session(submitted)
+                    if _start_monitoring_callback is not None:
+                        try:
+                            _start_monitoring_callback(submitted)
+                        except Exception as exc:
+                            error_message = str(exc)
+                            set_dashboard_status(
+                                "error",
+                                "Monitoring could not be started.",
+                                monitoring_active=False,
+                                system_state="error",
+                                error_message=error_message,
+                            )
+                        else:
+                            return redirect(url_for("dashboard"))
+                    else:
+                        return redirect(url_for("dashboard"))
+
+        snapshot = _dashboard_snapshot()
+        setup_profile_path = Path(snapshot["setup_profile_path"]) if snapshot["setup_profile_path"] else None
+        has_saved_setup = setup_profile_path is not None and setup_profile_path.exists()
+        return render_template(
+            "session_setup.html",
+            error_message=error_message,
+            form_values=form_values,
+            runtime_mode=snapshot["runtime_mode"],
+            source_label=snapshot["source_label"],
+            status=snapshot["status"],
+            status_message=snapshot["status_message"],
+            has_saved_setup=has_saved_setup,
+            setup_profile_path=str(setup_profile_path) if setup_profile_path else "",
+            form_defaults=snapshot.get("session_form_defaults", {}),
+        )
+
+    @app.route("/dashboard")
+    @_login_required
+    def dashboard():
+        snapshot = _public_dashboard_snapshot()
+        return render_template(
+            "dashboard.html",
+            dashboard_json=json.dumps(snapshot),
+            username=session.get("username", _dashboard_auth["username"]),
+        )
+
+    @app.route("/api/dashboard")
+    @_api_login_required
+    def dashboard_api():
+        return jsonify(_public_dashboard_snapshot())
+
+    @app.route("/api/popup/dismiss", methods=["POST"])
+    @_api_login_required
+    def dismiss_popup_api():
+        payload = request.get_json(silent=True) or {}
+        dismiss_dashboard_popup(payload.get("incident_id"))
+        return jsonify({"ok": True})
+
+    @app.route("/evidence/<path:relative_path>")
+    @_login_required
+    def evidence_file(relative_path):
+        try:
+            evidence_path = _safe_evidence_path(relative_path)
+        except ValueError:
+            abort(404)
+
+        if not evidence_path.exists() or not evidence_path.is_file():
+            abort(404)
+        return send_file(evidence_path)
 
     @app.route("/video_feed")
+    @_login_required
     def video_feed():
         def generate():
             while True:
@@ -922,6 +1670,19 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     print("=" * 78)
     print()
 
+    set_dashboard_status(
+        "running",
+        "Monitoring live classroom session.",
+        monitoring_active=True,
+        system_state="active",
+    )
+    update_dashboard_metrics(
+        assigned_students=len(student_map),
+        total_frames=total_frames,
+        source_fps=fps,
+        elapsed_text="00:00:00",
+    )
+
     if source_mode == "video":
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
@@ -931,6 +1692,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     hand_alert_total = 0
     hand_warning_total = 0
     object_alert_total = 0
+    object_alert_conf_total = 0.0
     t_start = time.perf_counter()
     source_start = time.perf_counter()
 
@@ -1555,6 +2317,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     >= obj_mod.EVENT_COOLDOWN_SEC
                 ):
                     object_alert_total += 1
+                    object_alert_conf_total += conf
                     obj_mod.log_alert(cls_name, student_num, conf, ts_sec)
                     object_cooldowns[cooldown_key] = ts_sec
                     frame_object_alerts.append(
@@ -1836,52 +2599,94 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 },
                 "object_boxes": dict(frame_object_boxes),
             }
+            new_sequences = []
 
             for behavior, student_num in head_frame_events:
-                queue_evidence_sequence(
-                    evidence_sequences,
-                    recent_evidence_frames,
-                    "head",
-                    ts_sec,
-                    student_num=student_num,
-                    behavior=behavior,
+                new_sequences.append(
+                    queue_evidence_sequence(
+                        evidence_sequences,
+                        recent_evidence_frames,
+                        "head",
+                        ts_sec,
+                        student_num=student_num,
+                        behavior=behavior,
+                    )
                 )
 
             for src_num, nbr_num, _ in passing_frame_events:
-                queue_evidence_sequence(
-                    evidence_sequences,
-                    recent_evidence_frames,
-                    "passing",
-                    ts_sec,
-                    student_nums=[src_num, nbr_num],
+                new_sequences.append(
+                    queue_evidence_sequence(
+                        evidence_sequences,
+                        recent_evidence_frames,
+                        "passing",
+                        ts_sec,
+                        student_nums=[src_num, nbr_num],
+                    )
                 )
 
             for line_idx, student_num in frame_hand_alerts:
-                queue_evidence_sequence(
-                    evidence_sequences,
-                    recent_evidence_frames,
-                    "hands",
-                    ts_sec,
-                    video_name=video_name,
-                    line_idx=line_idx,
-                    student_num=student_num,
+                new_sequences.append(
+                    queue_evidence_sequence(
+                        evidence_sequences,
+                        recent_evidence_frames,
+                        "hands",
+                        ts_sec,
+                        video_name=video_name,
+                        line_idx=line_idx,
+                        student_num=student_num,
+                    )
                 )
 
             for event in frame_object_alerts:
-                queue_evidence_sequence(
-                    evidence_sequences,
-                    recent_evidence_frames,
-                    "object",
-                    ts_sec,
-                    student_num=event["student_num"],
-                    class_name=event["class_name"],
-                    confidence=event["confidence"],
+                new_sequences.append(
+                    queue_evidence_sequence(
+                        evidence_sequences,
+                        recent_evidence_frames,
+                        "object",
+                        ts_sec,
+                        student_num=event["student_num"],
+                        class_name=event["class_name"],
+                        confidence=event["confidence"],
+                    )
                 )
 
             evidence_sequences = flush_evidence_sequences(
                 evidence_sequences, evidence_snapshot
             )
             recent_evidence_frames.append(evidence_snapshot)
+
+            for sequence in new_sequences:
+                record_dashboard_incident(
+                    _build_sequence_incident(sequence, status="recording")
+                )
+
+            update_dashboard_metrics(
+                total_incidents=(
+                    head_alert_total
+                    + passing_alert_total
+                    + hand_alert_total
+                    + object_alert_total
+                ),
+                head_alerts=head_alert_total,
+                passing_alerts=passing_alert_total,
+                hand_alerts=hand_alert_total,
+                hand_warnings=hand_warning_total,
+                object_alerts=object_alert_total,
+                tracked_students=tracked_count,
+                assigned_students=len(student_map),
+                processing_fps=round(actual_fps, 2),
+                source_fps=round(fps, 2),
+                inference_ms=round(inference_ms, 1),
+                frame_idx=frame_idx,
+                total_frames=total_frames,
+                elapsed_text=head_mod.fmt_ts(ts_sec),
+                object_confidence_avg=(
+                    round(object_alert_conf_total / object_alert_total, 4)
+                    if object_alert_total > 0 else 0.0
+                ),
+                hand_detections=len(hand_boxes),
+                object_detections=len(object_dets),
+            )
 
             with _frame_lock:
                 _latest_frame = annotated
@@ -1895,9 +2700,36 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
     except KeyboardInterrupt:
         head_mod.log_info("Interrupted by user.")
+        set_dashboard_status(
+            "completed",
+            "Monitoring was stopped by the operator.",
+            monitoring_active=False,
+            system_state="idle",
+        )
 
     elapsed = time.perf_counter() - t_start
     head_alert_total = sum(head_stats.values())
+    update_dashboard_metrics(
+        total_incidents=(
+            head_alert_total
+            + passing_alert_total
+            + hand_alert_total
+            + object_alert_total
+        ),
+        head_alerts=head_alert_total,
+        passing_alerts=passing_alert_total,
+        hand_alerts=hand_alert_total,
+        hand_warnings=hand_warning_total,
+        object_alerts=object_alert_total,
+        processing_fps=round(frame_idx / elapsed, 2) if elapsed > 0 else 0.0,
+        monitoring_complete=True,
+    )
+    set_dashboard_status(
+        "completed",
+        "Monitoring session ended.",
+        monitoring_active=False,
+        system_state="idle",
+    )
 
     print()
     print("=" * 78)

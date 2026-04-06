@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel Session Setup</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="auth-body">
+    <main class="auth-shell auth-shell-wide">
+        <section class="brand-column">
+            <div class="brand-mark">
+                <span class="brand-mark-inner">S</span>
+            </div>
+            <p class="brand-kicker">Sentinel</p>
+            <h1 class="brand-title">Session Setup</h1>
+            <p class="brand-copy">
+                Configure the monitoring session before the runtime opens the live detection flow.
+            </p>
+            <div class="chip-row">
+                <span class="chip">{{ runtime_mode|upper }}</span>
+                <span class="chip">{{ source_label }}</span>
+                <span class="chip chip-outline">{{ status|replace('_', ' ')|title }}</span>
+            </div>
+        </section>
+
+        <section class="auth-card auth-card-wide">
+            <div class="card-heading">
+                <h2>Session Details</h2>
+                <p>These values are shown on the dashboard while monitoring is active.</p>
+            </div>
+
+            {% if error_message %}
+            <div class="banner banner-danger">{{ error_message }}</div>
+            {% endif %}
+
+            {% if status_message %}
+            <div class="banner banner-info">{{ status_message }}</div>
+            {% endif %}
+
+            {% if has_saved_setup %}
+            <div class="banner banner-success">
+                Saved setup profile detected: <span class="mono-inline">{{ setup_profile_path }}</span>
+            </div>
+            {% else %}
+            <div class="banner banner-warning">
+                No saved setup profile detected. Starting monitoring may require manual calibration on the device screen.
+            </div>
+            {% endif %}
+
+            <form method="post" class="form-grid form-grid-two" enctype="multipart/form-data">
+                {% if runtime_mode == "video" %}
+                <div class="field-group field-group-full">
+                    <label class="field-label" for="video_file">Video File</label>
+                    <input id="video_file" name="video_file" class="field-input" type="file" accept="video/*,.mp4,.avi,.mov,.mkv,.m4v,.webm" {% if not form_values.video_path %}required{% endif %}>
+                    <input type="hidden" name="existing_video_path" value="{{ form_values.video_path }}">
+                    {% if form_values.video_path %}
+                    <p class="field-help">Current selection: <span class="mono-inline">{{ form_values.video_path }}</span></p>
+                    {% else %}
+                    <p class="field-help">Pick a local video file from your device to upload for playback.</p>
+                    {% endif %}
+                </div>
+
+                <div class="field-group field-group-full">
+                    <label class="field-label" for="setup_profile_override">Setup Profile Override</label>
+                    <input id="setup_profile_override" name="setup_profile_override" class="field-input" type="text" placeholder="Optional .json calibration path" value="{{ form_values.setup_profile_override }}">
+                </div>
+                {% endif %}
+
+                <div class="field-group">
+                    <label class="field-label" for="subject_code">Subject Code</label>
+                    <input id="subject_code" name="subject_code" class="field-input" type="text" placeholder="e.g. CS 321" value="{{ form_values.subject_code }}" required>
+                </div>
+
+                <div class="field-group">
+                    <label class="field-label" for="professor">Professor</label>
+                    <input id="professor" name="professor" class="field-input" type="text" placeholder="e.g. Dr. Juan Dela Cruz" value="{{ form_values.professor }}" required>
+                </div>
+
+                <div class="field-group">
+                    <label class="field-label" for="session_date">Date</label>
+                    <input id="session_date" name="session_date" class="field-input" type="date" value="{{ form_values.session_date }}" required>
+                </div>
+
+                <div class="field-group time-group">
+                    <div>
+                        <label class="field-label" for="start_time">Start Time</label>
+                        <input id="start_time" name="start_time" class="field-input" type="time" value="{{ form_values.start_time }}" required>
+                    </div>
+                    <div>
+                        <label class="field-label" for="end_time">End Time</label>
+                        <input id="end_time" name="end_time" class="field-input" type="time" value="{{ form_values.end_time }}" required>
+                    </div>
+                </div>
+
+                <div class="session-actions">
+                    <button
+                        type="submit"
+                        class="primary-button"
+                        {% if status in ["starting", "manual_setup", "running"] %}disabled{% endif %}
+                    >
+                        Start Monitoring
+                    </button>
+                    <a class="secondary-link" href="{{ url_for('dashboard') }}">Open Dashboard</a>
+                </div>
+            </form>
+        </section>
+    </main>
+</body>
+</html>
