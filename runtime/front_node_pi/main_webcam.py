@@ -52,8 +52,11 @@ def _require_existing_file(path, label, color):
         sys.exit(1)
 
 
-def _resolve_calibration_path(args, config, setup_io, source_label, head_mod):
-    explicit_calibration = resolve_cli_path(args.calibration_file)
+def _resolve_dashboard_calibration_path(args, session_details, config, setup_io, source_label, head_mod):
+    explicit_calibration = (
+        resolve_cli_path(session_details.get("setup_profile_override"))
+        or resolve_cli_path(args.calibration_file)
+    )
     calibration_path = None
     if explicit_calibration is not None:
         calibration_path = explicit_calibration
@@ -174,8 +177,9 @@ def main() -> None:
                 vdevice=shared_vdevice,
             )
 
-            explicit_calibration, calibration_path = _resolve_calibration_path(
+            explicit_calibration, calibration_path = _resolve_dashboard_calibration_path(
                 args,
+                session_details,
                 config,
                 setup_io,
                 source_label,

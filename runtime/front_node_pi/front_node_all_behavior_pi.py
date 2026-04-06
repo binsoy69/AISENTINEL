@@ -102,7 +102,7 @@ except ImportError:  # pragma: no cover - optional dependency surface
 TEMPLATE_DIR = SCRIPT_DIR / "web" / "templates"
 STATIC_DIR = SCRIPT_DIR / "web" / "static"
 EVENTS_DIRNAME = "events"
-VIDEO_UPLOAD_DIR = SCRIPT_DIR / "data" / "session_uploads"
+SESSION_UPLOAD_DIR = SCRIPT_DIR / "data" / "session_uploads"
 RECENT_INCIDENT_LIMIT = 40
 HISTORY_INCIDENT_LIMIT = 24
 
@@ -535,8 +535,25 @@ def _save_uploaded_video(upload_storage) -> Path:
 
     safe_stem = _slugify(Path(filename).stem)
     target_name = f"{_dashboard_now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{suffix}"
-    VIDEO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    target_path = (VIDEO_UPLOAD_DIR / target_name).resolve(strict=False)
+    SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = (SESSION_UPLOAD_DIR / target_name).resolve(strict=False)
+    upload_storage.save(target_path)
+    return target_path
+
+
+def _save_uploaded_calibration(upload_storage) -> Path:
+    filename = (upload_storage.filename or "").strip()
+    if not filename:
+        raise ValueError("Select a calibration JSON file.")
+
+    suffix = Path(filename).suffix.lower()
+    if suffix != ".json":
+        raise ValueError("Calibration file must be a .json setup profile.")
+
+    safe_stem = _slugify(Path(filename).stem)
+    target_name = f"{_dashboard_now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{suffix}"
+    SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = (SESSION_UPLOAD_DIR / target_name).resolve(strict=False)
     upload_storage.save(target_path)
     return target_path
 
@@ -1230,6 +1247,8 @@ def create_flask_app():
         error_message = ""
         form_seed = snapshot["session_details"] or snapshot.get("session_form_defaults", {})
         form_values = _merge_session_details(form_seed)
+        if not form_values.get("setup_profile_override") and snapshot.get("setup_profile_path"):
+            form_values["setup_profile_override"] = snapshot["setup_profile_path"]
 
         if not _dashboard_require_session_setup and _start_monitoring_callback is None:
             return redirect(url_for("dashboard"))
@@ -1245,7 +1264,7 @@ def create_flask_app():
                     "start_time": request.form.get("start_time", ""),
                     "end_time": request.form.get("end_time", ""),
                     "video_path": request.form.get("existing_video_path", ""),
-                    "setup_profile_override": request.form.get("setup_profile_override", ""),
+                    "setup_profile_override": request.form.get("existing_setup_profile_override", ""),
                 }
 
                 if snapshot["runtime_mode"] == "video":
@@ -1257,6 +1276,15 @@ def create_flask_app():
                             error_message = str(exc)
                         else:
                             submission_payload["video_path"] = str(stored_video)
+
+                uploaded_calibration = request.files.get("calibration_file")
+                if uploaded_calibration is not None and (uploaded_calibration.filename or "").strip():
+                    try:
+                        stored_calibration = _save_uploaded_calibration(uploaded_calibration)
+                    except ValueError as exc:
+                        error_message = str(exc)
+                    else:
+                        submission_payload["setup_profile_override"] = str(stored_calibration)
 
                 submitted = _merge_session_details(submission_payload)
                 form_values = submitted

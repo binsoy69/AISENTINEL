@@ -61,11 +61,18 @@
                     {% endif %}
                 </div>
 
-                <div class="field-group field-group-full">
-                    <label class="field-label" for="setup_profile_override">Setup Profile Override</label>
-                    <input id="setup_profile_override" name="setup_profile_override" class="field-input" type="text" placeholder="Optional .json calibration path" value="{{ form_values.setup_profile_override }}">
-                </div>
                 {% endif %}
+
+                <div class="field-group field-group-full">
+                    <label class="field-label" for="calibration_file">Calibration File</label>
+                    <input id="calibration_file" name="calibration_file" class="field-input" type="file" accept=".json,application/json">
+                    <input type="hidden" name="existing_setup_profile_override" value="{{ form_values.setup_profile_override }}">
+                    {% if form_values.setup_profile_override %}
+                    <p class="field-help">Current selection: <span class="mono-inline">{{ form_values.setup_profile_override }}</span></p>
+                    {% else %}
+                    <p class="field-help">Optional. Pick a saved setup JSON if you want to skip or override manual calibration.</p>
+                    {% endif %}
+                </div>
 
                 <div class="field-group">
                     <label class="field-label" for="subject_code">Subject Code</label>
