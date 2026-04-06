@@ -32,6 +32,8 @@ WEBCAM_STARTUP_READ_ATTEMPTS = 30
 WEBCAM_STARTUP_READ_PAUSE_SEC = 0.04
 WEBCAM_BUFFER_SIZE = 1
 WEBCAM_POST_CONFIG_SETTLE_SEC = 0.30
+WEBCAM_MIN_ACCEPTABLE_FPS = 10.0
+WEBCAM_MIN_ACCEPTABLE_FPS_RATIO = 0.60
 WEBCAM_FALLBACK_CAPTURE_PROFILES = (
     (640, 480, "640x480 fallback"),
     (0, 0, "driver default"),
@@ -334,6 +336,21 @@ def describe_webcam_capture(cap) -> str:
     return " | ".join(parts)
 
 
+def _is_acceptable_webcam_fps(actual_fps: float, target_fps: float) -> bool:
+    """Return True when the negotiated webcam FPS is usable for live runtime."""
+    if actual_fps <= 0 or actual_fps > 120:
+        return True
+
+    min_target_fps = WEBCAM_MIN_ACCEPTABLE_FPS
+    if target_fps > 0:
+        min_target_fps = max(
+            WEBCAM_MIN_ACCEPTABLE_FPS,
+            target_fps * WEBCAM_MIN_ACCEPTABLE_FPS_RATIO,
+        )
+
+    return actual_fps >= min_target_fps
+
+
 def _configure_webcam_capture(cap, capture_width: int, capture_height: int,
                               capture_fps: float, use_mjpg: bool,
                               force_fps: bool) -> None:
@@ -450,6 +467,23 @@ def open_webcam_capture(config: FrontNodeRuntimeConfig, head_mod):
                     f"{backend_name} backend ({config_name}, {profile_name}) -> "
                     f"{describe_webcam_capture(cap)}."
                 )
+
+                actual_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+                if not _is_acceptable_webcam_fps(
+                    actual_fps,
+                    webcam_cfg.capture_fps,
+                ):
+                    head_mod.log_info(
+                        f"Rejecting webcam mode with low negotiated FPS "
+                        f"({actual_fps:.1f}); target is "
+                        f"{webcam_cfg.capture_fps:.1f}."
+                    )
+                    cap.release()
+                    tried_configs.append(
+                        f"{source_name} | {profile_name} | {backend_name} "
+                        f"({config_name}, low FPS={actual_fps:.1f})"
+                    )
+                    continue
 
                 warmup_failed = False
                 if warmup_frames > 0:
