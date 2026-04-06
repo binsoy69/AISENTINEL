@@ -91,8 +91,13 @@ def main() -> None:
             sys.exit(1)
 
         width = int(cap.get(3))
+        actual_fps = cap.get(5) or 0.0
+        if actual_fps <= 0 or actual_fps > 120:
+            actual_fps = config.webcam_source.capture_fps
         disp_scale = min(1.0, 1280 / width) if width > 1280 else 1.0
-        head_mod.log_info(f"Webcam resolution: {width}x{int(cap.get(4))}")
+        head_mod.log_info(
+            f"Webcam resolution: {width}x{int(cap.get(4))} @ {actual_fps:.1f} FPS"
+        )
 
         pose_estimator = combined_mod.SharedHailoPoseEstimator(
             str(pose_path),

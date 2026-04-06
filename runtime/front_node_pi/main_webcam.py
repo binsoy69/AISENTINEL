@@ -114,8 +114,11 @@ def main() -> None:
 
         width = int(cap.get(3))
         height = int(cap.get(4))
+        actual_fps = cap.get(5) or 0.0
+        if actual_fps <= 0 or actual_fps > 120:
+            actual_fps = config.webcam_source.capture_fps
         disp_scale = min(1.0, 1280 / width) if width > 1280 else 1.0
-        head_mod.log_info(f"Webcam resolution: {width}x{height}")
+        head_mod.log_info(f"Webcam resolution: {width}x{height} @ {actual_fps:.1f} FPS")
 
         shared_vdevice = hands_mod.VDevice()
         head_mod.log_info("Hailo VDevice created (shared across all models).")
@@ -215,7 +218,7 @@ def main() -> None:
             port,
             roi_polygon=setup_bundle["roi_polygon"],
             source_mode="webcam",
-            source_fps=config.webcam_source.capture_fps,
+            source_fps=actual_fps,
         )
     finally:
         if cap is not None:

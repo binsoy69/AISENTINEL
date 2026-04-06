@@ -29,6 +29,9 @@ WEBCAM_READ_TIMEOUT_MS = 1000
 WEBCAM_STARTUP_READ_ATTEMPTS = 30
 WEBCAM_STARTUP_READ_PAUSE_SEC = 0.04
 WEBCAM_BUFFER_SIZE = 1
+WEBCAM_POST_CONFIG_SETTLE_SEC = 0.30
+WEBCAM_OPEN_VALIDATION_ATTEMPTS = 2
+WEBCAM_OPEN_VALIDATION_PAUSE_SEC = 0.05
 
 
 def load_runtime_modules() -> FrontNodeRuntimeModules:
@@ -214,7 +217,40 @@ def get_webcam_source_label(config: FrontNodeRuntimeConfig) -> str:
     return f"webcam_{config.webcam_source.camera_index}"
 
 
-def _configure_webcam_capture(cap, webcam_cfg, use_mjpg: bool) -> None:
+def _decode_fourcc(raw_value) -> str:
+    """Return a printable FOURCC string from an OpenCV numeric property."""
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return "unknown"
+
+    chars = [
+        chr((value >> shift) & 0xFF)
+        for shift in (0, 8, 16, 24)
+    ]
+    if any(ord(char) < 32 or ord(char) > 126 for char in chars):
+        return "unknown"
+
+    return "".join(chars)
+
+
+def describe_webcam_capture(cap) -> str:
+    """Return a compact description of the active webcam mode."""
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    fourcc = _decode_fourcc(cap.get(cv2.CAP_PROP_FOURCC))
+
+    parts = [f"{width}x{height}"]
+    if fps > 0:
+        parts.append(f"{fps:.1f} FPS")
+    if fourcc and fourcc != "unknown":
+        parts.append(f"FOURCC={fourcc}")
+    return " | ".join(parts)
+
+
+def _configure_webcam_capture(cap, webcam_cfg, use_mjpg: bool,
+                              force_fps: bool) -> None:
     """Apply webcam capture settings for live Pi usage."""
     if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
         cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, WEBCAM_OPEN_TIMEOUT_MS)
@@ -226,7 +262,7 @@ def _configure_webcam_capture(cap, webcam_cfg, use_mjpg: bool) -> None:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, webcam_cfg.capture_width)
     if webcam_cfg.capture_height > 0:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, webcam_cfg.capture_height)
-    if webcam_cfg.capture_fps > 0:
+    if force_fps and webcam_cfg.capture_fps > 0:
         cap.set(cv2.CAP_PROP_FPS, webcam_cfg.capture_fps)
     if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
         cap.set(cv2.CAP_PROP_BUFFERSIZE, WEBCAM_BUFFER_SIZE)
@@ -245,7 +281,8 @@ def read_webcam_frame(cap, attempts: int = WEBCAM_STARTUP_READ_ATTEMPTS,
 
 
 def _open_single_webcam_capture(camera_index: int, backend_id, webcam_cfg,
-                                use_mjpg: bool, require_frame: bool):
+                                use_mjpg: bool, force_fps: bool,
+                                require_frame: bool):
     """Open one webcam/backend combination and optionally validate startup frames."""
     if backend_id is None:
         cap = cv2.VideoCapture(camera_index)
@@ -256,9 +293,20 @@ def _open_single_webcam_capture(camera_index: int, backend_id, webcam_cfg,
         cap.release()
         return None
 
-    _configure_webcam_capture(cap, webcam_cfg, use_mjpg=use_mjpg)
+    _configure_webcam_capture(
+        cap,
+        webcam_cfg,
+        use_mjpg=use_mjpg,
+        force_fps=force_fps,
+    )
+    if WEBCAM_POST_CONFIG_SETTLE_SEC > 0:
+        time.sleep(WEBCAM_POST_CONFIG_SETTLE_SEC)
 
-    if require_frame and read_webcam_frame(cap, attempts=5, pause_sec=0.05) is None:
+    if require_frame and read_webcam_frame(
+        cap,
+        attempts=WEBCAM_OPEN_VALIDATION_ATTEMPTS,
+        pause_sec=WEBCAM_OPEN_VALIDATION_PAUSE_SEC,
+    ) is None:
         cap.release()
         return None
 
@@ -272,23 +320,28 @@ def open_webcam_capture(config: FrontNodeRuntimeConfig, head_mod):
     v4l2_backend = getattr(cv2, "CAP_V4L2", None)
     if v4l2_backend is not None:
         backend_attempts.extend([
-            ("V4L2", v4l2_backend, True, "MJPG"),
-            ("V4L2", v4l2_backend, False, "native"),
+            ("V4L2", v4l2_backend, True, False, "MJPG, driver FPS"),
+            ("V4L2", v4l2_backend, True, True, "MJPG, forced FPS"),
+            ("V4L2", v4l2_backend, False, False, "native, driver FPS"),
+            ("V4L2", v4l2_backend, False, True, "native, forced FPS"),
         ])
     backend_attempts.extend([
-        ("default", None, True, "MJPG"),
-        ("default", None, False, "native"),
+        ("default", None, True, False, "MJPG, driver FPS"),
+        ("default", None, True, True, "MJPG, forced FPS"),
+        ("default", None, False, False, "native, driver FPS"),
+        ("default", None, False, True, "native, forced FPS"),
     ])
 
     warmup_frames = max(0, webcam_cfg.warmup_frames)
     tried_configs: list[str] = []
 
-    for backend_name, backend_id, use_mjpg, config_name in backend_attempts:
+    for backend_name, backend_id, use_mjpg, force_fps, config_name in backend_attempts:
         cap = _open_single_webcam_capture(
             webcam_cfg.camera_index,
             backend_id,
             webcam_cfg,
             use_mjpg=use_mjpg,
+            force_fps=force_fps,
             require_frame=True,
         )
         if cap is None:
@@ -297,7 +350,8 @@ def open_webcam_capture(config: FrontNodeRuntimeConfig, head_mod):
 
         head_mod.log_info(
             f"Opened webcam index {webcam_cfg.camera_index} using "
-            f"{backend_name} backend ({config_name})."
+            f"{backend_name} backend ({config_name}) -> "
+            f"{describe_webcam_capture(cap)}."
         )
 
         warmup_failed = False
