@@ -17,6 +17,7 @@ from runtime_support import (
     get_webcam_source_label,
     load_runtime_modules,
     open_webcam_capture,
+    read_webcam_frame,
     require_detection_environment,
 )
 
@@ -106,8 +107,8 @@ def main() -> None:
 
     try:
         cap = open_webcam_capture(config, head_mod)
-        ret, first_frame = cap.read()
-        if not ret:
+        first_frame = read_webcam_frame(cap)
+        if first_frame is None:
             print(f"{head_mod.TC.RED}[ERROR] Cannot read webcam frame.{head_mod.TC.RESET}")
             sys.exit(1)
 
