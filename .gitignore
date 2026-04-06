@@ -11,3 +11,5 @@ model_conversion/*
 notebooks/*
 tests/tests_on_pi/__pycache__/*
 tests/tests_on_pi/evidence*
+runtime/front_node_pi/__pycache__/*
+runtime/front_node_pi/data/*
