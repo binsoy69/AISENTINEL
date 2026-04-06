@@ -48,7 +48,15 @@
             </div>
             {% endif %}
 
-            <form method="post" class="form-grid form-grid-two" enctype="multipart/form-data">
+            <div class="banner banner-info" id="submission-status" hidden></div>
+
+            <form
+                id="session-setup-form"
+                method="post"
+                class="form-grid form-grid-two"
+                enctype="multipart/form-data"
+                data-runtime-mode="{{ runtime_mode }}"
+            >
                 {% if runtime_mode == "video" %}
                 <div class="field-group field-group-full">
                     <label class="field-label" for="video_file">Video File</label>
@@ -57,7 +65,7 @@
                     {% if form_values.video_path %}
                     <p class="field-help">Current selection: <span class="mono-inline">{{ form_values.video_path }}</span></p>
                     {% else %}
-                    <p class="field-help">Pick a local video file from your device to upload for playback.</p>
+                    <p class="field-help">Pick a local video file from your device to upload for playback. Large uploads can take time before the dashboard opens.</p>
                     {% endif %}
                 </div>
 
@@ -102,6 +110,7 @@
 
                 <div class="session-actions">
                     <button
+                        id="session-submit-button"
                         type="submit"
                         class="primary-button"
                         {% if status in ["starting", "manual_setup", "running"] %}disabled{% endif %}
@@ -113,5 +122,111 @@
             </form>
         </section>
     </main>
+
+    <script>
+        (() => {
+            const form = document.getElementById("session-setup-form");
+            if (!form || !window.XMLHttpRequest) {
+                return;
+            }
+
+            const runtimeMode = form.dataset.runtimeMode || "";
+            if (runtimeMode !== "video") {
+                return;
+            }
+
+            const submitButton = document.getElementById("session-submit-button");
+            const statusBanner = document.getElementById("submission-status");
+            const videoInput = document.getElementById("video_file");
+            const defaultButtonLabel = submitButton ? submitButton.textContent.trim() : "Start Monitoring";
+            let submitting = false;
+
+            function setStatus(message, isError = false) {
+                if (!statusBanner) {
+                    return;
+                }
+                statusBanner.hidden = !message;
+                statusBanner.textContent = message;
+                statusBanner.className = isError ? "banner banner-danger" : "banner banner-info";
+            }
+
+            function restoreForm() {
+                submitting = false;
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = defaultButtonLabel;
+                }
+            }
+
+            form.addEventListener("submit", (event) => {
+                if (submitting) {
+                    event.preventDefault();
+                    return;
+                }
+
+                const hasFreshVideoUpload = Boolean(
+                    videoInput &&
+                    videoInput.files &&
+                    videoInput.files.length > 0
+                );
+
+                if (!hasFreshVideoUpload) {
+                    return;
+                }
+
+                event.preventDefault();
+                submitting = true;
+
+                if (submitButton) {
+                    submitButton.disabled = true;
+                    submitButton.textContent = "Uploading Video...";
+                }
+                setStatus("Uploading the selected video to the runtime device. Large files can take several minutes.", false);
+
+                const xhr = new XMLHttpRequest();
+                xhr.open("POST", form.action || window.location.href, true);
+
+                xhr.upload.addEventListener("progress", (progressEvent) => {
+                    if (!progressEvent.lengthComputable) {
+                        setStatus("Uploading the selected video to the runtime device...", false);
+                        return;
+                    }
+
+                    const percent = Math.max(1, Math.min(100, Math.round((progressEvent.loaded / progressEvent.total) * 100)));
+                    setStatus(`Uploading the selected video to the runtime device... ${percent}%`, false);
+                });
+
+                xhr.addEventListener("load", () => {
+                    const finalUrl = xhr.responseURL || "";
+                    if (xhr.status >= 200 && xhr.status < 400) {
+                        if (finalUrl && finalUrl !== window.location.href) {
+                            window.location.assign(finalUrl);
+                            return;
+                        }
+
+                        if (xhr.responseText) {
+                            document.open();
+                            document.write(xhr.responseText);
+                            document.close();
+                            return;
+                        }
+
+                        window.location.reload();
+                        return;
+                    }
+
+                    restoreForm();
+                    setStatus("Monitoring could not be started. Check the session form and try again.", true);
+                });
+
+                xhr.addEventListener("error", () => {
+                    restoreForm();
+                    setStatus("The upload failed before monitoring could start. Check the terminal logs and retry.", true);
+                });
+
+                xhr.send(new FormData(form));
+            });
+        })();
+    </script>
 </body>
 </html>

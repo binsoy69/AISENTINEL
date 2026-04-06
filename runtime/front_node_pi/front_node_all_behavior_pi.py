@@ -1254,6 +1254,14 @@ def create_flask_app():
             return redirect(url_for("dashboard"))
 
         if request.method == "POST":
+            if snapshot["runtime_mode"] == "video":
+                request_size = request.content_length or 0
+                if request_size > 0:
+                    head_mod.log_info(
+                        f"Video session setup submitted ({request_size / (1024 * 1024):.1f} MiB request body)."
+                    )
+                else:
+                    head_mod.log_info("Video session setup submitted.")
             if snapshot["status"] in {"starting", "manual_setup", "running"}:
                 error_message = "Monitoring is already active. Open the dashboard to follow the live session."
             else:
@@ -1271,19 +1279,27 @@ def create_flask_app():
                     uploaded_video = request.files.get("video_file")
                     if uploaded_video is not None and (uploaded_video.filename or "").strip():
                         try:
+                            head_mod.log_info(
+                                f"Receiving uploaded video: {(uploaded_video.filename or '').strip()}"
+                            )
                             stored_video = _save_uploaded_video(uploaded_video)
                         except ValueError as exc:
                             error_message = str(exc)
                         else:
+                            head_mod.log_info(f"Uploaded video saved to: {stored_video}")
                             submission_payload["video_path"] = str(stored_video)
 
                 uploaded_calibration = request.files.get("calibration_file")
                 if uploaded_calibration is not None and (uploaded_calibration.filename or "").strip():
                     try:
+                        head_mod.log_info(
+                            f"Receiving uploaded calibration: {(uploaded_calibration.filename or '').strip()}"
+                        )
                         stored_calibration = _save_uploaded_calibration(uploaded_calibration)
                     except ValueError as exc:
                         error_message = str(exc)
                     else:
+                        head_mod.log_info(f"Uploaded calibration saved to: {stored_calibration}")
                         submission_payload["setup_profile_override"] = str(stored_calibration)
 
                 submitted = _merge_session_details(submission_payload)

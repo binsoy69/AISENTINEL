@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+import traceback
 from pathlib import Path
 
 import cv2
@@ -321,6 +322,7 @@ def main() -> None:
                 system_state="error",
                 error_message=str(exc),
             )
+            traceback.print_exc()
             print(f"{head_mod.TC.RED}[ERROR] {exc}{head_mod.TC.RESET}")
         finally:
             if cap is not None:
@@ -337,6 +339,7 @@ def main() -> None:
         with worker_lock:
             if worker_thread is not None and worker_thread.is_alive():
                 raise RuntimeError("Monitoring is already running.")
+            head_mod.log_info("Video session accepted from dashboard. Starting monitoring worker...")
             worker_thread = threading.Thread(
                 target=run_monitoring_session,
                 args=(session_details,),
