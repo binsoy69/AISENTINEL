@@ -505,7 +505,7 @@ body {
 }
 
 .overview-grid {
-    grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.9fr);
+    grid-template-columns: 1fr;
     align-items: start;
 }
 
@@ -1528,7 +1528,7 @@ body {
 
 .overview-grid {
     gap: 16px;
-    grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+    grid-template-columns: 1fr;
 }
 
 .stat-card,
@@ -1560,10 +1560,14 @@ body {
     border-radius: 20px;
 }
 
+.panel-side {
+    min-width: 0;
+}
+
 .incident-list {
     margin-top: 16px;
     gap: 12px;
-    max-height: min(48vh, 430px);
+    max-height: none;
     padding-right: 4px;
 }
 
