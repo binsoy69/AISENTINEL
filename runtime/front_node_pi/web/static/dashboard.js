@@ -73,8 +73,24 @@ function systemClass(snapshot) {
     return "";
 }
 
-function incidentActionLink(incident) {
-    return incident.gif_url || incident.poster_url || incident.manifest_url || "#";
+function incidentActionMeta(incident) {
+    if (incident.gif_url) {
+        return { href: incident.gif_url, label: "View GIF", disabled: false };
+    }
+    if (incident.poster_url) {
+        return { href: incident.poster_url, label: "Preview Snapshot", disabled: false };
+    }
+    if (incident.manifest_url) {
+        return { href: incident.manifest_url, label: "View Manifest", disabled: false };
+    }
+    return { href: "#", label: "Evidence Pending", disabled: true };
+}
+
+function renderActionButton(action, className) {
+    if (action.disabled) {
+        return `<span class="${className} is-disabled">${escapeHtml(action.label)}</span>`;
+    }
+    return `<a class="${className}" href="${action.href}" target="_blank" rel="noreferrer">${escapeHtml(action.label)}</a>`;
 }
 
 function renderStatus(snapshot) {
@@ -144,7 +160,7 @@ function renderIncidentList(snapshot) {
                 <p class="stat-foot">${escapeHtml(incident.summary)}</p>
                 <div class="incident-meta">${escapeHtml(incidentMeta(incident))}</div>
                 <div class="incident-actions">
-                    <a class="ghost-button" href="${incidentActionLink(incident)}" target="_blank" rel="noreferrer">Open Evidence</a>
+                    ${renderActionButton(incidentActionMeta(incident), "ghost-button")}
                 </div>
             </div>
         </article>
@@ -180,7 +196,7 @@ function renderHistory(snapshot) {
                 <p class="stat-foot">${escapeHtml(incident.summary)}</p>
                 <div class="history-meta">${escapeHtml(incidentMeta(incident))}</div>
                 <div class="incident-actions">
-                    <a class="primary-button" href="${incidentActionLink(incident)}" target="_blank" rel="noreferrer">View GIF</a>
+                    ${renderActionButton(incidentActionMeta(incident), "primary-button")}
                     ${incident.manifest_url
                         ? `<a class="ghost-button" href="${incident.manifest_url}" target="_blank" rel="noreferrer">Manifest</a>`
                         : ""}
@@ -218,6 +234,23 @@ function closeModal() {
     state.modalIncidentId = null;
 }
 
+function renderModalIncident(incident) {
+    const preview = incident.gif_url || incident.poster_url;
+    const action = incidentActionMeta(incident);
+
+    selectors.modalPreviewImage.src = preview || "";
+    selectors.modalPreviewImage.style.display = preview ? "block" : "none";
+    selectors.modalPreviewImage.alt = incident.type_label || "Incident evidence";
+    selectors.modalCopy.innerHTML = `
+        <strong>${escapeHtml(incident.type_label || "Incident")}</strong>
+        <span>${escapeHtml(incident.summary || "")}</span>
+        <span>${escapeHtml(incidentMeta(incident))}</span>
+    `;
+    selectors.modalViewLink.href = action.disabled ? "#" : action.href;
+    selectors.modalViewLink.textContent = action.label;
+    selectors.modalViewLink.classList.toggle("is-disabled", action.disabled);
+}
+
 async function dismissPopup(incidentId) {
     if (incidentId) {
         state.dismissedIncidentIds.add(incidentId);
@@ -236,20 +269,11 @@ async function dismissPopup(incidentId) {
 }
 
 function showPopup(incident) {
-    if (!incident || !incident.id || state.dismissedIncidentIds.has(incident.id) || state.modalIncidentId === incident.id) {
+    if (!incident || !incident.id || state.dismissedIncidentIds.has(incident.id)) {
         return;
     }
 
-    const preview = incident.gif_url || incident.poster_url;
-    selectors.modalPreviewImage.src = preview || "";
-    selectors.modalPreviewImage.style.display = preview ? "block" : "none";
-    selectors.modalPreviewImage.alt = incident.type_label || "Incident evidence";
-    selectors.modalCopy.innerHTML = `
-        <strong>${escapeHtml(incident.type_label || "Incident")}</strong>
-        <span>${escapeHtml(incident.summary || "")}</span>
-        <span>${escapeHtml(incidentMeta(incident))}</span>
-    `;
-    selectors.modalViewLink.href = incidentActionLink(incident);
+    renderModalIncident(incident);
     selectors.modal.classList.remove("hidden");
     state.modalIncidentId = incident.id;
 }

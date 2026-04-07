@@ -68,6 +68,8 @@ EVIDENCE_POST_EVENT_FRAMES = 10
 
 # ── Shared globals for Flask streaming ───────────────────────
 _latest_frame = None
+_latest_stream_jpeg = None
+_latest_stream_seq = 0
 _frame_lock = threading.Lock()
 _dashboard_lock = threading.Lock()
 
@@ -107,6 +109,9 @@ SESSION_UPLOAD_DIR = SCRIPT_DIR / "data" / "session_uploads"
 RECENT_INCIDENT_LIMIT = 40
 HISTORY_INCIDENT_LIMIT = 24
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}
+STREAM_JPEG_QUALITY = 68
+STREAM_MAX_WIDTH = 960
+STREAM_MAX_FPS = 12.0
 
 _start_monitoring_callback = None
 _dashboard_require_session_setup = False
@@ -299,7 +304,7 @@ def configure_web_dashboard(
     require_session_setup: bool = False,
     session_form_defaults: dict | None = None,
 ) -> None:
-    global _start_monitoring_callback, _dashboard_require_session_setup, _latest_frame
+    global _start_monitoring_callback, _dashboard_require_session_setup
 
     _start_monitoring_callback = start_monitoring_callback
     _dashboard_require_session_setup = require_session_setup
@@ -341,12 +346,10 @@ def configure_web_dashboard(
         )
         _update_dashboard_timestamp_locked()
 
-    with _frame_lock:
-        _latest_frame = None
+    _reset_dashboard_stream_cache()
 
 
 def begin_dashboard_session(session_details: dict | None) -> None:
-    global _latest_frame
     with _dashboard_lock:
         _dashboard_state["session_details"] = _merge_session_details(session_details)
         _dashboard_state["status"] = "starting"
@@ -360,8 +363,7 @@ def begin_dashboard_session(session_details: dict | None) -> None:
         _dashboard_state["current_error"] = ""
         _update_dashboard_timestamp_locked()
 
-    with _frame_lock:
-        _latest_frame = None
+    _reset_dashboard_stream_cache()
 
 
 def set_dashboard_status(
@@ -524,6 +526,54 @@ def _safe_evidence_path(relative_path: str) -> Path:
     if evidence_root not in candidate.parents and candidate != evidence_root:
         raise ValueError("Requested evidence path is outside the evidence root.")
     return candidate
+
+
+def _reset_dashboard_stream_cache() -> None:
+    global _latest_frame, _latest_stream_jpeg, _latest_stream_seq
+    with _frame_lock:
+        _latest_frame = None
+        _latest_stream_jpeg = None
+        _latest_stream_seq = 0
+
+
+def _encode_dashboard_frame(frame) -> bytes | None:
+    if frame is None:
+        return None
+
+    height, width = frame.shape[:2]
+    stream_frame = frame
+    if width > STREAM_MAX_WIDTH:
+        scale = STREAM_MAX_WIDTH / float(width)
+        resized_height = max(1, int(round(height * scale)))
+        stream_frame = cv2.resize(
+            frame,
+            (STREAM_MAX_WIDTH, resized_height),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    success, jpeg = cv2.imencode(
+        ".jpg",
+        stream_frame,
+        [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY],
+    )
+    if not success:
+        return None
+    return jpeg.tobytes()
+
+
+def _publish_dashboard_frame(frame) -> bool:
+    global _latest_frame, _latest_stream_jpeg, _latest_stream_seq
+
+    jpeg_bytes = _encode_dashboard_frame(frame)
+    if jpeg_bytes is None:
+        return False
+
+    with _frame_lock:
+        _latest_frame = frame
+        _latest_stream_jpeg = jpeg_bytes
+        _latest_stream_seq += 1
+
+    return True
 
 
 def _resolve_runtime_video_path(raw_value: str | None) -> Path:
@@ -1409,24 +1459,22 @@ def create_flask_app():
     @_login_required
     def video_feed():
         def generate():
+            last_seq = -1
             while True:
                 with _frame_lock:
-                    frame = _latest_frame
+                    jpeg_bytes = _latest_stream_jpeg
+                    frame_seq = _latest_stream_seq
 
-                if frame is not None:
-                    _, jpeg = cv2.imencode(
-                        ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80]
-                    )
+                if jpeg_bytes is not None and frame_seq != last_seq:
+                    last_seq = frame_seq
                     yield (
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n"
-                        + jpeg.tobytes()
+                        + jpeg_bytes
                         + b"\r\n"
                     )
                 else:
-                    time.sleep(0.05)
-
-                time.sleep(0.03)
+                    time.sleep(0.03)
 
         return Response(
             generate(), mimetype="multipart/x-mixed-replace; boundary=frame"
@@ -1656,8 +1704,6 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                   source_label, port, roi_polygon=None, source_mode="video",
                   source_fps=None):
     """Run all behavior detectors in a single Pi-side loop."""
-    global _latest_frame
-
     video_name = Path(str(source_label)).stem
     fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = (
@@ -1764,6 +1810,8 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     object_alert_conf_total = 0.0
     t_start = time.perf_counter()
     source_start = time.perf_counter()
+    stream_publish_interval = 1.0 / STREAM_MAX_FPS if STREAM_MAX_FPS > 0 else 0.0
+    last_stream_publish_at = 0.0
 
     try:
         while True:
@@ -2757,8 +2805,14 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 object_detections=len(object_dets),
             )
 
-            with _frame_lock:
-                _latest_frame = annotated
+            now_perf = time.perf_counter()
+            if (
+                frame_idx == 1
+                or stream_publish_interval <= 0
+                or (now_perf - last_stream_publish_at) >= stream_publish_interval
+            ):
+                if _publish_dashboard_frame(annotated):
+                    last_stream_publish_at = now_perf
 
             if total_frames > 0 and frame_idx % 500 == 0:
                 pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
