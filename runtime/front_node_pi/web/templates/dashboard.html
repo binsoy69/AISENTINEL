@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sentinel Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    <link rel="stylesheet" href="{{ static_asset('app.css') }}">
 </head>
 <body class="dashboard-body">
     <script id="dashboard-bootstrap" type="application/json">{{ dashboard_json|safe }}</script>
@@ -257,6 +257,6 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
+    <script src="{{ static_asset('dashboard.js') }}" defer></script>
 </body>
 </html>

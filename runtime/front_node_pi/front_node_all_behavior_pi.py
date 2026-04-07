@@ -535,6 +535,14 @@ def _dashboard_entry_endpoint(snapshot: dict | None = None) -> str:
     return "dashboard" if _session_setup_complete(snapshot) else "session_setup"
 
 
+def _static_asset_version(filename: str) -> str:
+    asset_path = STATIC_DIR / filename
+    try:
+        return str(asset_path.stat().st_mtime_ns)
+    except OSError:
+        return "1"
+
+
 def _login_required(view_func):
     @wraps(view_func)
     def wrapper(*args, **kwargs):
@@ -1328,6 +1336,17 @@ def create_flask_app():
     import logging
 
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+    @app.context_processor
+    def inject_asset_helpers():
+        def static_asset(filename: str) -> str:
+            return url_for(
+                "static",
+                filename=filename,
+                v=_static_asset_version(filename),
+            )
+
+        return {"static_asset": static_asset}
 
     @app.route("/")
     def index():
