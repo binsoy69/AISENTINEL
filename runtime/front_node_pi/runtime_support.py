@@ -34,6 +34,10 @@ WEBCAM_BUFFER_SIZE = 1
 WEBCAM_POST_CONFIG_SETTLE_SEC = 0.30
 WEBCAM_MIN_ACCEPTABLE_FPS = 10.0
 WEBCAM_MIN_ACCEPTABLE_FPS_RATIO = 0.60
+WEBCAM_WARMUP_REQUIRED_SUCCESS_FRAMES = 5
+WEBCAM_WARMUP_REQUIRED_SUCCESS_STREAK = 3
+WEBCAM_WARMUP_EXTRA_ATTEMPTS = 12
+WEBCAM_WARMUP_READ_ATTEMPTS = 2
 WEBCAM_FALLBACK_CAPTURE_PROFILES = (
     (640, 480, "640x480 fallback"),
     (0, 0, "driver default"),
@@ -233,8 +237,76 @@ def _iter_webcam_open_sources(camera_index: int):
     device_path = get_webcam_device_path(camera_index)
     if device_path.exists():
         yield str(device_path), str(device_path)
-        return
     yield camera_index, f"index {camera_index}"
+
+
+def _build_webcam_backend_attempts():
+    """Return capture backends that make sense for the current platform."""
+    backend_attempts = []
+    seen = set()
+
+    def add_backend(backend_label: str, backend_id, attempt_defs, *,
+                    allow_default: bool = False) -> None:
+        if backend_id is None and not allow_default:
+            return
+        for use_mjpg, force_fps, config_name in attempt_defs:
+            key = (backend_label, backend_id, use_mjpg, force_fps, config_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            backend_attempts.append(
+                (backend_label, backend_id, use_mjpg, force_fps, config_name)
+            )
+
+    if sys.platform.startswith("linux"):
+        add_backend(
+            "V4L2",
+            getattr(cv2, "CAP_V4L2", None),
+            (
+                (True, False, "MJPG, driver FPS"),
+                (True, True, "MJPG, forced FPS"),
+                (False, False, "native, driver FPS"),
+            ),
+        )
+    elif sys.platform.startswith("win"):
+        add_backend(
+            "DirectShow",
+            getattr(cv2, "CAP_DSHOW", None),
+            (
+                (False, False, "native, driver FPS"),
+                (True, False, "MJPG, driver FPS"),
+                (True, True, "MJPG, forced FPS"),
+            ),
+        )
+        add_backend(
+            "Media Foundation",
+            getattr(cv2, "CAP_MSMF", None),
+            (
+                (False, False, "native, driver FPS"),
+                (True, False, "MJPG, driver FPS"),
+            ),
+        )
+    elif sys.platform == "darwin":
+        add_backend(
+            "AVFoundation",
+            getattr(cv2, "CAP_AVFOUNDATION", None),
+            (
+                (False, False, "native, driver FPS"),
+            ),
+        )
+
+    add_backend(
+        "default",
+        None,
+        (
+            (True, False, "MJPG, driver FPS"),
+            (True, True, "MJPG, forced FPS"),
+            (False, False, "native, driver FPS"),
+        ),
+        allow_default=True,
+    )
+
+    return backend_attempts
 
 
 def _build_webcam_capture_profiles(webcam_cfg):
@@ -420,23 +492,70 @@ def _open_single_webcam_capture(source_ref, camera_index: int, backend_id,
     return cap
 
 
+def _warmup_webcam_capture(cap, warmup_frames: int, head_mod, source_name: str,
+                           backend_name: str, config_name: str,
+                           profile_name: str) -> bool:
+    """Wait for a few successful startup frames instead of rejecting on one miss."""
+    requested_frames = max(0, int(warmup_frames))
+    required_successes = max(
+        1,
+        min(
+            max(1, requested_frames),
+            WEBCAM_WARMUP_REQUIRED_SUCCESS_FRAMES,
+        ),
+    )
+    required_streak = min(
+        required_successes,
+        WEBCAM_WARMUP_REQUIRED_SUCCESS_STREAK,
+    )
+    max_attempts = max(requested_frames, required_successes) + WEBCAM_WARMUP_EXTRA_ATTEMPTS
+
+    head_mod.log_info(
+        f"Warming up webcam with up to {requested_frames} frame(s); requiring "
+        f"{required_successes} successful read(s) with a {required_streak}-frame "
+        f"stable streak."
+    )
+
+    success_count = 0
+    max_consecutive_successes = 0
+    consecutive_successes = 0
+
+    for _ in range(max_attempts):
+        frame = read_webcam_frame(
+            cap,
+            attempts=WEBCAM_WARMUP_READ_ATTEMPTS,
+            pause_sec=WEBCAM_STARTUP_READ_PAUSE_SEC,
+        )
+        if frame is None:
+            consecutive_successes = 0
+            continue
+
+        success_count += 1
+        consecutive_successes += 1
+        max_consecutive_successes = max(
+            max_consecutive_successes,
+            consecutive_successes,
+        )
+
+        if (
+            success_count >= required_successes
+            and consecutive_successes >= required_streak
+        ):
+            return True
+
+    head_mod.log_info(
+        f"Warmup did not stabilize on {source_name} via {backend_name} "
+        f"({config_name}, {profile_name}); successful reads={success_count}, "
+        f"best streak={max_consecutive_successes}, max attempts={max_attempts}."
+    )
+    return False
+
+
 def open_webcam_capture(config: FrontNodeRuntimeConfig, head_mod):
     """Open the configured webcam and apply optional capture settings."""
     webcam_cfg = config.webcam_source
     capture_profiles = _build_webcam_capture_profiles(webcam_cfg)
-    backend_attempts = []
-    v4l2_backend = getattr(cv2, "CAP_V4L2", None)
-    if v4l2_backend is not None:
-        backend_attempts.extend([
-            ("V4L2", v4l2_backend, True, False, "MJPG, driver FPS"),
-            ("V4L2", v4l2_backend, True, True, "MJPG, forced FPS"),
-            ("V4L2", v4l2_backend, False, False, "native, driver FPS"),
-        ])
-    backend_attempts.extend([
-        ("default", None, True, False, "MJPG, driver FPS"),
-        ("default", None, True, True, "MJPG, forced FPS"),
-        ("default", None, False, False, "native, driver FPS"),
-    ])
+    backend_attempts = _build_webcam_backend_attempts()
 
     warmup_frames = max(0, webcam_cfg.warmup_frames)
     tried_configs: list[str] = []
@@ -485,23 +604,15 @@ def open_webcam_capture(config: FrontNodeRuntimeConfig, head_mod):
                     )
                     continue
 
-                warmup_failed = False
-                if warmup_frames > 0:
-                    head_mod.log_info(
-                        f"Warming up webcam with {warmup_frames} frame(s)..."
-                    )
-                for frame_num in range(1, warmup_frames + 1):
-                    if read_webcam_frame(cap, attempts=1, pause_sec=0.03) is not None:
-                        continue
-                    head_mod.log_info(
-                        f"Warmup frame {frame_num}/{warmup_frames} failed on "
-                        f"{source_name} via {backend_name} "
-                        f"({config_name}, {profile_name}); trying next capture mode."
-                    )
-                    warmup_failed = True
-                    break
-
-                if not warmup_failed:
+                if _warmup_webcam_capture(
+                    cap,
+                    warmup_frames,
+                    head_mod,
+                    source_name,
+                    backend_name,
+                    config_name,
+                    profile_name,
+                ):
                     return cap
 
                 cap.release()
