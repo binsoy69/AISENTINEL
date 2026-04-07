@@ -1101,68 +1101,6 @@ def _finalize_evidence_sequence(sequence) -> None:
     )
 
 
-def save_head_evidence(frame, student_num, behavior, event_ts_sec, frame_ts_sec,
-                       frame_tag):
-    os.makedirs(HEAD_EVIDENCE_DIR, exist_ok=True)
-    event_ts_str = _fmt_evidence_ts(event_ts_sec)
-    frame_ts_str = _fmt_evidence_ts(frame_ts_sec)
-    fname = (
-        f"student{student_num}_{behavior}_{event_ts_str}_{frame_tag}_"
-        f"{frame_ts_str}.jpg"
-    )
-    cv2.imwrite(str(HEAD_EVIDENCE_DIR / fname), frame)
-    head_mod.log_info(f"Head evidence saved: {fname}")
-
-
-def save_passing_evidence(frame, student_nums, event_ts_sec, frame_ts_sec,
-                          frame_tag):
-    os.makedirs(PASSING_EVIDENCE_DIR, exist_ok=True)
-    event_ts_str = _fmt_evidence_ts(event_ts_sec)
-    frame_ts_str = _fmt_evidence_ts(frame_ts_sec)
-    nums_str = "_".join(str(n) for n in student_nums)
-    fname = f"passing_s{nums_str}_{event_ts_str}_{frame_tag}_{frame_ts_str}.jpg"
-    cv2.imwrite(str(PASSING_EVIDENCE_DIR / fname), frame)
-    head_mod.log_info(f"Passing evidence saved: {fname}")
-
-
-def save_hand_evidence(annotated_frame, raw_frame, video_name, line_idx, student_id,
-                       event_ts_sec, frame_ts_sec, frame_tag):
-    os.makedirs(HANDS_EVIDENCE_DIR, exist_ok=True)
-    event_ts_str = _fmt_evidence_ts(event_ts_sec)
-    frame_ts_str = _fmt_evidence_ts(frame_ts_sec)
-    fname_ann = (
-        f"{video_name}_line{line_idx + 1}_sid{student_id}_{event_ts_str}_"
-        f"{frame_tag}_{frame_ts_str}_annotated.jpg"
-    )
-    fname_raw = (
-        f"{video_name}_line{line_idx + 1}_sid{student_id}_{event_ts_str}_"
-        f"{frame_tag}_{frame_ts_str}_raw.jpg"
-    )
-    cv2.imwrite(str(HANDS_EVIDENCE_DIR / fname_ann), annotated_frame)
-    cv2.imwrite(str(HANDS_EVIDENCE_DIR / fname_raw), raw_frame)
-    hands_mod.log_info(f"Hands evidence saved: {fname_ann} + raw")
-
-
-def save_object_evidence(annotated_frame, raw_frame, student_num, label, conf,
-                         event_ts_sec, frame_ts_sec, frame_tag):
-    os.makedirs(OBJECT_EVIDENCE_DIR, exist_ok=True)
-    event_ts_str = _fmt_evidence_ts(event_ts_sec)
-    frame_ts_str = _fmt_evidence_ts(frame_ts_sec)
-    safe_label = label.replace(" ", "_")
-    conf_pct = int(round(conf * 100))
-    fname_ann = (
-        f"student{student_num}_{safe_label}_{conf_pct}pct_{event_ts_str}_"
-        f"{frame_tag}_{frame_ts_str}_annotated.jpg"
-    )
-    fname_raw = (
-        f"student{student_num}_{safe_label}_{conf_pct}pct_{event_ts_str}_"
-        f"{frame_tag}_{frame_ts_str}_raw.jpg"
-    )
-    cv2.imwrite(str(OBJECT_EVIDENCE_DIR / fname_ann), annotated_frame)
-    cv2.imwrite(str(OBJECT_EVIDENCE_DIR / fname_raw), raw_frame)
-    head_mod.log_info(f"Object evidence saved: {fname_ann} + raw")
-
-
 def get_evidence_target_students(sequence):
     """Return the student number(s) that should be highlighted in evidence."""
     if sequence["behavior_type"] == "passing":
@@ -1207,52 +1145,8 @@ def build_evidence_frame(sequence, snapshot):
 
 def save_evidence_sequence_frame(sequence, snapshot, frame_tag):
     """Save one evidence frame for the given alert sequence."""
-    behavior_type = sequence["behavior_type"]
-    annotated_frame = build_evidence_frame(sequence, snapshot)
-    raw_frame = snapshot["raw_frame"]
-    frame_ts_sec = snapshot["frame_ts_sec"]
-
-    if behavior_type == "head":
-        save_head_evidence(
-            annotated_frame,
-            sequence["student_num"],
-            sequence["behavior"],
-            sequence["event_ts_sec"],
-            frame_ts_sec,
-            frame_tag,
-        )
-    elif behavior_type == "passing":
-        save_passing_evidence(
-            annotated_frame,
-            sequence["student_nums"],
-            sequence["event_ts_sec"],
-            frame_ts_sec,
-            frame_tag,
-        )
-    elif behavior_type == "hands":
-        save_hand_evidence(
-            annotated_frame,
-            raw_frame,
-            sequence["video_name"],
-            sequence["line_idx"],
-            sequence["student_num"],
-            sequence["event_ts_sec"],
-            frame_ts_sec,
-            frame_tag,
-        )
-    elif behavior_type == "object":
-        save_object_evidence(
-            annotated_frame,
-            raw_frame,
-            sequence["student_num"],
-            sequence["class_name"],
-            sequence["confidence"],
-            sequence["event_ts_sec"],
-            frame_ts_sec,
-            frame_tag,
-        )
-
-    _save_grouped_evidence_frame(sequence, annotated_frame, frame_tag)
+    evidence_frame = build_evidence_frame(sequence, snapshot)
+    _save_grouped_evidence_frame(sequence, evidence_frame, frame_tag)
 
 
 def _evidence_writer_loop(task_queue: Queue) -> None:
