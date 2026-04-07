@@ -51,6 +51,7 @@ import front_node_passing_papers_pi as pass_mod
 import front_node_hands_under_table_pi as hands_mod
 import front_node_cellphone_cheat_pi as obj_mod
 import front_node_all_behavior_setup_io as setup_io
+from runtime_config import resolve_cli_path
 
 # ── Paths ────────────────────────────────────────────────────
 POSE_MODEL_PATH = head_mod.POSE_MODEL_PATH
@@ -105,6 +106,7 @@ EVENTS_DIRNAME = "events"
 SESSION_UPLOAD_DIR = SCRIPT_DIR / "data" / "session_uploads"
 RECENT_INCIDENT_LIMIT = 40
 HISTORY_INCIDENT_LIMIT = 24
+ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}
 
 _start_monitoring_callback = None
 _dashboard_require_session_setup = False
@@ -524,21 +526,19 @@ def _safe_evidence_path(relative_path: str) -> Path:
     return candidate
 
 
-def _save_uploaded_video(upload_storage) -> Path:
-    filename = (upload_storage.filename or "").strip()
-    if not filename:
-        raise ValueError("Select a video file to start video monitoring.")
+def _resolve_runtime_video_path(raw_value: str | None) -> Path:
+    video_path = resolve_cli_path(raw_value)
+    if video_path is None:
+        raise ValueError("Enter a video path before starting video monitoring.")
 
-    suffix = Path(filename).suffix.lower()
-    if suffix not in {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}:
+    suffix = video_path.suffix.lower()
+    if suffix not in ALLOWED_VIDEO_SUFFIXES:
         raise ValueError("Unsupported video type. Use MP4, AVI, MOV, MKV, M4V, or WEBM.")
 
-    safe_stem = _slugify(Path(filename).stem)
-    target_name = f"{_dashboard_now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{suffix}"
-    SESSION_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    target_path = (SESSION_UPLOAD_DIR / target_name).resolve(strict=False)
-    upload_storage.save(target_path)
-    return target_path
+    if not video_path.is_file():
+        raise ValueError(f"Video file not found on the runtime device: {video_path}")
+
+    return video_path
 
 
 def _save_uploaded_calibration(upload_storage) -> Path:
@@ -1255,13 +1255,7 @@ def create_flask_app():
 
         if request.method == "POST":
             if snapshot["runtime_mode"] == "video":
-                request_size = request.content_length or 0
-                if request_size > 0:
-                    head_mod.log_info(
-                        f"Video session setup submitted ({request_size / (1024 * 1024):.1f} MiB request body)."
-                    )
-                else:
-                    head_mod.log_info("Video session setup submitted.")
+                head_mod.log_info("Video session setup submitted.")
             if snapshot["status"] in {"starting", "manual_setup", "running"}:
                 error_message = "Monitoring is already active. Open the dashboard to follow the live session."
             else:
@@ -1271,23 +1265,20 @@ def create_flask_app():
                     "session_date": request.form.get("session_date", ""),
                     "start_time": request.form.get("start_time", ""),
                     "end_time": request.form.get("end_time", ""),
-                    "video_path": request.form.get("existing_video_path", ""),
+                    "video_path": request.form.get("video_path", ""),
                     "setup_profile_override": request.form.get("existing_setup_profile_override", ""),
                 }
 
                 if snapshot["runtime_mode"] == "video":
-                    uploaded_video = request.files.get("video_file")
-                    if uploaded_video is not None and (uploaded_video.filename or "").strip():
-                        try:
-                            head_mod.log_info(
-                                f"Receiving uploaded video: {(uploaded_video.filename or '').strip()}"
-                            )
-                            stored_video = _save_uploaded_video(uploaded_video)
-                        except ValueError as exc:
-                            error_message = str(exc)
-                        else:
-                            head_mod.log_info(f"Uploaded video saved to: {stored_video}")
-                            submission_payload["video_path"] = str(stored_video)
+                    try:
+                        runtime_video = _resolve_runtime_video_path(
+                            request.form.get("video_path", "")
+                        )
+                    except ValueError as exc:
+                        error_message = str(exc)
+                    else:
+                        head_mod.log_info(f"Using runtime video path: {runtime_video}")
+                        submission_payload["video_path"] = str(runtime_video)
 
                 uploaded_calibration = request.files.get("calibration_file")
                 if uploaded_calibration is not None and (uploaded_calibration.filename or "").strip():
