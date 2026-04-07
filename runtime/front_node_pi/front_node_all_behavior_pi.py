@@ -112,6 +112,12 @@ ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}
 STREAM_JPEG_QUALITY = 68
 STREAM_MAX_WIDTH = 960
 STREAM_MAX_FPS = 12.0
+DEFAULT_EVIDENCE_REVIEW_STATUS = "unverified"
+EVIDENCE_REVIEW_STATUS_CHOICES = {
+    DEFAULT_EVIDENCE_REVIEW_STATUS,
+    "verified",
+    "false_detection",
+}
 
 _start_monitoring_callback = None
 _dashboard_require_session_setup = False
@@ -223,8 +229,24 @@ def _slugify(raw_text: str) -> str:
     return slug.strip("-") or "incident"
 
 
+def _normalize_evidence_review_status(raw_status: str | None) -> str:
+    value = str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if value in EVIDENCE_REVIEW_STATUS_CHOICES:
+        return value
+    return DEFAULT_EVIDENCE_REVIEW_STATUS
+
+
+def _apply_review_defaults(incident: dict) -> dict:
+    incident["review_status"] = _normalize_evidence_review_status(
+        incident.get("review_status")
+    )
+    incident["reviewed_at"] = str(incident.get("reviewed_at") or "")
+    incident["reviewed_by"] = str(incident.get("reviewed_by") or "")
+    return incident
+
+
 def _incident_public_copy(incident: dict) -> dict:
-    item = dict(incident)
+    item = _apply_review_defaults(dict(incident))
     for key in ("poster_relpath", "gif_relpath", "manifest_relpath"):
         relpath = item.get(key)
         if relpath:
@@ -284,7 +306,7 @@ def refresh_saved_incidents() -> None:
         payload = _load_manifest(manifest_path)
         if not payload or "id" not in payload:
             continue
-        new_index[payload["id"]] = payload
+        new_index[payload["id"]] = _apply_review_defaults(payload)
 
     with _dashboard_lock:
         _dashboard_state["saved_index"] = new_index
@@ -433,6 +455,53 @@ def dismiss_dashboard_popup(incident_id: str | None = None) -> None:
         if incident_id is None or _dashboard_state["popup_incident_id"] == incident_id:
             _dashboard_state["popup_incident_id"] = None
         _update_dashboard_timestamp_locked()
+
+
+def update_saved_incident_review_status(
+    incident_id: str,
+    review_status: str | None,
+    reviewed_by: str,
+) -> dict | None:
+    with _dashboard_lock:
+        manifest = _dashboard_state["saved_index"].get(incident_id)
+        manifest_relpath = str(manifest.get("manifest_relpath", "")) if manifest else ""
+
+    if not manifest_relpath:
+        return None
+
+    try:
+        manifest_path = _safe_evidence_path(manifest_relpath)
+    except ValueError:
+        return None
+
+    payload = _load_manifest(manifest_path)
+    if not payload or payload.get("id") != incident_id:
+        return None
+
+    normalized_status = _normalize_evidence_review_status(review_status)
+    payload = _apply_review_defaults(payload)
+    payload["review_status"] = normalized_status
+    if normalized_status == DEFAULT_EVIDENCE_REVIEW_STATUS:
+        payload["reviewed_at"] = ""
+        payload["reviewed_by"] = ""
+    else:
+        payload["reviewed_at"] = _dashboard_now_iso()
+        payload["reviewed_by"] = reviewed_by
+
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    with _dashboard_lock:
+        _dashboard_state["saved_index"][incident_id] = dict(payload)
+        recent = _dashboard_state["incident_index"].get(incident_id)
+        if recent is not None:
+            recent.update(
+                review_status=payload["review_status"],
+                reviewed_at=payload["reviewed_at"],
+                reviewed_by=payload["reviewed_by"],
+            )
+        _update_dashboard_timestamp_locked()
+
+    return payload
 
 
 def _password_matches(configured_password: str, submitted_password: str) -> bool:
@@ -945,6 +1014,9 @@ def _build_sequence_incident(sequence, status: str) -> dict:
         "gif_relpath": sequence.get("gif_relpath", ""),
         "manifest_relpath": sequence.get("manifest_relpath", ""),
         "frame_count": len(sequence.get("frame_paths", [])),
+        "review_status": DEFAULT_EVIDENCE_REVIEW_STATUS,
+        "reviewed_at": "",
+        "reviewed_by": "",
     }
 
 
@@ -1442,6 +1514,24 @@ def create_flask_app():
         payload = request.get_json(silent=True) or {}
         dismiss_dashboard_popup(payload.get("incident_id"))
         return jsonify({"ok": True})
+
+    @app.route("/api/evidence/review", methods=["POST"])
+    @_api_login_required
+    def update_evidence_review_api():
+        payload = request.get_json(silent=True) or {}
+        incident_id = str(payload.get("incident_id") or "").strip()
+        if not incident_id:
+            return jsonify({"error": "incident_id is required"}), 400
+
+        updated = update_saved_incident_review_status(
+            incident_id,
+            payload.get("review_status"),
+            session.get("username", _dashboard_auth["username"]),
+        )
+        if updated is None:
+            return jsonify({"error": "Incident not found."}), 404
+
+        return jsonify({"ok": True, "incident": _incident_public_copy(updated)})
 
     @app.route("/evidence/<path:relative_path>")
     @_login_required

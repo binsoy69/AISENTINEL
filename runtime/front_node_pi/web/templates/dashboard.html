@@ -103,14 +103,51 @@
         </section>
 
         <section class="page-section" id="section-records">
-            <article class="panel">
-                <div class="panel-header">
-                    <div>
-                        <p class="panel-eyebrow">Records and Analytics</p>
-                        <h2>Saved Incident Evidence</h2>
+            <article class="panel records-panel">
+                <div class="records-toolbar">
+                    <div class="records-tabs" aria-label="Records sections">
+                        <span class="records-tab is-active">Records</span>
+                        <span class="records-tab">Analytics</span>
+                        <span class="records-tab">Seat Map</span>
+                    </div>
+                    <div class="records-actions">
+                        <label class="sr-only" for="records-status-filter">Filter records</label>
+                        <select class="records-select" id="records-status-filter">
+                            <option value="all">All Records</option>
+                            <option value="unverified">Unverified</option>
+                            <option value="verified">Verified</option>
+                            <option value="false_detection">False Detection</option>
+                        </select>
+                        <label class="sr-only" for="records-search">Search records</label>
+                        <input class="records-search" id="records-search" type="search" placeholder="Search records...">
+                        <button class="primary-button records-export" id="records-export" type="button">Export</button>
                     </div>
                 </div>
-                <div class="history-grid" id="history-grid"></div>
+
+                <div class="records-card">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-eyebrow">Cheating Records</p>
+                            <h2>Saved Incident Evidence</h2>
+                        </div>
+                    </div>
+
+                    <div class="records-table-wrap">
+                        <table class="records-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Timestamp</th>
+                                    <th scope="col">Seat No.</th>
+                                    <th scope="col">Cheating Type</th>
+                                    <th scope="col">Camera</th>
+                                    <th scope="col">Action</th>
+                                    <th scope="col">Verified</th>
+                                </tr>
+                            </thead>
+                            <tbody id="records-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
             </article>
         </section>
 
@@ -127,22 +164,26 @@
         </section>
     </main>
 
-    <div class="incident-modal hidden" id="incident-modal">
-        <div class="incident-modal-backdrop" data-dismiss-popup></div>
-        <div class="incident-modal-card">
-            <div class="incident-modal-header">
-                <p class="modal-kicker">Cheating Detected</p>
-                <button class="modal-close" type="button" data-dismiss-popup>Dismiss</button>
-            </div>
-            <div class="incident-modal-body">
-                <div class="modal-preview">
-                    <img id="modal-preview-image" alt="Incident evidence preview">
+    <div class="alert-toast hidden" id="alert-toast" aria-live="polite" aria-atomic="true">
+        <img id="alert-toast-image" alt="Latest alert evidence">
+    </div>
+
+    <div class="evidence-viewer hidden" id="evidence-viewer">
+        <div class="evidence-viewer-backdrop" data-close-viewer></div>
+        <div class="evidence-viewer-card" role="dialog" aria-modal="true" aria-labelledby="evidence-viewer-title">
+            <div class="evidence-viewer-header">
+                <div>
+                    <p class="modal-kicker">Evidence Preview</p>
+                    <h3 id="evidence-viewer-title">Incident evidence</h3>
                 </div>
-                <div class="modal-copy" id="modal-copy"></div>
+                <button class="modal-close" type="button" data-close-viewer>Close</button>
             </div>
-            <div class="incident-modal-actions">
-                <a id="modal-view-link" class="primary-button" href="#" target="_blank" rel="noreferrer">View Evidence</a>
-                <button class="ghost-button" type="button" data-dismiss-popup>Dismiss</button>
+            <div class="evidence-viewer-body">
+                <img id="evidence-viewer-image" alt="Incident evidence preview">
+            </div>
+            <div class="evidence-viewer-meta" id="evidence-viewer-meta"></div>
+            <div class="evidence-viewer-actions">
+                <a id="evidence-viewer-open" class="primary-button" href="#" target="_blank" rel="noreferrer">Open File</a>
             </div>
         </div>
     </div>

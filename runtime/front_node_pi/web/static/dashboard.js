@@ -1,10 +1,36 @@
 const bootstrapNode = document.getElementById("dashboard-bootstrap");
 const initialState = bootstrapNode ? JSON.parse(bootstrapNode.textContent) : {};
 
+const ALERT_DISMISS_MS = 4000;
+const POLL_INTERVAL_MS = 1500;
+
+const REVIEW_STATUS_META = {
+    unverified: { label: "Unverified", className: "is-unverified" },
+    verified: { label: "Verified", className: "is-verified" },
+    false_detection: { label: "False Detection", className: "is-false" },
+};
+
+const TYPE_TONE_META = {
+    head: "is-head",
+    passing: "is-passing",
+    hands: "is-hands",
+    object: "is-object",
+};
+
 const state = {
     snapshot: initialState,
-    modalIncidentId: null,
+    activeAlertId: null,
     dismissedIncidentIds: new Set(),
+    evidenceViewerId: null,
+    alertTimer: 0,
+    alertHideTimer: 0,
+    pollInFlight: false,
+    recordsFilter: "all",
+    recordsQuery: "",
+    renderCache: {
+        liveIncidents: "",
+        records: "",
+    },
 };
 
 const selectors = {
@@ -19,7 +45,10 @@ const selectors = {
     streamImage: document.getElementById("live-stream"),
     streamPlaceholder: document.getElementById("stream-placeholder"),
     liveIncidents: document.getElementById("live-incidents"),
-    historyGrid: document.getElementById("history-grid"),
+    recordsTableBody: document.getElementById("records-table-body"),
+    recordsStatusFilter: document.getElementById("records-status-filter"),
+    recordsSearch: document.getElementById("records-search"),
+    recordsExport: document.getElementById("records-export"),
     systemGrid: document.getElementById("system-grid"),
     metricTotalIncidents: document.getElementById("metric-total-incidents"),
     metricLastType: document.getElementById("metric-last-type"),
@@ -27,10 +56,13 @@ const selectors = {
     metricTracked: document.getElementById("metric-tracked"),
     metricFps: document.getElementById("metric-fps"),
     metricInference: document.getElementById("metric-inference"),
-    modal: document.getElementById("incident-modal"),
-    modalPreviewImage: document.getElementById("modal-preview-image"),
-    modalCopy: document.getElementById("modal-copy"),
-    modalViewLink: document.getElementById("modal-view-link"),
+    alertToast: document.getElementById("alert-toast"),
+    alertToastImage: document.getElementById("alert-toast-image"),
+    evidenceViewer: document.getElementById("evidence-viewer"),
+    evidenceViewerImage: document.getElementById("evidence-viewer-image"),
+    evidenceViewerMeta: document.getElementById("evidence-viewer-meta"),
+    evidenceViewerTitle: document.getElementById("evidence-viewer-title"),
+    evidenceViewerOpen: document.getElementById("evidence-viewer-open"),
 };
 
 function escapeHtml(value) {
@@ -40,6 +72,11 @@ function escapeHtml(value) {
         .replaceAll(">", "&gt;")
         .replaceAll("\"", "&quot;")
         .replaceAll("'", "&#39;");
+}
+
+function csvEscape(value) {
+    const normalized = String(value ?? "");
+    return `"${normalized.replaceAll("\"", "\"\"")}"`;
 }
 
 function sectionNav() {
@@ -73,24 +110,83 @@ function systemClass(snapshot) {
     return "";
 }
 
-function incidentActionMeta(incident) {
-    if (incident.gif_url) {
-        return { href: incident.gif_url, label: "View GIF", disabled: false };
-    }
-    if (incident.poster_url) {
-        return { href: incident.poster_url, label: "Preview Snapshot", disabled: false };
-    }
-    if (incident.manifest_url) {
-        return { href: incident.manifest_url, label: "View Manifest", disabled: false };
-    }
-    return { href: "#", label: "Evidence Pending", disabled: true };
+function normalizeReviewStatus(value) {
+    const normalized = String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .replaceAll("-", "_")
+        .replaceAll(" ", "_");
+    return REVIEW_STATUS_META[normalized] ? normalized : "unverified";
 }
 
-function renderActionButton(action, className) {
-    if (action.disabled) {
-        return `<span class="${className} is-disabled">${escapeHtml(action.label)}</span>`;
+function reviewMeta(incident) {
+    return REVIEW_STATUS_META[normalizeReviewStatus(incident.review_status)];
+}
+
+function typeToneClass(incident) {
+    return TYPE_TONE_META[incident.behavior_type] || "is-object";
+}
+
+function paddedSeatNumbers(incident) {
+    const numbers = Array.isArray(incident.student_numbers) ? incident.student_numbers : [];
+    return numbers.map((value) => String(value).padStart(2, "0"));
+}
+
+function seatSummary(incident) {
+    const seats = paddedSeatNumbers(incident);
+    return seats.length ? seats.join(", ") : "--";
+}
+
+function seatMetaLabel(incident) {
+    const seats = paddedSeatNumbers(incident);
+    return seats.length ? `Seat ${seats.join(", ")}` : "Seat --";
+}
+
+function incidentMeta(incident) {
+    return `${seatMetaLabel(incident)} | ${incident.camera_label || "--"} | ${incident.display_time || "--"}`;
+}
+
+function incidentAlertPreviewUrl(incident) {
+    return incident.poster_url || incident.gif_url || "";
+}
+
+function incidentViewerUrl(incident) {
+    return incident.gif_url || incident.poster_url || "";
+}
+
+function incidentOpenLabel(incident) {
+    if (incident.gif_url) {
+        return "View GIF";
     }
-    return `<a class="${className}" href="${action.href}" target="_blank" rel="noreferrer">${escapeHtml(action.label)}</a>`;
+    if (incident.poster_url) {
+        return "View Snapshot";
+    }
+    return "Evidence Pending";
+}
+
+function incidentSearchText(incident) {
+    return [
+        incident.type_label,
+        incident.camera_label,
+        incident.display_time,
+        incident.summary,
+        seatSummary(incident),
+        reviewMeta(incident).label,
+    ].join(" ").toLowerCase();
+}
+
+function findIncidentById(incidentId) {
+    const collections = [
+        state.snapshot.saved_incidents || [],
+        state.snapshot.recent_incidents || [],
+    ];
+    for (const collection of collections) {
+        const incident = collection.find((item) => item.id === incidentId);
+        if (incident) {
+            return incident;
+        }
+    }
+    return null;
 }
 
 function renderStatus(snapshot) {
@@ -128,16 +224,22 @@ function renderSummary(snapshot) {
     selectors.streamPlaceholder.style.display = hasLiveFeed ? "none" : "grid";
 }
 
-function incidentMeta(incident) {
-    const seatLabel = incident.student_numbers?.length
-        ? `Seat ${incident.student_numbers.map((value) => String(value).padStart(2, "0")).join(", ")}`
-        : "Seat --";
-    const confidence = incident.confidence_pct ? `${incident.confidence_pct}%` : "Heuristic";
-    return `${seatLabel} | ${incident.camera_label || "--"} | ${incident.display_time || "--"} | ${confidence}`;
-}
-
 function renderIncidentList(snapshot) {
     const items = snapshot.recent_incidents || [];
+    const signature = items.map((incident) => [
+        incident.id,
+        incident.status,
+        incident.summary,
+        incident.display_time,
+        incident.gif_url || "",
+        incident.poster_url || "",
+    ].join(":")).join("|");
+
+    if (state.renderCache.liveIncidents === signature) {
+        return;
+    }
+    state.renderCache.liveIncidents = signature;
+
     if (!items.length) {
         selectors.liveIncidents.innerHTML = `
             <div class="incident-card">
@@ -150,60 +252,110 @@ function renderIncidentList(snapshot) {
         return;
     }
 
-    selectors.liveIncidents.innerHTML = items.map((incident) => `
-        <article class="incident-card">
-            <div class="incident-card-inner">
-                <div class="incident-title-row">
-                    <h3 class="incident-title">${escapeHtml(incident.type_label)}</h3>
-                    <span class="status-pill">${escapeHtml((incident.status || "alert").toUpperCase())}</span>
+    selectors.liveIncidents.innerHTML = items.map((incident) => {
+        const evidenceUrl = incidentViewerUrl(incident);
+        const hasEvidence = Boolean(evidenceUrl);
+        return `
+            <article class="incident-card">
+                <div class="incident-card-inner">
+                    <div class="incident-title-row">
+                        <h3 class="incident-title">${escapeHtml(incident.type_label)}</h3>
+                        <span class="status-pill">${escapeHtml((incident.status || "alert").toUpperCase())}</span>
+                    </div>
+                    <p class="stat-foot">${escapeHtml(incident.summary)}</p>
+                    <div class="incident-meta">${escapeHtml(incidentMeta(incident))}</div>
+                    <div class="incident-actions">
+                        ${hasEvidence
+                            ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">${escapeHtml(incidentOpenLabel(incident))}</button>`
+                            : `<span class="ghost-button is-disabled">${escapeHtml(incidentOpenLabel(incident))}</span>`}
+                    </div>
                 </div>
-                <p class="stat-foot">${escapeHtml(incident.summary)}</p>
-                <div class="incident-meta">${escapeHtml(incidentMeta(incident))}</div>
-                <div class="incident-actions">
-                    ${renderActionButton(incidentActionMeta(incident), "ghost-button")}
-                </div>
-            </div>
-        </article>
+            </article>
+        `;
+    }).join("");
+}
+
+function filteredSavedIncidents(snapshot) {
+    const items = snapshot.saved_incidents || [];
+    const query = state.recordsQuery;
+    return items.filter((incident) => {
+        const status = normalizeReviewStatus(incident.review_status);
+        if (state.recordsFilter !== "all" && status !== state.recordsFilter) {
+            return false;
+        }
+        if (query && !incidentSearchText(incident).includes(query)) {
+            return false;
+        }
+        return true;
+    });
+}
+
+function reviewStatusOptions(selectedValue) {
+    return Object.entries(REVIEW_STATUS_META).map(([value, meta]) => `
+        <option value="${value}" ${value === selectedValue ? "selected" : ""}>${meta.label}</option>
     `).join("");
 }
 
-function renderHistory(snapshot) {
-    const items = snapshot.saved_incidents || [];
+function renderRecords(snapshot) {
+    const allItems = snapshot.saved_incidents || [];
+    const items = filteredSavedIncidents(snapshot);
+    const signature = [
+        allItems.map((incident) => [
+            incident.id,
+            normalizeReviewStatus(incident.review_status),
+            incident.display_time,
+            incident.gif_url || "",
+            incident.poster_url || "",
+        ].join(":")).join("|"),
+        state.recordsFilter,
+        state.recordsQuery,
+    ].join("::");
+
+    if (state.renderCache.records === signature) {
+        return;
+    }
+    state.renderCache.records = signature;
+
     if (!items.length) {
-        selectors.historyGrid.innerHTML = `
-            <div class="history-card">
-                <div class="history-card-inner">
-                    <h3 class="history-title">No saved evidence yet</h3>
-                    <p class="stat-foot">Generated GIF records will appear here after incidents complete their evidence burst.</p>
-                </div>
-            </div>
+        const emptyMessage = allItems.length
+            ? "No records match the current search or filter."
+            : "No saved evidence yet. Completed incidents will appear here.";
+        selectors.recordsTableBody.innerHTML = `
+            <tr>
+                <td class="records-empty-cell" colspan="6">${escapeHtml(emptyMessage)}</td>
+            </tr>
         `;
         return;
     }
 
-    selectors.historyGrid.innerHTML = items.map((incident) => `
-        <article class="history-card">
-            <div class="history-thumb">
-                ${incident.poster_url
-                    ? `<img src="${incident.poster_url}" alt="${escapeHtml(incident.type_label)}">`
-                    : ""}
-            </div>
-            <div class="history-card-inner">
-                <div class="history-title-row">
-                    <h3 class="history-title">${escapeHtml(incident.type_label)}</h3>
-                    <span class="status-pill">${incident.frame_count || 0} frames</span>
-                </div>
-                <p class="stat-foot">${escapeHtml(incident.summary)}</p>
-                <div class="history-meta">${escapeHtml(incidentMeta(incident))}</div>
-                <div class="incident-actions">
-                    ${renderActionButton(incidentActionMeta(incident), "primary-button")}
-                    ${incident.manifest_url
-                        ? `<a class="ghost-button" href="${incident.manifest_url}" target="_blank" rel="noreferrer">Manifest</a>`
-                        : ""}
-                </div>
-            </div>
-        </article>
-    `).join("");
+    selectors.recordsTableBody.innerHTML = items.map((incident) => {
+        const status = normalizeReviewStatus(incident.review_status);
+        const statusMeta = reviewMeta(incident);
+        const evidenceUrl = incidentViewerUrl(incident);
+        const hasEvidence = Boolean(evidenceUrl);
+
+        return `
+            <tr>
+                <td class="records-time">${escapeHtml(incident.display_time || "--")}</td>
+                <td><span class="seat-badge">${escapeHtml(seatSummary(incident))}</span></td>
+                <td><span class="type-pill ${typeToneClass(incident)}">${escapeHtml(incident.type_label || "Incident")}</span></td>
+                <td>${escapeHtml(incident.camera_label || "--")}</td>
+                <td>
+                    ${hasEvidence
+                        ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">View</button>`
+                        : `<span class="ghost-button is-disabled">Pending</span>`}
+                </td>
+                <td>
+                    <label class="review-select-wrap ${statusMeta.className}">
+                        <span class="sr-only">Review status</span>
+                        <select class="review-select" data-review-status-select data-incident-id="${escapeHtml(incident.id)}">
+                            ${reviewStatusOptions(status)}
+                        </select>
+                    </label>
+                </td>
+            </tr>
+        `;
+    }).join("");
 }
 
 function renderSystem(snapshot) {
@@ -229,33 +381,24 @@ function renderSystem(snapshot) {
     `).join("");
 }
 
-function closeModal() {
-    selectors.modal.classList.add("hidden");
-    state.modalIncidentId = null;
-}
-
-function renderModalIncident(incident) {
-    const preview = incident.gif_url || incident.poster_url;
-    const action = incidentActionMeta(incident);
-
-    selectors.modalPreviewImage.src = preview || "";
-    selectors.modalPreviewImage.style.display = preview ? "block" : "none";
-    selectors.modalPreviewImage.alt = incident.type_label || "Incident evidence";
-    selectors.modalCopy.innerHTML = `
-        <strong>${escapeHtml(incident.type_label || "Incident")}</strong>
-        <span>${escapeHtml(incident.summary || "")}</span>
-        <span>${escapeHtml(incidentMeta(incident))}</span>
-    `;
-    selectors.modalViewLink.href = action.disabled ? "#" : action.href;
-    selectors.modalViewLink.textContent = action.label;
-    selectors.modalViewLink.classList.toggle("is-disabled", action.disabled);
+function hideAlertToast() {
+    window.clearTimeout(state.alertHideTimer);
+    selectors.alertToast.classList.remove("is-visible");
+    state.alertHideTimer = window.setTimeout(() => {
+        if (!selectors.alertToast.classList.contains("is-visible")) {
+            selectors.alertToast.classList.add("hidden");
+        }
+    }, 220);
 }
 
 async function dismissPopup(incidentId) {
     if (incidentId) {
         state.dismissedIncidentIds.add(incidentId);
     }
-    closeModal();
+
+    window.clearTimeout(state.alertTimer);
+    state.activeAlertId = null;
+    hideAlertToast();
 
     try {
         await fetch("/api/popup/dismiss", {
@@ -272,13 +415,147 @@ function showPopup(incident) {
     if (!incident || !incident.id || state.dismissedIncidentIds.has(incident.id)) {
         return;
     }
+    if (state.activeAlertId === incident.id) {
+        return;
+    }
 
-    renderModalIncident(incident);
-    selectors.modal.classList.remove("hidden");
-    state.modalIncidentId = incident.id;
+    const previewUrl = incidentAlertPreviewUrl(incident);
+    if (!previewUrl) {
+        dismissPopup(incident.id);
+        return;
+    }
+
+    window.clearTimeout(state.alertTimer);
+    window.clearTimeout(state.alertHideTimer);
+    state.activeAlertId = incident.id;
+
+    if (selectors.alertToastImage.src !== previewUrl) {
+        selectors.alertToastImage.src = previewUrl;
+    }
+    selectors.alertToastImage.alt = incident.type_label || "Incident alert";
+    selectors.alertToast.classList.remove("hidden");
+    requestAnimationFrame(() => {
+        selectors.alertToast.classList.add("is-visible");
+    });
+
+    state.alertTimer = window.setTimeout(() => {
+        dismissPopup(incident.id);
+    }, ALERT_DISMISS_MS);
+}
+
+function closeEvidenceViewer() {
+    selectors.evidenceViewer.classList.add("hidden");
+    state.evidenceViewerId = null;
+}
+
+function openEvidenceViewer(incidentId) {
+    const incident = findIncidentById(incidentId);
+    if (!incident) {
+        return;
+    }
+
+    const evidenceUrl = incidentViewerUrl(incident);
+    if (!evidenceUrl) {
+        return;
+    }
+
+    state.evidenceViewerId = incident.id;
+    selectors.evidenceViewerTitle.textContent = incident.type_label || "Incident evidence";
+    selectors.evidenceViewerImage.src = evidenceUrl;
+    selectors.evidenceViewerImage.alt = incident.type_label || "Incident evidence";
+    selectors.evidenceViewerMeta.innerHTML = `
+        <span>${escapeHtml(seatMetaLabel(incident))}</span>
+        <span>${escapeHtml(incident.camera_label || "--")}</span>
+        <span>${escapeHtml(incident.display_time || "--")}</span>
+        <span>${escapeHtml(reviewMeta(incident).label)}</span>
+    `;
+    selectors.evidenceViewerOpen.href = evidenceUrl;
+    selectors.evidenceViewer.classList.remove("hidden");
+}
+
+function replaceIncidentInCollection(collection, updatedIncident) {
+    return collection.map((incident) => (
+        incident.id === updatedIncident.id
+            ? { ...incident, ...updatedIncident }
+            : incident
+    ));
+}
+
+function applyIncidentUpdate(updatedIncident) {
+    state.snapshot.saved_incidents = replaceIncidentInCollection(
+        state.snapshot.saved_incidents || [],
+        updatedIncident,
+    );
+    state.snapshot.recent_incidents = replaceIncidentInCollection(
+        state.snapshot.recent_incidents || [],
+        updatedIncident,
+    );
+    if (state.snapshot.popup_incident && state.snapshot.popup_incident.id === updatedIncident.id) {
+        state.snapshot.popup_incident = { ...state.snapshot.popup_incident, ...updatedIncident };
+    }
+    render(state.snapshot);
+}
+
+async function updateEvidenceReviewStatus(incidentId, reviewStatus, selectNode) {
+    const previousValue = selectNode.dataset.previousValue || normalizeReviewStatus(selectNode.value);
+    selectNode.disabled = true;
+
+    try {
+        const response = await fetch("/api/evidence/review", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ incident_id: incidentId, review_status: reviewStatus }),
+        });
+
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+            throw new Error(payload.error || "Could not update evidence review status.");
+        }
+
+        applyIncidentUpdate(payload.incident);
+    } catch (error) {
+        console.error(error);
+        selectNode.value = previousValue;
+    } finally {
+        selectNode.disabled = false;
+        selectNode.dataset.previousValue = normalizeReviewStatus(selectNode.value);
+    }
+}
+
+function exportRecords() {
+    const items = filteredSavedIncidents(state.snapshot);
+    if (!items.length) {
+        return;
+    }
+
+    const rows = [
+        ["Timestamp", "Seat No.", "Cheating Type", "Camera", "Review Status", "Evidence"],
+        ...items.map((incident) => [
+            incident.display_time || "--",
+            seatSummary(incident),
+            incident.type_label || "Incident",
+            incident.camera_label || "--",
+            reviewMeta(incident).label,
+            incidentViewerUrl(incident),
+        ]),
+    ];
+
+    const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `sentinel-records-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.csv`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 async function poll() {
+    if (state.pollInFlight) {
+        return;
+    }
+    state.pollInFlight = true;
+
     try {
         const response = await fetch("/api/dashboard", { cache: "no-store" });
         if (!response.ok) {
@@ -288,6 +565,8 @@ async function poll() {
         render(state.snapshot);
     } catch (error) {
         console.error(error);
+    } finally {
+        state.pollInFlight = false;
     }
 }
 
@@ -295,18 +574,63 @@ function render(snapshot) {
     renderStatus(snapshot);
     renderSummary(snapshot);
     renderIncidentList(snapshot);
-    renderHistory(snapshot);
+    renderRecords(snapshot);
     renderSystem(snapshot);
     showPopup(snapshot.popup_incident);
 }
 
-function bindModal() {
-    document.querySelectorAll("[data-dismiss-popup]").forEach((node) => {
-        node.addEventListener("click", () => dismissPopup(state.modalIncidentId));
+function bindControls() {
+    selectors.recordsStatusFilter.addEventListener("change", (event) => {
+        state.recordsFilter = event.target.value;
+        renderRecords(state.snapshot);
+    });
+
+    selectors.recordsSearch.addEventListener("input", (event) => {
+        state.recordsQuery = event.target.value.trim().toLowerCase();
+        renderRecords(state.snapshot);
+    });
+
+    selectors.recordsExport.addEventListener("click", exportRecords);
+
+    document.addEventListener("click", (event) => {
+        const evidenceButton = event.target.closest("[data-open-evidence]");
+        if (evidenceButton) {
+            openEvidenceViewer(evidenceButton.dataset.openEvidence);
+            return;
+        }
+
+        if (event.target.closest("[data-close-viewer]")) {
+            closeEvidenceViewer();
+        }
+    });
+
+    document.addEventListener("change", (event) => {
+        const selectNode = event.target.closest("[data-review-status-select]");
+        if (!selectNode) {
+            return;
+        }
+        updateEvidenceReviewStatus(
+            selectNode.dataset.incidentId,
+            normalizeReviewStatus(selectNode.value),
+            selectNode,
+        );
+    });
+
+    document.addEventListener("focusin", (event) => {
+        const selectNode = event.target.closest("[data-review-status-select]");
+        if (selectNode) {
+            selectNode.dataset.previousValue = normalizeReviewStatus(selectNode.value);
+        }
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !selectors.evidenceViewer.classList.contains("hidden")) {
+            closeEvidenceViewer();
+        }
     });
 }
 
 sectionNav();
-bindModal();
+bindControls();
 render(state.snapshot);
-setInterval(poll, 1500);
+window.setInterval(poll, POLL_INTERVAL_MS);
