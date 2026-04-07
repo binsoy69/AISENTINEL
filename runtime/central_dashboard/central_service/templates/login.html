@@ -3,31 +3,52 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Central Dashboard Login</title>
+    <title>Sentinel Central Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body class="login-body">
     <main class="login-shell">
+        <section class="login-brand">
+            <div class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 64 64" focusable="false">
+                    <path d="M32 11c7.2 5.5 14.3 7.4 19 7.9v13.2c0 10.3-6.8 19.7-19 24.9C19.8 51.8 13 42.4 13 32.1V18.9c4.7-.5 11.8-2.4 19-7.9Z"></path>
+                </svg>
+            </div>
+            <div class="login-brand-copy">
+                <p class="brand-kicker">Sentinel</p>
+                <h1 class="brand-title">Sentinel Central</h1>
+                <p class="brand-copy">Classroom Monitoring System</p>
+            </div>
+        </section>
+
         <section class="login-panel">
-            <p class="eyebrow">AISENTINEL Central</p>
-            <h1>Control both classroom nodes from one dashboard.</h1>
-            <p class="lede">Sign in to manage the shared session, watch both live feeds, and review synced evidence records.</p>
+            <div class="card-heading card-heading-center">
+                <p class="panel-eyebrow">Central Dashboard</p>
+                <h2>Sign In</h2>
+                <p>Enter your dashboard credentials to continue to the shared monitoring console.</p>
+            </div>
 
             {% if error_message %}
-            <div class="banner banner-error">{{ error_message }}</div>
+            <div class="banner banner-danger">{{ error_message }}</div>
             {% endif %}
 
             <form method="post" class="login-form">
                 <input type="hidden" name="next" value="{{ next_path }}">
-                <label>
-                    <span>Username</span>
-                    <input type="text" name="username" autocomplete="username" required>
+
+                <label class="field-group">
+                    <span class="field-label">Username</span>
+                    <input class="field-input" type="text" name="username" autocomplete="username" placeholder="Enter username" required>
                 </label>
-                <label>
-                    <span>Password</span>
-                    <input type="password" name="password" autocomplete="current-password" required>
+
+                <label class="field-group">
+                    <span class="field-label">Password</span>
+                    <input class="field-input" type="password" name="password" autocomplete="current-password" placeholder="Enter password" required>
                 </label>
-                <button type="submit">Enter Dashboard</button>
+
+                <button class="primary-button login-submit" type="submit">Sign In</button>
             </form>
         </section>
     </main>

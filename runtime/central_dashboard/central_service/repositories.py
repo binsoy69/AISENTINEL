@@ -125,7 +125,7 @@ class CentralRepository:
 
     def update_session_status(self, session_id: str, status: str) -> None:
         started_at = utc_now_iso() if status in {"running", "degraded"} else None
-        stopped_at = utc_now_iso() if status == "stopped" else None
+        stopped_at = utc_now_iso() if status in {"stopped", "cleared"} else None
         row = self.connection.execute(
             "SELECT started_at FROM sessions WHERE session_id=?",
             (session_id,),
@@ -148,6 +148,18 @@ class CentralRepository:
         )
         self.connection.commit()
 
+    def update_all_active_session_statuses(self, status: str) -> int:
+        session_rows = self.connection.execute(
+            """
+            SELECT session_id
+            FROM sessions
+            WHERE status IN ('created', 'running', 'degraded')
+            """
+        ).fetchall()
+        for row in session_rows:
+            self.update_session_status(row["session_id"], status)
+        return len(session_rows)
+
     def get_session(self, session_id: str) -> dict | None:
         row = self.connection.execute(
             "SELECT * FROM sessions WHERE session_id=?",
@@ -165,6 +177,43 @@ class CentralRepository:
             """
         ).fetchone()
         return dict(row) if row else None
+
+    def list_sessions_history(self, limit: int = 20) -> list[dict]:
+        rows = self.connection.execute(
+            """
+            SELECT
+                sessions.*,
+                COUNT(incidents.incident_id) AS incident_count
+            FROM sessions
+            LEFT JOIN incidents ON incidents.session_id = sessions.session_id
+            GROUP BY sessions.session_id
+            ORDER BY sessions.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_sessions_by_subject(self, subject_code: str) -> list[dict]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM sessions
+            WHERE subject_code=?
+            ORDER BY created_at DESC
+            """,
+            (subject_code,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_session(self, session_id: str) -> int:
+        cursor = self.connection.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
+        self.connection.commit()
+        return int(cursor.rowcount or 0)
+
+    def delete_sessions_by_subject(self, subject_code: str) -> int:
+        cursor = self.connection.execute("DELETE FROM sessions WHERE subject_code=?", (subject_code,))
+        self.connection.commit()
+        return int(cursor.rowcount or 0)
 
     def upsert_incident(self, manifest: IncidentManifest) -> None:
         payload = manifest.to_dict()
@@ -256,6 +305,15 @@ class CentralRepository:
             (limit,),
         ).fetchall()
         return [self._row_to_incident(row) for row in rows]
+
+    def delete_incidents_for_session(self, session_id: str) -> int:
+        row = self.connection.execute(
+            "SELECT COUNT(*) AS total FROM incidents WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        self.connection.execute("DELETE FROM incidents WHERE session_id=?", (session_id,))
+        self.connection.commit()
+        return int(row["total"] if row else 0)
 
     def _row_to_incident(self, row: sqlite3.Row) -> dict:
         item = dict(row)

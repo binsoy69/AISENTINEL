@@ -3,97 +3,419 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AISENTINEL Central Dashboard</title>
+    <title>Sentinel Central Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body class="dashboard-body">
     <script id="dashboard-bootstrap" type="application/json">{{ bootstrap|tojson }}</script>
 
     <main class="dashboard-shell">
-        <header class="hero">
-            <div>
-                <p class="eyebrow">AISENTINEL Central</p>
-                <h1>Dual-node monitoring console</h1>
-                <p class="lede">One session, two live feeds, one evidence ledger.</p>
+        <header class="topbar">
+            <div class="topbar-brand">
+                <div class="brand-mark brand-mark-small" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M32 11c7.2 5.5 14.3 7.4 19 7.9v13.2c0 10.3-6.8 19.7-19 24.9C19.8 51.8 13 42.4 13 32.1V18.9c4.7-.5 11.8-2.4 19-7.9Z"></path>
+                    </svg>
+                </div>
+                <div class="topbar-brand-copy">
+                    <p class="topbar-title">Sentinel</p>
+                    <p class="topbar-subtitle" id="session-label">Shared classroom monitoring</p>
+                </div>
             </div>
-            <div class="hero-actions">
-                <a class="ghost-link" href="{{ url_for('logout') }}">Logout</a>
+
+            <nav class="topnav" aria-label="Dashboard sections">
+                <button class="nav-button is-active" type="button" data-section="overview">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M3 3h6v6H3zM11 3h6v4h-6zM11 9h6v8h-6zM3 11h6v6H3z"></path>
+                        </svg>
+                    </span>
+                    <span>Dashboard</span>
+                </button>
+                <button class="nav-button" type="button" data-section="records">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M5 3h8l4 4v10H5zM13 3v4h4M8 10h6M8 13h6"></path>
+                        </svg>
+                    </span>
+                    <span>Records &amp; Analytics</span>
+                </button>
+                <button class="nav-button" type="button" data-section="history">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M10 4a6 6 0 1 1-5.2 3M4 3v4h4M10 7v4l3 2"></path>
+                        </svg>
+                    </span>
+                    <span>History</span>
+                </button>
+                <button class="nav-button" type="button" data-section="system">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M10 6.5A3.5 3.5 0 1 1 6.5 10 3.5 3.5 0 0 1 10 6.5zm0-4 1 2.3 2.5.6-.9 2.3 1.5 2-2 1.6.2 2.5-2.3-.7-2.3.7.2-2.5-2-1.6 1.5-2-.9-2.3 2.5-.6z"></path>
+                        </svg>
+                    </span>
+                    <span>System Info</span>
+                </button>
+            </nav>
+
+            <div class="topbar-meta">
+                <div class="meta-pill meta-pill-timer">
+                    <span class="meta-pill-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M10 5a5 5 0 1 1-5 5 5 5 0 0 1 5-5zm0-2v2m-3 0h6"></path>
+                        </svg>
+                    </span>
+                    <strong id="header-elapsed-label">00:00:00</strong>
+                </div>
+                <span class="status-pill status-pill-state" id="status-pill">Idle</span>
+                <a class="ghost-button ghost-button-tight" href="{{ url_for('logout') }}">Logout</a>
             </div>
         </header>
 
-        <section class="session-card">
-            <div class="session-card-head">
-                <div>
-                    <p class="eyebrow">Session Control</p>
-                    <h2>Shared Exam Session</h2>
+        <div class="banner banner-info dashboard-banner" id="dashboard-banner" hidden></div>
+
+        <section class="dashboard-section is-active" id="section-overview">
+            <section class="stats-grid">
+                <article class="stat-card">
+                    <div class="stat-card-head">
+                        <span class="stat-label">Total Incidents</span>
+                        <span class="stat-icon stat-icon-danger" aria-hidden="true">
+                            <svg viewBox="0 0 20 20" focusable="false">
+                                <path d="M10 4.5 15.5 14H4.5ZM10 8v2.5m0 1.8v.2"></path>
+                            </svg>
+                        </span>
+                    </div>
+                    <strong class="stat-value" id="metric-total-incidents">0</strong>
+                    <p class="stat-foot" id="metric-total-foot">Current session incident count.</p>
+                </article>
+
+                <article class="stat-card">
+                    <div class="stat-card-head">
+                        <span class="stat-label">Most Recent Type</span>
+                        <span class="stat-icon stat-icon-accent" aria-hidden="true">
+                            <svg viewBox="0 0 20 20" focusable="false">
+                                <path d="M3 10c1.6-2.7 4.1-4 7-4s5.4 1.3 7 4c-1.6 2.7-4.1 4-7 4S4.6 12.7 3 10zm7-2.2A2.2 2.2 0 1 0 12.2 10 2.2 2.2 0 0 0 10 7.8z"></path>
+                            </svg>
+                        </span>
+                    </div>
+                    <strong class="stat-value stat-value-wide" id="metric-last-type">No incidents yet</strong>
+                    <p class="stat-foot" id="metric-last-time">Awaiting synced evidence.</p>
+                </article>
+
+                <article class="stat-card">
+                    <div class="stat-card-head">
+                        <span class="stat-label">Flagged Seats</span>
+                        <span class="stat-icon stat-icon-warning" aria-hidden="true">
+                            <svg viewBox="0 0 20 20" focusable="false">
+                                <path d="M6 9.5a2 2 0 1 1 2-2 2 2 0 0 1-2 2zm8 0a2 2 0 1 1 2-2 2 2 0 0 1-2 2zM4 12h12a2 2 0 0 1 2 2v1H2v-1a2 2 0 0 1 2-2zm1-1V7h10v4"></path>
+                            </svg>
+                        </span>
+                    </div>
+                    <strong class="stat-value" id="metric-flagged-seats">0</strong>
+                    <p class="stat-foot" id="metric-seat-foot">Seats flagged in the active session.</p>
+                </article>
+
+                <article class="stat-card">
+                    <div class="stat-card-head">
+                        <span class="stat-label">Nodes Online</span>
+                        <span class="stat-icon stat-icon-success" aria-hidden="true">
+                            <svg viewBox="0 0 20 20" focusable="false">
+                                <path d="M5 10.5a7 7 0 0 1 10 0M7.6 13.1a3.8 3.8 0 0 1 4.8 0M10 16h.01"></path>
+                            </svg>
+                        </span>
+                    </div>
+                    <strong class="stat-value" id="metric-online-nodes">0 / 0</strong>
+                    <p class="stat-foot" id="metric-online-foot">Connected registered camera nodes.</p>
+                </article>
+            </section>
+
+            <section class="overview-grid">
+                <article class="panel session-panel" id="session-panel">
+                    <details class="session-accordion" id="session-accordion">
+                        <summary class="session-accordion-trigger" id="session-toggle" aria-controls="session-panel-content">
+                            <div>
+                                <p class="panel-eyebrow">Session Control</p>
+                                <h2>Shared Exam Session</h2>
+                                <p class="panel-copy" id="session-summary-copy">Create the shared schedule, then start both nodes from one control surface.</p>
+                            </div>
+                            <div class="session-accordion-meta">
+                                <span class="status-pill status-pill-inline" id="session-status-pill">No Session</span>
+                                <span class="session-accordion-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 20 20" focusable="false">
+                                        <path d="m5 7.5 5 5 5-5"></path>
+                                    </svg>
+                                </span>
+                            </div>
+                        </summary>
+
+                        <div class="session-panel-content" id="session-panel-content">
+                            <div class="session-summary-grid">
+                                <div class="summary-chip">
+                                    <span class="summary-chip-label">Subject</span>
+                                    <strong id="session-subject-label">--</strong>
+                                </div>
+                                <div class="summary-chip">
+                                    <span class="summary-chip-label">Professor</span>
+                                    <strong id="session-professor-label">--</strong>
+                                </div>
+                                <div class="summary-chip">
+                                    <span class="summary-chip-label">Date</span>
+                                    <strong id="session-date-label">--</strong>
+                                </div>
+                                <div class="summary-chip">
+                                    <span class="summary-chip-label">Session ID</span>
+                                    <strong id="session-id-label">Pending</strong>
+                                </div>
+                            </div>
+
+                            <form id="session-form" class="session-form">
+                                <label class="field-group">
+                                    <span class="field-label">Subject Code</span>
+                                    <input class="field-input" type="text" name="subject_code" placeholder="CS 321" required>
+                                </label>
+                                <label class="field-group">
+                                    <span class="field-label">Professor</span>
+                                    <input class="field-input" type="text" name="professor" placeholder="Dr. Reyes" required>
+                                </label>
+                                <label class="field-group">
+                                    <span class="field-label">Date</span>
+                                    <input class="field-input" type="date" name="session_date">
+                                </label>
+                                <label class="field-group">
+                                    <span class="field-label">Start Time</span>
+                                    <input class="field-input" type="time" name="start_time">
+                                </label>
+                                <label class="field-group">
+                                    <span class="field-label">End Time</span>
+                                    <input class="field-input" type="time" name="end_time">
+                                </label>
+                                <label class="field-group field-group-wide">
+                                    <span class="field-label">Notes</span>
+                                    <input class="field-input" type="text" name="notes" placeholder="Optional notes for this shared run">
+                                </label>
+                            </form>
+
+                            <div class="session-form-actions">
+                                <button class="primary-button" id="create-session-button" type="button">Create Session</button>
+                                <button class="ghost-button" id="clear-session-button" type="button">Clear Session</button>
+                            </div>
+
+                            <section class="node-actions-block" aria-label="Shared node controls">
+                                <div class="node-actions-head">
+                                    <div>
+                                        <p class="panel-eyebrow">Node Control</p>
+                                        <h3>Shared node commands</h3>
+                                    </div>
+                                    <p class="panel-copy">Start, restart, or stop both nodes for the active session.</p>
+                                </div>
+                                <div class="session-actions">
+                                    <button class="ghost-button" id="start-session-button" type="button">Start Nodes</button>
+                                    <button class="ghost-button" id="restart-session-button" type="button">Restart Nodes</button>
+                                    <button class="ghost-button" id="stop-session-button" type="button">Stop Session</button>
+                                </div>
+                            </section>
+                        </div>
+                    </details>
+                </article>
+            </section>
+
+            <section class="panel feeds-panel">
+                <div class="panel-section-head">
+                    <div>
+                        <p class="panel-eyebrow">Live Monitoring</p>
+                        <h2>Dual Camera Feeds</h2>
+                    </div>
+                    <p class="panel-copy">Switch between annotated and raw views per node while the shared session is active.</p>
                 </div>
-                <div class="session-badge" id="session-status-pill">No Session</div>
-            </div>
+                <div class="feed-grid" id="feed-grid"></div>
+            </section>
 
-            <form id="session-form" class="session-form">
-                <label>
-                    <span>Subject Code</span>
-                    <input type="text" name="subject_code" placeholder="CS 321">
-                </label>
-                <label>
-                    <span>Professor</span>
-                    <input type="text" name="professor" placeholder="Dr. Reyes">
-                </label>
-                <label>
-                    <span>Date</span>
-                    <input type="date" name="session_date">
-                </label>
-                <label>
-                    <span>Start Time</span>
-                    <input type="time" name="start_time">
-                </label>
-                <label>
-                    <span>End Time</span>
-                    <input type="time" name="end_time">
-                </label>
-                <label class="notes-field">
-                    <span>Notes</span>
-                    <input type="text" name="notes" placeholder="Optional note for this run">
-                </label>
-            </form>
-
-            <div class="session-buttons">
-                <button id="create-session-button" type="button">Create Session</button>
-                <button id="start-session-button" type="button" class="secondary">Start Nodes</button>
-                <button id="restart-session-button" type="button" class="secondary">Restart Nodes</button>
-                <button id="stop-session-button" type="button" class="secondary">Stop Nodes</button>
-            </div>
-            <div class="banner" id="session-banner" hidden></div>
         </section>
 
-        <section class="status-grid" id="node-status-grid"></section>
-        <section class="feed-grid" id="feed-grid"></section>
-
-        <section class="records-card">
-            <div class="records-head">
-                <div>
-                    <p class="eyebrow">Unified Records</p>
-                    <h2>Synced Incident Evidence</h2>
+        <section class="dashboard-section" id="section-records">
+            <article class="panel workspace-panel">
+                <div class="panel-header panel-header-stack">
+                    <div>
+                        <p class="panel-eyebrow">Records &amp; Analytics</p>
+                        <h2>Incident Workspace</h2>
+                        <p class="panel-copy" id="records-context-label">Review synced incident evidence from the active session.</p>
+                    </div>
+                    <div class="workspace-tabs" role="tablist" aria-label="Records workspace">
+                        <button class="workspace-tab is-active" type="button" role="tab" data-workspace-tab="records">Records</button>
+                        <button class="workspace-tab" type="button" role="tab" data-workspace-tab="analytics">Analytics</button>
+                        <button class="workspace-tab" type="button" role="tab" data-workspace-tab="seatmap">Seat Map</button>
+                    </div>
                 </div>
-                <div class="records-note">Camera labels show whether an incident came from the front or mid node.</div>
-            </div>
-            <div class="records-table-wrap">
-                <table class="records-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Camera</th>
-                            <th>Type</th>
-                            <th>Students</th>
-                            <th>Evidence</th>
-                            <th>Review</th>
-                        </tr>
-                    </thead>
-                    <tbody id="records-body"></tbody>
-                </table>
-            </div>
+
+                <div class="workspace-tabpanel is-active" id="workspace-records">
+                    <div class="records-toolbar">
+                        <div class="records-heading">
+                            <h3>Synced Incident Evidence</h3>
+                            <p class="panel-copy">Search, filter, review, and open saved evidence from the current workspace scope.</p>
+                        </div>
+                        <div class="records-toolbar-controls">
+                            <div class="records-scope-picker" id="records-scope-picker" hidden>
+                                <label class="field-group field-group-compact">
+                                    <span class="field-label">Subject Code</span>
+                                    <select class="records-select" id="records-subject">
+                                        <option value="">Select subject code</option>
+                                    </select>
+                                </label>
+                                <label class="field-group field-group-compact">
+                                    <span class="field-label">Session</span>
+                                    <select class="records-select" id="records-session" disabled>
+                                        <option value="">Select session</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="records-actions">
+                                <label class="sr-only" for="records-filter">Filter records</label>
+                                <select class="records-select" id="records-filter">
+                                    <option value="all">All Records</option>
+                                    <option value="unverified">Unverified</option>
+                                    <option value="verified">Verified</option>
+                                    <option value="false_detection">False Detection</option>
+                                </select>
+                                <label class="sr-only" for="records-search">Search records</label>
+                                <input class="records-search" id="records-search" type="search" placeholder="Search records...">
+                                <button class="ghost-button" id="records-clear" type="button">Clear Data</button>
+                                <button class="primary-button records-export" id="records-export" type="button">Export</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="table-shell">
+                        <div class="table-wrap">
+                            <table class="data-table records-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Seat No.</th>
+                                        <th>Cheating Type</th>
+                                        <th>Camera</th>
+                                        <th>Evidence</th>
+                                        <th>Review</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="records-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="workspace-tabpanel" id="workspace-analytics">
+                    <div class="chart-grid">
+                        <article class="chart-card">
+                            <div class="chart-head">
+                                <h3>Cheating Types Distribution</h3>
+                                <p id="analytics-types-note">Incident counts grouped by detected type.</p>
+                            </div>
+                            <div class="chart-shell" id="type-chart"></div>
+                        </article>
+
+                        <article class="chart-card">
+                            <div class="chart-head">
+                                <h3>Incidents During Exam Duration</h3>
+                                <p id="analytics-timeline-note">Synced incidents plotted across the current session schedule.</p>
+                            </div>
+                            <div class="chart-shell" id="timeline-chart"></div>
+                        </article>
+                    </div>
+                </div>
+
+                <div class="workspace-tabpanel" id="workspace-seatmap">
+                    <div class="seatmap-head">
+                        <div>
+                            <h3>Classroom Seat Map</h3>
+                            <p class="panel-copy" id="seatmap-context-label">Seats remain normal until incidents carry mapped seat numbers.</p>
+                        </div>
+                        <div class="seatmap-legend">
+                            <span class="legend-item">
+                                <span class="legend-swatch is-normal" aria-hidden="true"></span>
+                                <span>Normal</span>
+                            </span>
+                            <span class="legend-item">
+                                <span class="legend-swatch is-flagged" aria-hidden="true"></span>
+                                <span>Flagged</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="seatmap-shell">
+                        <div class="teacher-strip">Whiteboard / Teacher Area</div>
+                        <div class="seatmap-grid" id="seatmap-grid"></div>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="dashboard-section" id="section-history">
+            <article class="panel history-panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">History</p>
+                        <h2>Session History</h2>
+                        <p class="panel-copy">Stored shared sessions and their synced incident totals.</p>
+                    </div>
+                </div>
+
+                <div class="table-shell">
+                    <div class="table-wrap">
+                        <table class="data-table history-table">
+                            <thead>
+                                <tr>
+                                    <th>Subject Code</th>
+                                    <th>Professor</th>
+                                    <th>Date</th>
+                                    <th>Schedule</th>
+                                    <th>Cheats Detected</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="dashboard-section" id="section-system">
+            <article class="panel system-panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">System Info</p>
+                        <h2>Camera Nodes</h2>
+                        <p class="panel-copy">Per-node runtime status, stream health, queue depth, and last reported error.</p>
+                    </div>
+                </div>
+                <div class="system-grid" id="system-grid"></div>
+            </article>
         </section>
     </main>
+
+    <div class="evidence-viewer hidden" id="evidence-viewer">
+        <div class="evidence-viewer-backdrop" data-close-viewer></div>
+        <div class="evidence-viewer-card" role="dialog" aria-modal="true" aria-labelledby="evidence-viewer-title">
+            <div class="evidence-viewer-header">
+                <div>
+                    <p class="panel-eyebrow">Evidence Preview</p>
+                    <h3 id="evidence-viewer-title">Incident evidence</h3>
+                </div>
+                <button class="ghost-button ghost-button-tight" type="button" data-close-viewer>Close</button>
+            </div>
+            <div class="evidence-viewer-body">
+                <img id="evidence-viewer-image" alt="Incident evidence preview">
+            </div>
+            <div class="evidence-viewer-meta" id="evidence-viewer-meta"></div>
+            <div class="evidence-viewer-actions">
+                <a id="evidence-viewer-open" class="primary-button" href="#" target="_blank" rel="noreferrer">Open File</a>
+            </div>
+        </div>
+    </div>
 
     <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
 </body>

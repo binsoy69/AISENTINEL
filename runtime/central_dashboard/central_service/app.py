@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 from datetime import timedelta
 from pathlib import Path
 
@@ -50,6 +51,21 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     app.extensions["central_repository"] = repository
     app.extensions["central_manager"] = manager
     app.extensions["central_connection"] = connection
+    app.extensions["central_shutdown_done"] = False
+
+    manager.reset_runtime_sessions_on_startup()
+
+    def _shutdown_active_session() -> None:
+        if app.extensions.get("central_shutdown_done"):
+            return
+        app.extensions["central_shutdown_done"] = True
+        try:
+            manager.shutdown_active_session()
+        except Exception:
+            pass
+
+    app.extensions["central_shutdown_handler"] = _shutdown_active_session
+    atexit.register(_shutdown_active_session)
 
     @app.route("/")
     def index():
@@ -99,7 +115,31 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     @browser_api_login_required
     def create_session_api():
         payload = request.get_json(silent=True) or {}
-        return jsonify(manager.create_session(payload))
+        result = manager.create_session(payload)
+        status_code = int(result.pop("status_code", 200))
+        return jsonify(result), status_code
+
+    @app.route("/api/v1/sessions/current/clear", methods=["POST"])
+    @browser_api_login_required
+    def clear_current_session_api():
+        result = manager.clear_current_session()
+        status_code = int(result.pop("status_code", 200))
+        return jsonify(result), status_code
+
+    @app.route("/api/v1/sessions/<session_id>", methods=["DELETE"])
+    @browser_api_login_required
+    def delete_session_api(session_id: str):
+        result = manager.delete_session(session_id)
+        status_code = int(result.pop("status_code", 200))
+        return jsonify(result), status_code
+
+    @app.route("/api/v1/sessions/subjects/delete", methods=["POST"])
+    @browser_api_login_required
+    def delete_subject_sessions_api():
+        payload = request.get_json(silent=True) or {}
+        result = manager.delete_subject_sessions(payload.get("subject_code"))
+        status_code = int(result.pop("status_code", 200))
+        return jsonify(result), status_code
 
     @app.route("/api/v1/sessions/<session_id>/<action>", methods=["POST"])
     @browser_api_login_required
@@ -115,6 +155,14 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     def review_incident_api(incident_id: str):
         payload = request.get_json(silent=True) or {}
         result = manager.update_review_status(incident_id, payload.get("review_status"))
+        status_code = int(result.pop("status_code", 200))
+        return jsonify(result), status_code
+
+    @app.route("/api/v1/incidents/clear", methods=["POST"])
+    @browser_api_login_required
+    def clear_incidents_api():
+        payload = request.get_json(silent=True) or {}
+        result = manager.clear_incidents(payload.get("session_id"))
         status_code = int(result.pop("status_code", 200))
         return jsonify(result), status_code
 

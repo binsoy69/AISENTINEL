@@ -152,6 +152,19 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                 data={"username": "admin", "password": "admin123"},
                 follow_redirects=True,
             )
+            invalid_create_response = central_client.post(
+                "/api/v1/sessions",
+                json={
+                    "subject_code": "",
+                    "professor": "Dr. Reyes",
+                },
+            )
+            self.assertEqual(invalid_create_response.status_code, 400)
+            self.assertIn("Subject code is required", invalid_create_response.get_json()["error"])
+            page_response = central_client.get("/dashboard")
+            self.assertEqual(page_response.status_code, 200)
+            self.assertIn(b"Records &amp; Analytics", page_response.data)
+            self.assertIn(b"Seat Map", page_response.data)
 
             create_response = central_client.post(
                 "/api/v1/sessions",
@@ -183,6 +196,9 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             payload = dashboard_response.get_json()
             self.assertEqual(len(payload["nodes"]), 2)
             self.assertGreaterEqual(len(payload["incidents"]), 2)
+            self.assertIn("sessions_history", payload)
+            self.assertEqual(payload["sessions_history"][0]["session_id"], session_id)
+            self.assertGreaterEqual(payload["sessions_history"][0]["incident_count"], 2)
 
             first_incident = payload["incidents"][0]
             review_response = central_client.post(
@@ -191,6 +207,17 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(review_response.status_code, 200)
             self.assertEqual(review_response.get_json()["incident"]["review_status"], "verified")
+
+            clear_records_response = central_client.post(
+                "/api/v1/incidents/clear",
+                json={"session_id": session_id},
+            )
+            self.assertEqual(clear_records_response.status_code, 200)
+            self.assertGreaterEqual(clear_records_response.get_json()["cleared_incidents"], 2)
+
+            cleared_snapshot = central_client.get("/api/v1/dashboard").get_json()
+            self.assertEqual(cleared_snapshot["incidents"], [])
+            self.assertEqual(cleared_snapshot["sessions_history"][0]["incident_count"], 0)
 
             http_client.set_stream_payload(
                 "http://front.test:8091/agent/v1/stream/annotated",
@@ -203,6 +230,148 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             front_runtime.close()
             mid_runtime.close()
             central_app.extensions["central_connection"].close()
+
+    def test_startup_reset_clear_and_shutdown_session_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            http_client = InProcessHttpClient()
+
+            central_config = CentralServiceConfig(
+                config_path=tmpdir / "central.ini",
+                host="127.0.0.1",
+                port=8090,
+                db_path=tmpdir / "central" / "central.sqlite3",
+                evidence_root=tmpdir / "central" / "evidence",
+                node_offline_after_sec=120,
+                proxy_timeout_sec=5.0,
+                stream_timeout_sec=5.0,
+                browser_auth=BrowserAuthConfig(
+                    username="admin",
+                    password="admin123",
+                    secret_key="test-secret",
+                    session_ttl_minutes=60,
+                ),
+                known_nodes={
+                    "front": KnownNodeConfig("front", "Front Node", "Front Camera", "front-key"),
+                    "mid": KnownNodeConfig("mid", "Mid Node", "Mid Camera", "mid-key"),
+                },
+            )
+
+            central_app = create_central_app(central_config, http_client=http_client)
+            central_client = central_app.test_client()
+            central_client.post(
+                "/login",
+                data={"username": "admin", "password": "admin123"},
+                follow_redirects=True,
+            )
+
+            create_response = central_client.post(
+                "/api/v1/sessions",
+                json={
+                    "subject_code": "CS321",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-07",
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                },
+            )
+            self.assertEqual(create_response.status_code, 200)
+            session_id = create_response.get_json()["session"]["session_id"]
+            self.assertEqual(central_app.extensions["central_manager"].dashboard_snapshot()["active_session"]["session_id"], session_id)
+            central_app.extensions["central_connection"].close()
+
+            restarted_app = create_central_app(central_config, http_client=http_client)
+            restarted_client = restarted_app.test_client()
+            restarted_client.post(
+                "/login",
+                data={"username": "admin", "password": "admin123"},
+                follow_redirects=True,
+            )
+
+            restarted_snapshot = restarted_app.extensions["central_manager"].dashboard_snapshot()
+            self.assertIsNone(restarted_snapshot["active_session"])
+            self.assertEqual(restarted_snapshot["sessions_history"][0]["status"], "stopped")
+
+            create_response = restarted_client.post(
+                "/api/v1/sessions",
+                json={
+                    "subject_code": "CS322",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-08",
+                    "start_time": "13:00",
+                    "end_time": "15:00",
+                },
+            )
+            self.assertEqual(create_response.status_code, 200)
+            clear_response = restarted_client.post("/api/v1/sessions/current/clear", json={})
+            self.assertEqual(clear_response.status_code, 200)
+            cleared_session = clear_response.get_json()["session"]
+            self.assertEqual(cleared_session["status"], "cleared")
+            self.assertIsNone(restarted_app.extensions["central_manager"].dashboard_snapshot()["active_session"])
+
+            create_response = restarted_client.post(
+                "/api/v1/sessions",
+                json={
+                    "subject_code": "CS322",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-08",
+                    "start_time": "15:00",
+                    "end_time": "17:00",
+                },
+            )
+            self.assertEqual(create_response.status_code, 200)
+            second_cleared_id = create_response.get_json()["session"]["session_id"]
+            self.assertTrue(second_cleared_id)
+            clear_response = restarted_client.post("/api/v1/sessions/current/clear", json={})
+            self.assertEqual(clear_response.status_code, 200)
+
+            delete_subject_response = restarted_client.post(
+                "/api/v1/sessions/subjects/delete",
+                json={"subject_code": "CS322"},
+            )
+            self.assertEqual(delete_subject_response.status_code, 200)
+            self.assertEqual(delete_subject_response.get_json()["deleted_sessions"], 2)
+            post_subject_delete_snapshot = restarted_app.extensions["central_manager"].dashboard_snapshot()
+            self.assertFalse(any(item["subject_code"] == "CS322" for item in post_subject_delete_snapshot["sessions_history"]))
+
+            create_response = restarted_client.post(
+                "/api/v1/sessions",
+                json={
+                    "subject_code": "CS323",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-09",
+                    "start_time": "16:00",
+                    "end_time": "18:00",
+                },
+            )
+            self.assertEqual(create_response.status_code, 200)
+            deleted_session_id = create_response.get_json()["session"]["session_id"]
+            delete_session_response = restarted_client.delete(f"/api/v1/sessions/{deleted_session_id}")
+            self.assertEqual(delete_session_response.status_code, 200)
+            self.assertEqual(delete_session_response.get_json()["deleted_session"]["session_id"], deleted_session_id)
+            deleted_snapshot = restarted_app.extensions["central_manager"].dashboard_snapshot()
+            self.assertIsNone(deleted_snapshot["active_session"])
+            self.assertFalse(any(item["session_id"] == deleted_session_id for item in deleted_snapshot["sessions_history"]))
+
+            create_response = restarted_client.post(
+                "/api/v1/sessions",
+                json={
+                    "subject_code": "CS324",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-09",
+                    "start_time": "16:00",
+                    "end_time": "18:00",
+                },
+            )
+            self.assertEqual(create_response.status_code, 200)
+            shutdown_session_id = create_response.get_json()["session"]["session_id"]
+            restarted_app.extensions["central_shutdown_handler"]()
+            self.assertTrue(restarted_app.extensions["central_shutdown_done"])
+            shutdown_snapshot = restarted_app.extensions["central_manager"].dashboard_snapshot()
+            self.assertIsNone(shutdown_snapshot["active_session"])
+            shutdown_entry = next(item for item in shutdown_snapshot["sessions_history"] if item["session_id"] == shutdown_session_id)
+            self.assertEqual(shutdown_entry["status"], "stopped")
+            restarted_app.extensions["central_connection"].close()
 
 
 if __name__ == "__main__":

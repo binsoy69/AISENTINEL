@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 import base64
 import posixpath
@@ -26,6 +27,106 @@ class CentralServiceManager:
         self.repository = repository
         self.http_client = http_client or StdlibHttpClient()
         self.config.evidence_root.mkdir(parents=True, exist_ok=True)
+
+    def _dispatch_command_to_nodes(self, session_spec: SessionSpec, action: str) -> tuple[list[dict], int, list[dict]]:
+        command = SessionCommand(action=action, session=session_spec)
+        node_rows = self.repository.node_status_snapshot(
+            self.config.known_nodes,
+            offline_after_sec=self.config.node_offline_after_sec,
+        )
+        results = []
+        ok_count = 0
+
+        for node in node_rows:
+            node_id = node["node_id"]
+            agent_base_url = str(node.get("agent_base_url", "")).rstrip("/")
+            if not agent_base_url:
+                results.append(
+                    CommandAck(
+                        ok=False,
+                        node_id=node_id,
+                        action=action,
+                        session_id=session_spec.session_id,
+                        state="unregistered",
+                        message="Node has not registered an agent URL yet.",
+                    ).to_dict()
+                )
+                continue
+
+            result = self.http_client.post_json(
+                f"{agent_base_url}/agent/v1/session/{action}",
+                command.to_dict(),
+                headers=self.build_node_headers(node_id),
+                timeout=self.config.proxy_timeout_sec,
+            )
+            if result.ok and isinstance(result.json_data, dict):
+                ack = CommandAck.from_dict(result.json_data)
+                if ack.ok:
+                    ok_count += 1
+                results.append(ack.to_dict())
+            else:
+                results.append(
+                    CommandAck(
+                        ok=False,
+                        node_id=node_id,
+                        action=action,
+                        session_id=session_spec.session_id,
+                        state=node.get("state", ""),
+                        message=result.text or "Node command failed.",
+                    ).to_dict()
+                )
+        return results, ok_count, node_rows
+
+    def _stop_session_if_active(self, session_row: dict | None) -> list[dict]:
+        if session_row is None:
+            return []
+        active_session = self.repository.get_active_session()
+        if active_session is None or active_session.get("session_id") != session_row.get("session_id"):
+            return []
+        try:
+            results, _ok_count, _node_rows = self._dispatch_command_to_nodes(SessionSpec.from_dict(session_row), "stop")
+        except Exception:
+            results = []
+        return results
+
+    def _clear_session_storage(self, session_id: str) -> tuple[int, bool]:
+        cleared_incidents = self.repository.delete_incidents_for_session(session_id)
+        evidence_dir = self.safe_evidence_path(session_id)
+        cleared_evidence = False
+        if evidence_dir.exists() and evidence_dir.is_dir():
+            shutil.rmtree(evidence_dir, ignore_errors=True)
+            cleared_evidence = True
+        return cleared_incidents, cleared_evidence
+
+    def reset_runtime_sessions_on_startup(self) -> dict:
+        session = self.repository.get_active_session()
+        if session is None:
+            return {"ok": True, "stopped_sessions": 0, "results": []}
+
+        session_spec = SessionSpec.from_dict(session)
+        try:
+            results, _ok_count, _node_rows = self._dispatch_command_to_nodes(session_spec, "stop")
+        except Exception:
+            results = []
+        stopped_sessions = self.repository.update_all_active_session_statuses("stopped")
+        return {"ok": True, "stopped_sessions": stopped_sessions, "results": results}
+
+    def shutdown_active_session(self) -> dict:
+        session = self.repository.get_active_session()
+        if session is None:
+            return {"ok": True, "session": None, "results": []}
+
+        session_spec = SessionSpec.from_dict(session)
+        try:
+            results, _ok_count, _node_rows = self._dispatch_command_to_nodes(session_spec, "stop")
+        except Exception:
+            results = []
+        try:
+            self.repository.update_session_status(session_spec.session_id, "stopped")
+            session = self.repository.get_session(session_spec.session_id)
+        except Exception:
+            session = None
+        return {"ok": True, "session": session, "results": results}
 
     def build_node_headers(self, node_id: str) -> dict[str, str]:
         known = self.config.known_nodes[node_id]
@@ -55,6 +156,10 @@ class CentralServiceManager:
 
     def create_session(self, payload: dict) -> dict:
         session = SessionSpec.from_dict(payload)
+        if not session.subject_code:
+            return {"ok": False, "error": "Subject code is required before creating a session.", "status_code": 400}
+        if not session.professor:
+            return {"ok": False, "error": "Professor is required before creating a session.", "status_code": 400}
         self.repository.create_session(session)
         return {"ok": True, "session": session.to_dict()}
 
@@ -64,53 +169,7 @@ class CentralServiceManager:
             return {"ok": False, "error": "Session not found.", "status_code": 404}
 
         session_spec = SessionSpec.from_dict(session_row)
-        command = SessionCommand(action=action, session=session_spec)
-        node_rows = self.repository.node_status_snapshot(
-            self.config.known_nodes,
-            offline_after_sec=self.config.node_offline_after_sec,
-        )
-        results = []
-        ok_count = 0
-
-        for node in node_rows:
-            node_id = node["node_id"]
-            agent_base_url = str(node.get("agent_base_url", "")).rstrip("/")
-            if not agent_base_url:
-                results.append(
-                    CommandAck(
-                        ok=False,
-                        node_id=node_id,
-                        action=action,
-                        session_id=session_id,
-                        state="unregistered",
-                        message="Node has not registered an agent URL yet.",
-                    ).to_dict()
-                )
-                continue
-
-            result = self.http_client.post_json(
-                f"{agent_base_url}/agent/v1/session/{action}",
-                command.to_dict(),
-                headers=self.build_node_headers(node_id),
-                timeout=self.config.proxy_timeout_sec,
-            )
-            if result.ok and isinstance(result.json_data, dict):
-                ack = CommandAck.from_dict(result.json_data)
-                if ack.ok:
-                    ok_count += 1
-                results.append(ack.to_dict())
-            else:
-                results.append(
-                    CommandAck(
-                        ok=False,
-                        node_id=node_id,
-                        action=action,
-                        session_id=session_id,
-                        state=node.get("state", ""),
-                        message=result.text or "Node command failed.",
-                    ).to_dict()
-                )
-
+        results, ok_count, node_rows = self._dispatch_command_to_nodes(session_spec, action)
         if action in {"start", "restart"}:
             status = "running" if ok_count == len(node_rows) and node_rows else "degraded" if ok_count > 0 else "error"
         else:
@@ -120,6 +179,91 @@ class CentralServiceManager:
         return {
             "ok": ok_count > 0 or action == "stop",
             "session": self.repository.get_session(session_id),
+            "results": results,
+        }
+
+    def clear_current_session(self) -> dict:
+        session_row = self.repository.get_active_session()
+        if session_row is None:
+            return {"ok": False, "error": "No active session to clear.", "status_code": 404}
+
+        session_spec = SessionSpec.from_dict(session_row)
+        results, _ok_count, _node_rows = self._dispatch_command_to_nodes(session_spec, "stop")
+        self.repository.update_session_status(session_spec.session_id, "cleared")
+        return {
+            "ok": True,
+            "session": self.repository.get_session(session_spec.session_id),
+            "results": results,
+        }
+
+    def clear_incidents(self, session_id: str | None = None) -> dict:
+        active_session = self.repository.get_active_session()
+        target_session_id = str(session_id or (active_session.get("session_id") if active_session else "")).strip()
+        if not target_session_id:
+            return {"ok": False, "error": "Select a session first before clearing records.", "status_code": 400}
+
+        session_row = self.repository.get_session(target_session_id)
+        if session_row is None:
+            return {"ok": False, "error": "Session not found.", "status_code": 404}
+
+        cleared_incidents, cleared_evidence = self._clear_session_storage(target_session_id)
+
+        return {
+            "ok": True,
+            "session": session_row,
+            "cleared_incidents": cleared_incidents,
+            "cleared_evidence": cleared_evidence,
+        }
+
+    def delete_session(self, session_id: str) -> dict:
+        target_session_id = str(session_id or "").strip()
+        if not target_session_id:
+            return {"ok": False, "error": "Session not found.", "status_code": 404}
+
+        session_row = self.repository.get_session(target_session_id)
+        if session_row is None:
+            return {"ok": False, "error": "Session not found.", "status_code": 404}
+
+        results = self._stop_session_if_active(session_row)
+        cleared_incidents, cleared_evidence = self._clear_session_storage(target_session_id)
+        deleted_sessions = self.repository.delete_session(target_session_id)
+        return {
+            "ok": deleted_sessions > 0,
+            "deleted_session": session_row,
+            "deleted_sessions": deleted_sessions,
+            "cleared_incidents": cleared_incidents,
+            "cleared_evidence": cleared_evidence,
+            "results": results,
+        }
+
+    def delete_subject_sessions(self, subject_code: str) -> dict:
+        target_subject_code = str(subject_code or "").strip()
+        if not target_subject_code:
+            return {"ok": False, "error": "Subject code is required to delete stored sessions.", "status_code": 400}
+
+        session_rows = self.repository.list_sessions_by_subject(target_subject_code)
+        if not session_rows:
+            return {"ok": False, "error": "No stored sessions were found for that subject code.", "status_code": 404}
+
+        results = []
+        active_session = self.repository.get_active_session()
+        if active_session and str(active_session.get("subject_code", "")).strip() == target_subject_code:
+            results = self._stop_session_if_active(active_session)
+
+        cleared_incidents = 0
+        cleared_evidence = 0
+        for session_row in session_rows:
+            incident_count, had_evidence = self._clear_session_storage(session_row["session_id"])
+            cleared_incidents += incident_count
+            cleared_evidence += int(had_evidence)
+
+        deleted_sessions = self.repository.delete_sessions_by_subject(target_subject_code)
+        return {
+            "ok": deleted_sessions > 0,
+            "subject_code": target_subject_code,
+            "deleted_sessions": deleted_sessions,
+            "cleared_incidents": cleared_incidents,
+            "cleared_evidence": cleared_evidence,
             "results": results,
         }
 
@@ -170,6 +314,7 @@ class CentralServiceManager:
             "active_session": active_session,
             "nodes": nodes,
             "incidents": incidents,
+            "sessions_history": self.repository.list_sessions_history(),
         }
 
     def open_node_stream(self, node_id: str, mode: str):
