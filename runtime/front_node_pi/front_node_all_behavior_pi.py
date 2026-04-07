@@ -38,6 +38,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from collections import defaultdict, deque
+from queue import Queue
 
 import cv2
 import numpy as np
@@ -112,6 +113,7 @@ ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}
 STREAM_JPEG_QUALITY = 68
 STREAM_MAX_WIDTH = 960
 STREAM_MAX_FPS = 12.0
+PROCESSING_FPS_EMA_ALPHA = 0.18
 DEFAULT_EVIDENCE_REVIEW_STATUS = "unverified"
 EVIDENCE_REVIEW_STATUS_CHOICES = {
     DEFAULT_EVIDENCE_REVIEW_STATUS,
@@ -1253,7 +1255,71 @@ def save_evidence_sequence_frame(sequence, snapshot, frame_tag):
     _save_grouped_evidence_frame(sequence, annotated_frame, frame_tag)
 
 
-def queue_evidence_sequence(sequence_queue, recent_frames, behavior_type,
+def _evidence_writer_loop(task_queue: Queue) -> None:
+    while True:
+        task = task_queue.get()
+        try:
+            if task is None:
+                return
+
+            task_type = task.get("type")
+            if task_type == "frame":
+                save_evidence_sequence_frame(
+                    task["sequence"],
+                    task["snapshot"],
+                    task["frame_tag"],
+                )
+            elif task_type == "finalize":
+                _finalize_evidence_sequence(task["sequence"])
+        except Exception as exc:  # pragma: no cover - runtime safety
+            head_mod.log_info(f"Evidence writer error: {exc}")
+        finally:
+            task_queue.task_done()
+
+
+def _start_evidence_writer() -> tuple[Queue, threading.Thread]:
+    task_queue: Queue = Queue()
+    thread = threading.Thread(
+        target=_evidence_writer_loop,
+        args=(task_queue,),
+        daemon=True,
+        name="sentinel-evidence-writer",
+    )
+    thread.start()
+    return task_queue, thread
+
+
+def _queue_evidence_frame(task_queue: Queue | None, sequence, snapshot, frame_tag: str) -> None:
+    if task_queue is None:
+        save_evidence_sequence_frame(sequence, snapshot, frame_tag)
+        return
+    task_queue.put(
+        {
+            "type": "frame",
+            "sequence": sequence,
+            "snapshot": snapshot,
+            "frame_tag": frame_tag,
+        }
+    )
+
+
+def _queue_evidence_finalize(task_queue: Queue | None, sequence) -> None:
+    if task_queue is None:
+        _finalize_evidence_sequence(sequence)
+        return
+    task_queue.put({"type": "finalize", "sequence": sequence})
+
+
+def _stop_evidence_writer(task_queue: Queue | None, thread: threading.Thread | None) -> None:
+    if task_queue is None:
+        return
+    task_queue.join()
+    task_queue.put(None)
+    if thread is not None:
+        thread.join(timeout=15.0)
+
+
+def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_type,
                             event_ts_sec, **payload):
     """Save buffered pre-event frames, then queue event + post-event frames."""
     with _dashboard_lock:
@@ -1281,7 +1347,8 @@ def queue_evidence_sequence(sequence_queue, recent_frames, behavior_type,
 
     pre_count = len(recent_frames)
     for relative_idx, snapshot in zip(range(-pre_count, 0), recent_frames):
-        save_evidence_sequence_frame(
+        _queue_evidence_frame(
+            task_queue,
             sequence,
             snapshot,
             _evidence_frame_tag(relative_idx),
@@ -1291,12 +1358,13 @@ def queue_evidence_sequence(sequence_queue, recent_frames, behavior_type,
     return sequence
 
 
-def flush_evidence_sequences(sequence_queue, snapshot):
+def flush_evidence_sequences(task_queue, sequence_queue, snapshot):
     """Save the event frame and post-event frames for every active burst."""
     active_sequences = []
 
     for seq in sequence_queue:
-        save_evidence_sequence_frame(
+        _queue_evidence_frame(
+            task_queue,
             seq,
             snapshot,
             _evidence_frame_tag(seq["next_relative_idx"]),
@@ -1306,7 +1374,7 @@ def flush_evidence_sequences(sequence_queue, snapshot):
         if seq["next_relative_idx"] <= EVIDENCE_POST_EVENT_FRAMES:
             active_sequences.append(seq)
         else:
-            _finalize_evidence_sequence(seq)
+            _queue_evidence_finalize(task_queue, seq)
 
     return active_sequences
 
@@ -1902,9 +1970,12 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     source_start = time.perf_counter()
     stream_publish_interval = 1.0 / STREAM_MAX_FPS if STREAM_MAX_FPS > 0 else 0.0
     last_stream_publish_at = 0.0
+    smoothed_processing_fps = 0.0
+    evidence_task_queue, evidence_worker = _start_evidence_writer()
 
     try:
         while True:
+            frame_loop_started_at = time.perf_counter()
             ret, frame = cap.read()
             if not ret:
                 if source_mode == "video":
@@ -2568,7 +2639,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
             # HUD + banners.
             elapsed_wall = time.perf_counter() - t_start
-            actual_fps = frame_idx / elapsed_wall if elapsed_wall > 0 else 0.0
+            average_processing_fps = frame_idx / elapsed_wall if elapsed_wall > 0 else 0.0
             head_alert_total = sum(head_stats.values())
             tracked_count = len(student_tracks)
             has_warning = any(
@@ -2590,6 +2661,11 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 hud_color = head_mod.COL_FLAGGED
             elif has_warning or hand_warning_total > 0:
                 hud_color = hands_mod.COL_WARNING
+            display_processing_fps = (
+                smoothed_processing_fps
+                if smoothed_processing_fps > 0
+                else average_processing_fps
+            )
 
             hud_lines = [
                 (
@@ -2598,7 +2674,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     if total_frames > 0
                     else f"Frame: {frame_idx} | Live time: {head_mod.fmt_ts(ts_sec)}"
                 ),
-                f"Video FPS: {fps:.1f} | Processing FPS: {actual_fps:.1f}",
+                f"Video FPS: {fps:.1f} | Processing FPS: {display_processing_fps:.1f}",
                 (
                     f"Tracked: {tracked_count}/{len(student_map)} | "
                     f"Hands: {len(hand_boxes)} | Obj: {len(object_dets)} | "
@@ -2634,7 +2710,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     cv2.LINE_AA,
                 )
 
-            draw_fps_badge(annotated, actual_fps, hud_color)
+            draw_fps_badge(annotated, display_processing_fps, hud_color)
 
             banner_y = height - 30
             for event in frame_object_alerts:
@@ -2811,6 +2887,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             for behavior, student_num in head_frame_events:
                 new_sequences.append(
                     queue_evidence_sequence(
+                        evidence_task_queue,
                         evidence_sequences,
                         recent_evidence_frames,
                         "head",
@@ -2823,6 +2900,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             for src_num, nbr_num, _ in passing_frame_events:
                 new_sequences.append(
                     queue_evidence_sequence(
+                        evidence_task_queue,
                         evidence_sequences,
                         recent_evidence_frames,
                         "passing",
@@ -2834,6 +2912,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             for line_idx, student_num in frame_hand_alerts:
                 new_sequences.append(
                     queue_evidence_sequence(
+                        evidence_task_queue,
                         evidence_sequences,
                         recent_evidence_frames,
                         "hands",
@@ -2847,6 +2926,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             for event in frame_object_alerts:
                 new_sequences.append(
                     queue_evidence_sequence(
+                        evidence_task_queue,
                         evidence_sequences,
                         recent_evidence_frames,
                         "object",
@@ -2858,7 +2938,9 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 )
 
             evidence_sequences = flush_evidence_sequences(
-                evidence_sequences, evidence_snapshot
+                evidence_task_queue,
+                evidence_sequences,
+                evidence_snapshot,
             )
             recent_evidence_frames.append(evidence_snapshot)
 
@@ -2866,6 +2948,33 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 record_dashboard_incident(
                     _build_sequence_incident(sequence, status="recording")
                 )
+
+            now_perf = time.perf_counter()
+            if (
+                frame_idx == 1
+                or stream_publish_interval <= 0
+                or (now_perf - last_stream_publish_at) >= stream_publish_interval
+            ):
+                if _publish_dashboard_frame(annotated):
+                    last_stream_publish_at = time.perf_counter()
+
+            frame_loop_completed_at = time.perf_counter()
+            frame_loop_elapsed = frame_loop_completed_at - frame_loop_started_at
+            instant_processing_fps = (
+                1.0 / frame_loop_elapsed if frame_loop_elapsed > 0 else 0.0
+            )
+            if instant_processing_fps > 0:
+                if smoothed_processing_fps <= 0:
+                    smoothed_processing_fps = instant_processing_fps
+                else:
+                    smoothed_processing_fps += (
+                        instant_processing_fps - smoothed_processing_fps
+                    ) * PROCESSING_FPS_EMA_ALPHA
+            display_processing_fps = (
+                smoothed_processing_fps
+                if smoothed_processing_fps > 0
+                else average_processing_fps
+            )
 
             update_dashboard_metrics(
                 total_incidents=(
@@ -2881,7 +2990,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 object_alerts=object_alert_total,
                 tracked_students=tracked_count,
                 assigned_students=len(student_map),
-                processing_fps=round(actual_fps, 2),
+                processing_fps=round(display_processing_fps, 2),
                 source_fps=round(fps, 2),
                 inference_ms=round(inference_ms, 1),
                 frame_idx=frame_idx,
@@ -2895,20 +3004,11 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 object_detections=len(object_dets),
             )
 
-            now_perf = time.perf_counter()
-            if (
-                frame_idx == 1
-                or stream_publish_interval <= 0
-                or (now_perf - last_stream_publish_at) >= stream_publish_interval
-            ):
-                if _publish_dashboard_frame(annotated):
-                    last_stream_publish_at = now_perf
-
             if total_frames > 0 and frame_idx % 500 == 0:
                 pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
                 head_mod.log_info(
                     f"Progress: {pct:.1f}% ({frame_idx}/{total_frames}) | "
-                    f"FPS: {actual_fps:.1f}"
+                    f"FPS: {display_processing_fps:.1f}"
                 )
 
     except KeyboardInterrupt:
@@ -2919,9 +3019,18 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             monitoring_active=False,
             system_state="idle",
         )
+    finally:
+        for sequence in evidence_sequences:
+            _queue_evidence_finalize(evidence_task_queue, sequence)
+        _stop_evidence_writer(evidence_task_queue, evidence_worker)
 
     elapsed = time.perf_counter() - t_start
     head_alert_total = sum(head_stats.values())
+    final_processing_fps = (
+        smoothed_processing_fps
+        if smoothed_processing_fps > 0
+        else (frame_idx / elapsed if elapsed > 0 else 0.0)
+    )
     update_dashboard_metrics(
         total_incidents=(
             head_alert_total
@@ -2934,7 +3043,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
         hand_alerts=hand_alert_total,
         hand_warnings=hand_warning_total,
         object_alerts=object_alert_total,
-        processing_fps=round(frame_idx / elapsed, 2) if elapsed > 0 else 0.0,
+        processing_fps=round(final_processing_fps, 2),
         monitoring_complete=True,
     )
     set_dashboard_status(
