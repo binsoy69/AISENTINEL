@@ -541,6 +541,14 @@ def _resolve_runtime_video_path(raw_value: str | None) -> Path:
     return video_path
 
 
+def _open_runtime_video_dialog() -> Path | None:
+    head_mod.log_info("Opening runtime video file dialog...")
+    selected_path = pass_mod.select_video_dialog()
+    if not selected_path:
+        return None
+    return _resolve_runtime_video_path(selected_path)
+
+
 def _save_uploaded_calibration(upload_storage) -> Path:
     filename = (upload_storage.filename or "").strip()
     if not filename:
@@ -1351,6 +1359,32 @@ def create_flask_app():
     @_api_login_required
     def dashboard_api():
         return jsonify(_public_dashboard_snapshot())
+
+    @app.route("/api/session-setup/select-video", methods=["POST"])
+    @_api_login_required
+    def select_video_api():
+        snapshot = _dashboard_snapshot()
+        if snapshot["runtime_mode"] != "video":
+            return jsonify({"error": "Video selection is only available in video mode."}), 400
+
+        try:
+            selected_video = _open_runtime_video_dialog()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:  # pragma: no cover - GUI/runtime environment dependent
+            return jsonify(
+                {
+                    "error": (
+                        "Could not open the runtime file picker. "
+                        f"Check that the device has a desktop session available. Details: {exc}"
+                    )
+                }
+            ), 500
+
+        if selected_video is None:
+            return jsonify({"ok": False, "cancelled": True})
+
+        return jsonify({"ok": True, "video_path": str(selected_video)})
 
     @app.route("/api/popup/dismiss", methods=["POST"])
     @_api_login_required

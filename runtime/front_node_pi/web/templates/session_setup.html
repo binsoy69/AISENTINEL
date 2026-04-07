@@ -48,6 +48,8 @@
             </div>
             {% endif %}
 
+            <div class="banner banner-info" id="selection-status" hidden></div>
+
             <form
                 id="session-setup-form"
                 method="post"
@@ -58,18 +60,21 @@
                 {% if runtime_mode == "video" %}
                 <div class="field-group field-group-full">
                     <label class="field-label" for="video_path">Video Path</label>
-                    <input
-                        id="video_path"
-                        name="video_path"
-                        class="field-input"
-                        type="text"
-                        placeholder="e.g. test-videos/front.mp4 or D:\videos\exam.mp4"
-                        value="{{ form_values.video_path }}"
-                        autocomplete="off"
-                        spellcheck="false"
-                        required
-                    >
-                    <p class="field-help">Enter a video path that the runtime device can read directly. The file is opened in place and is not uploaded into Sentinel storage.</p>
+                    <div class="picker-row">
+                        <input
+                            id="video_path"
+                            name="video_path"
+                            class="field-input"
+                            type="text"
+                            placeholder="e.g. test-videos/front.mp4 or D:\videos\exam.mp4"
+                            value="{{ form_values.video_path }}"
+                            autocomplete="off"
+                            spellcheck="false"
+                            required
+                        >
+                        <button id="select-video-button" type="button" class="ghost-button">Select on Device</button>
+                    </div>
+                    <p class="field-help">Use the button to open a native file picker on the runtime device. The selected video is opened in place and is not uploaded into Sentinel storage.</p>
                 </div>
 
                 {% endif %}
@@ -126,5 +131,74 @@
         </section>
     </main>
 
+    <script>
+        (() => {
+            const form = document.getElementById("session-setup-form");
+            if (!form || !window.fetch) {
+                return;
+            }
+
+            const runtimeMode = form.dataset.runtimeMode || "";
+            if (runtimeMode !== "video") {
+                return;
+            }
+
+            const selectButton = document.getElementById("select-video-button");
+            const videoInput = document.getElementById("video_path");
+            const statusBanner = document.getElementById("selection-status");
+            if (!selectButton || !videoInput || !statusBanner) {
+                return;
+            }
+
+            const defaultButtonLabel = selectButton.textContent.trim();
+
+            function setStatus(message, isError = false) {
+                statusBanner.hidden = !message;
+                statusBanner.textContent = message;
+                statusBanner.className = isError ? "banner banner-danger" : "banner banner-info";
+            }
+
+            selectButton.addEventListener("click", async () => {
+                if (selectButton.disabled) {
+                    return;
+                }
+
+                selectButton.disabled = true;
+                selectButton.textContent = "Opening Picker...";
+                setStatus("Choose a video file from the runtime device.", false);
+
+                try {
+                    const response = await fetch("/api/session-setup/select-video", {
+                        method: "POST",
+                        headers: {
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                    });
+                    const payload = await response.json().catch(() => ({}));
+
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Could not open the runtime file picker.");
+                    }
+
+                    if (payload.cancelled) {
+                        setStatus("Video selection was cancelled.", false);
+                        return;
+                    }
+
+                    if (!payload.video_path) {
+                        throw new Error("The runtime file picker did not return a valid video path.");
+                    }
+
+                    videoInput.value = payload.video_path;
+                    setStatus(`Selected video: ${payload.video_path}`, false);
+                } catch (error) {
+                    setStatus(error.message || "Could not open the runtime file picker.", true);
+                } finally {
+                    selectButton.disabled = false;
+                    selectButton.textContent = defaultButtonLabel;
+                }
+            });
+        })();
+    </script>
 </body>
 </html>
