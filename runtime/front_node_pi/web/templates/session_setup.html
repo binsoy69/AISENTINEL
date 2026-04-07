@@ -65,144 +65,145 @@
 
         <section class="setup-grid">
             <article class="panel setup-overview">
-                <div class="brand-column">
-                    <p class="brand-kicker">Sentinel</p>
-                    <h1 class="brand-title">Prepare the session before the dashboard unlocks.</h1>
+                <div class="setup-overview-head">
+                    <p class="brand-kicker">Session setup</p>
+                    <h1 class="brand-title">Setup the session.</h1>
                     <p class="brand-copy">
-                        Complete the session details once, then the generated web address will route straight to the dashboard for the active session.
+                        Add the schedule and optional calibration, then start monitoring.
                     </p>
-                    <div class="chip-row">
-                        <span class="chip">{{ runtime_mode|upper }}</span>
-                        <span class="chip">{{ source_label }}</span>
-                        <span class="chip chip-outline">{{ status|replace('_', ' ')|title }}</span>
-                    </div>
                 </div>
 
-                <div class="setup-notes">
-                    <div class="setup-note">
-                        <strong>1.</strong>
-                        <span>Enter the subject, professor, date, and schedule shown in the operator header.</span>
+                <dl class="setup-summary">
+                    <div class="setup-summary-item">
+                        <dt>Mode</dt>
+                        <dd>{{ runtime_mode|upper }}</dd>
                     </div>
-                    <div class="setup-note">
-                        <strong>2.</strong>
-                        <span>Optionally load a saved calibration profile to skip manual alignment on the device.</span>
+                    <div class="setup-summary-item">
+                        <dt>Source</dt>
+                        <dd>{{ source_label }}</dd>
                     </div>
-                    <div class="setup-note">
-                        <strong>3.</strong>
-                        <span>Start monitoring to unlock the dashboard and begin the live runtime flow.</span>
+                    <div class="setup-summary-item">
+                        <dt>Status</dt>
+                        <dd>{{ status|replace('_', ' ')|title }}</dd>
                     </div>
-                </div>
+                </dl>
+
+                <ol class="setup-checklist">
+                    <li>Enter the subject, professor, date, and schedule.</li>
+                    <li>Load a saved setup profile if you want to skip manual alignment.</li>
+                    <li>Start monitoring to unlock the dashboard.</li>
+                </ol>
             </article>
 
             <section class="auth-card auth-card-wide setup-card">
-            <div class="card-heading">
-                <p class="panel-eyebrow">Session details</p>
-                <h2>Session Details</h2>
-                <p>These values are shown on the dashboard while monitoring is active.</p>
-            </div>
-
-            {% if error_message %}
-            <div class="banner banner-danger">{{ error_message }}</div>
-            {% endif %}
-
-            {% if status_message %}
-            <div class="banner banner-info">{{ status_message }}</div>
-            {% endif %}
-
-            {% if has_saved_setup %}
-            <div class="banner banner-success">
-                Saved setup profile detected: <span class="mono-inline">{{ setup_profile_path }}</span>
-            </div>
-            {% else %}
-            <div class="banner banner-warning">
-                No saved setup profile detected. Starting monitoring may require manual calibration on the device screen.
-            </div>
-            {% endif %}
-
-            <div class="banner banner-info" id="selection-status" hidden></div>
-
-            <form
-                id="session-setup-form"
-                method="post"
-                class="form-grid form-grid-two"
-                enctype="multipart/form-data"
-                data-runtime-mode="{{ runtime_mode }}"
-            >
-                {% if runtime_mode == "video" %}
-                <div class="field-group field-group-full">
-                    <label class="field-label" for="video_path">Video Path</label>
-                    <div class="picker-row">
-                        <input
-                            id="video_path"
-                            name="video_path"
-                            class="field-input"
-                            type="text"
-                            placeholder="e.g. test-videos/front.mp4 or D:\videos\exam.mp4"
-                            value="{{ form_values.video_path }}"
-                            autocomplete="off"
-                            spellcheck="false"
-                            required
-                        >
-                        <button id="select-video-button" type="button" class="ghost-button">Select on Device</button>
-                    </div>
-                    <p class="field-help">Use the button to open a native file picker on the runtime device. The selected video is opened in place and is not uploaded into Sentinel storage.</p>
+                <div class="card-heading">
+                    <p class="panel-eyebrow">Session details</p>
+                    <h2>Session Details</h2>
+                    <p>These values are shown on the dashboard while monitoring is active.</p>
                 </div>
 
+                {% if error_message %}
+                <div class="banner banner-danger">{{ error_message }}</div>
                 {% endif %}
 
-                <div class="field-group field-group-full">
-                    <label class="field-label" for="calibration_file">Calibration File</label>
-                    <input id="calibration_file" name="calibration_file" class="field-input" type="file" accept=".json,application/json">
-                    <input type="hidden" name="existing_setup_profile_override" value="{{ form_values.setup_profile_override }}">
-                    {% if form_values.setup_profile_override %}
-                    <p class="field-help">Current selection: <span class="mono-inline">{{ form_values.setup_profile_override }}</span></p>
-                    {% else %}
-                    <p class="field-help">Optional. Pick a saved setup JSON if you want to skip or override manual calibration.</p>
-                    {% endif %}
-                </div>
+                {% if status_message %}
+                <div class="banner banner-info">{{ status_message }}</div>
+                {% endif %}
 
-                <div class="field-group">
-                    <label class="field-label" for="subject_code">Subject Code</label>
-                    <input id="subject_code" name="subject_code" class="field-input" type="text" placeholder="e.g. CS 321" value="{{ form_values.subject_code }}" required>
+                {% if has_saved_setup %}
+                <div class="banner banner-success">
+                    Saved setup profile detected: <span class="mono-inline">{{ setup_profile_path }}</span>
                 </div>
-
-                <div class="field-group">
-                    <label class="field-label" for="professor">Professor</label>
-                    <input id="professor" name="professor" class="field-input" type="text" placeholder="e.g. Dr. Juan Dela Cruz" value="{{ form_values.professor }}" required>
+                {% else %}
+                <div class="banner banner-warning">
+                    No saved setup profile detected. Starting monitoring may require manual calibration on the device screen.
                 </div>
+                {% endif %}
 
-                <div class="field-group">
-                    <label class="field-label" for="session_date">Date</label>
-                    <input id="session_date" name="session_date" class="field-input" type="date" value="{{ form_values.session_date }}" required>
-                </div>
+                <div class="banner banner-info" id="selection-status" hidden></div>
 
-                <div class="field-group time-group">
-                    <div>
-                        <label class="field-label" for="start_time">Start Time</label>
-                        <input id="start_time" name="start_time" class="field-input" type="time" value="{{ form_values.start_time }}" required>
+                <form
+                    id="session-setup-form"
+                    method="post"
+                    class="form-grid form-grid-two"
+                    enctype="multipart/form-data"
+                    data-runtime-mode="{{ runtime_mode }}"
+                >
+                    {% if runtime_mode == "video" %}
+                    <div class="field-group field-group-full">
+                        <label class="field-label" for="video_path">Video Path</label>
+                        <div class="picker-row">
+                            <input
+                                id="video_path"
+                                name="video_path"
+                                class="field-input"
+                                type="text"
+                                placeholder="e.g. test-videos/front.mp4 or D:\videos\exam.mp4"
+                                value="{{ form_values.video_path }}"
+                                autocomplete="off"
+                                spellcheck="false"
+                                required
+                            >
+                            <button id="select-video-button" type="button" class="ghost-button">Select on Device</button>
+                        </div>
+                        <p class="field-help">Use the button to open a native file picker on the runtime device. The selected video is opened in place and is not uploaded into Sentinel storage.</p>
                     </div>
-                    <div>
-                        <label class="field-label" for="end_time">End Time</label>
-                        <input id="end_time" name="end_time" class="field-input" type="time" value="{{ form_values.end_time }}" required>
-                    </div>
-                </div>
 
-                <div class="session-actions">
-                    <button
-                        id="session-submit-button"
-                        type="submit"
-                        class="primary-button"
-                        {% if status in ["starting", "manual_setup", "running"] %}disabled{% endif %}
-                    >
-                        Start Monitoring
-                    </button>
-                    {% if can_open_dashboard %}
-                    <a class="secondary-link" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-                    {% else %}
-                    <span class="secondary-link secondary-link-disabled">Dashboard unlocks after session start.</span>
                     {% endif %}
-                </div>
-            </form>
+
+                    <div class="field-group field-group-full">
+                        <label class="field-label" for="calibration_file">Calibration File</label>
+                        <input id="calibration_file" name="calibration_file" class="field-input" type="file" accept=".json,application/json">
+                        <input type="hidden" name="existing_setup_profile_override" value="{{ form_values.setup_profile_override }}">
+                        {% if form_values.setup_profile_override %}
+                        <p class="field-help">Current selection: <span class="mono-inline">{{ form_values.setup_profile_override }}</span></p>
+                        {% else %}
+                        <p class="field-help">Optional. Pick a saved setup JSON if you want to skip or override manual calibration.</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="field-group">
+                        <label class="field-label" for="subject_code">Subject Code</label>
+                        <input id="subject_code" name="subject_code" class="field-input" type="text" placeholder="e.g. CS 321" value="{{ form_values.subject_code }}" required>
+                    </div>
+
+                    <div class="field-group">
+                        <label class="field-label" for="professor">Professor</label>
+                        <input id="professor" name="professor" class="field-input" type="text" placeholder="e.g. Dr. Juan Dela Cruz" value="{{ form_values.professor }}" required>
+                    </div>
+
+                    <div class="field-group">
+                        <label class="field-label" for="session_date">Date</label>
+                        <input id="session_date" name="session_date" class="field-input" type="date" value="{{ form_values.session_date }}" required>
+                    </div>
+
+                    <div class="field-group time-group">
+                        <div>
+                            <label class="field-label" for="start_time">Start Time</label>
+                            <input id="start_time" name="start_time" class="field-input" type="time" value="{{ form_values.start_time }}" required>
+                        </div>
+                        <div>
+                            <label class="field-label" for="end_time">End Time</label>
+                            <input id="end_time" name="end_time" class="field-input" type="time" value="{{ form_values.end_time }}" required>
+                        </div>
+                    </div>
+
+                    <div class="session-actions">
+                        <button
+                            id="session-submit-button"
+                            type="submit"
+                            class="primary-button"
+                            {% if status in ["starting", "manual_setup", "running"] %}disabled{% endif %}
+                        >
+                            Start Monitoring
+                        </button>
+                        {% if can_open_dashboard %}
+                        <a class="secondary-link" href="{{ url_for('dashboard') }}">Open Dashboard</a>
+                        {% else %}
+                        <span class="secondary-link secondary-link-disabled">Dashboard unlocks after session start.</span>
+                        {% endif %}
+                    </div>
+                </form>
             </section>
         </section>
     </main>
