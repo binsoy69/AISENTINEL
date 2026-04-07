@@ -1,7 +1,7 @@
 const bootstrapNode = document.getElementById("dashboard-bootstrap");
 const initialState = bootstrapNode ? JSON.parse(bootstrapNode.textContent) : {};
 
-const ALERT_DISMISS_MS = 4000;
+const ALERT_DISMISS_MS = 2000;
 const POLL_INTERVAL_MS = 1500;
 
 const REVIEW_STATUS_META = {
@@ -57,7 +57,12 @@ const selectors = {
     metricFps: document.getElementById("metric-fps"),
     metricInference: document.getElementById("metric-inference"),
     alertToast: document.getElementById("alert-toast"),
-    alertToastImage: document.getElementById("alert-toast-image"),
+    alertToastSeat: document.getElementById("alert-toast-seat"),
+    alertToastType: document.getElementById("alert-toast-type"),
+    alertToastCamera: document.getElementById("alert-toast-camera"),
+    alertToastTime: document.getElementById("alert-toast-time"),
+    alertToastClose: document.getElementById("alert-toast-close"),
+    alertToastProgressFill: document.getElementById("alert-toast-progress-fill"),
     evidenceViewer: document.getElementById("evidence-viewer"),
     evidenceViewerImage: document.getElementById("evidence-viewer-image"),
     evidenceViewerMeta: document.getElementById("evidence-viewer-meta"),
@@ -144,10 +149,6 @@ function seatMetaLabel(incident) {
 
 function incidentMeta(incident) {
     return `${seatMetaLabel(incident)} | ${incident.camera_label || "--"} | ${incident.display_time || "--"}`;
-}
-
-function incidentAlertPreviewUrl(incident) {
-    return incident.poster_url || incident.gif_url || "";
 }
 
 function incidentViewerUrl(incident) {
@@ -384,11 +385,19 @@ function renderSystem(snapshot) {
 function hideAlertToast() {
     window.clearTimeout(state.alertHideTimer);
     selectors.alertToast.classList.remove("is-visible");
+    selectors.alertToastProgressFill.classList.remove("is-animating");
     state.alertHideTimer = window.setTimeout(() => {
         if (!selectors.alertToast.classList.contains("is-visible")) {
             selectors.alertToast.classList.add("hidden");
         }
     }, 220);
+}
+
+function restartAlertProgress() {
+    selectors.alertToastProgressFill.classList.remove("is-animating");
+    selectors.alertToastProgressFill.style.animationDuration = `${ALERT_DISMISS_MS}ms`;
+    void selectors.alertToastProgressFill.offsetWidth;
+    selectors.alertToastProgressFill.classList.add("is-animating");
 }
 
 async function dismissPopup(incidentId) {
@@ -419,21 +428,16 @@ function showPopup(incident) {
         return;
     }
 
-    const previewUrl = incidentAlertPreviewUrl(incident);
-    if (!previewUrl) {
-        dismissPopup(incident.id);
-        return;
-    }
-
     window.clearTimeout(state.alertTimer);
     window.clearTimeout(state.alertHideTimer);
     state.activeAlertId = incident.id;
 
-    if (selectors.alertToastImage.src !== previewUrl) {
-        selectors.alertToastImage.src = previewUrl;
-    }
-    selectors.alertToastImage.alt = incident.type_label || "Incident alert";
+    selectors.alertToastSeat.textContent = seatSummary(incident);
+    selectors.alertToastType.textContent = incident.type_label || "--";
+    selectors.alertToastCamera.textContent = incident.camera_label || "--";
+    selectors.alertToastTime.textContent = incident.display_time || "--";
     selectors.alertToast.classList.remove("hidden");
+    restartAlertProgress();
     requestAnimationFrame(() => {
         selectors.alertToast.classList.add("is-visible");
     });
@@ -580,6 +584,8 @@ function render(snapshot) {
 }
 
 function bindControls() {
+    selectors.alertToastClose.addEventListener("click", () => dismissPopup(state.activeAlertId));
+
     selectors.recordsStatusFilter.addEventListener("change", (event) => {
         state.recordsFilter = event.target.value;
         renderRecords(state.snapshot);
