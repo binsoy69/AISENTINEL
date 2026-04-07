@@ -147,7 +147,9 @@ function seatSummary(incident) {
 
 function seatMetaLabel(incident) {
     const seats = paddedSeatNumbers(incident);
-    return seats.length ? `Seat ${seats.join(", ")}` : "Seat --";
+    return seats.length
+        ? `${seats.length > 1 ? "Seats" : "Seat"} ${seats.join(", ")}`
+        : "Seat --";
 }
 
 function incidentMeta(incident) {
@@ -168,6 +170,30 @@ function statusLabel(snapshot) {
 
 function incidentViewerUrl(incident) {
     return incident.gif_url || incident.poster_url || "";
+}
+
+function incidentMetaIcon(kind) {
+    if (kind === "seat") {
+        return `<svg viewBox="0 0 20 20" focusable="false" aria-hidden="true"><path d="M6 9.5a2 2 0 1 1 2-2 2 2 0 0 1-2 2zm8 0a2 2 0 1 1 2-2 2 2 0 0 1-2 2zM4 12h12a2 2 0 0 1 2 2v1H2v-1a2 2 0 0 1 2-2zm1-1V7h10v4"></path></svg>`;
+    }
+    if (kind === "camera") {
+        return `<svg viewBox="0 0 20 20" focusable="false" aria-hidden="true"><path d="M6.5 6h2l1-1.5h1L11.5 6H14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm3.5 2.5a3 3 0 1 0 3 3 3 3 0 0 0-3-3z"></path></svg>`;
+    }
+    return `<svg viewBox="0 0 20 20" focusable="false" aria-hidden="true"><path d="M10 5a5 5 0 1 1-5 5 5 5 0 0 1 5-5zm0-2v2m0 5v3m0 0 2 1"></path></svg>`;
+}
+
+function incidentMetaItemsHtml(incident) {
+    const items = [
+        { kind: "seat", text: seatMetaLabel(incident) },
+        { kind: "camera", text: incident.camera_label || "--" },
+        { kind: "time", text: incident.display_time || "--" },
+    ];
+    return items.map((item) => `
+        <span class="incident-meta-item">
+            <span class="incident-meta-icon">${incidentMetaIcon(item.kind)}</span>
+            <span>${escapeHtml(item.text)}</span>
+        </span>
+    `).join("");
 }
 
 function incidentOpenLabel(incident) {
@@ -294,16 +320,25 @@ function renderIncidentList(snapshot) {
         return `
             <article class="incident-card">
                 <div class="incident-card-inner">
-                    <div class="incident-title-row">
-                        <h3 class="incident-title">${escapeHtml(incident.type_label)}</h3>
-                        <span class="status-pill">${escapeHtml((incident.status || "alert").toUpperCase())}</span>
-                    </div>
-                    <p class="stat-foot">${escapeHtml(incident.summary)}</p>
-                    <div class="incident-meta">${escapeHtml(incidentMeta(incident))}</div>
-                    <div class="incident-actions">
-                        ${hasEvidence
-                            ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">${escapeHtml(incidentOpenLabel(incident))}</button>`
-                            : `<span class="ghost-button is-disabled">${escapeHtml(incidentOpenLabel(incident))}</span>`}
+                    <div class="incident-row">
+                        <div class="incident-leading">
+                            <span class="incident-icon ${typeToneClass(incident)}" aria-hidden="true">
+                                <svg viewBox="0 0 20 20" focusable="false">
+                                    <path d="M10 4.5 15.5 14H4.5ZM10 8v2.5m0 1.8v.2"></path>
+                                </svg>
+                            </span>
+                            <div class="incident-main">
+                                <div class="incident-title-row">
+                                    <h3 class="incident-title">${escapeHtml(incident.type_label)}</h3>
+                                </div>
+                                <div class="incident-meta incident-meta-inline">${incidentMetaItemsHtml(incident)}</div>
+                            </div>
+                        </div>
+                        <div class="incident-actions incident-actions-compact">
+                            ${hasEvidence
+                                ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">${escapeHtml(incidentOpenLabel(incident))}</button>`
+                                : `<span class="ghost-button is-disabled">${escapeHtml(incidentOpenLabel(incident))}</span>`}
+                        </div>
                     </div>
                 </div>
             </article>
