@@ -13,14 +13,25 @@
                 <span class="brand-mark-inner">S</span>
             </div>
             <p class="brand-kicker">Sentinel</p>
-            <h1 class="brand-title">Classroom Monitoring System</h1>
+            <h1 class="brand-title">Secure the monitoring session before the dashboard opens.</h1>
             <p class="brand-copy">
-                Secure access for live invigilation, incident review, and evidence playback.
+                Sign in with the runtime dashboard credentials. The generated web address will route to session setup when signed in, or back here when access expires.
             </p>
+            <div class="chip-row">
+                <span class="chip">Protected access</span>
+                <span class="chip chip-outline">Session-first flow</span>
+            </div>
+            <div class="brand-surface">
+                <p class="brand-surface-title">What changes after login</p>
+                <p class="brand-surface-copy">
+                    You will be sent to session setup first. The dashboard stays locked until the session details are configured.
+                </p>
+            </div>
         </section>
 
         <section class="auth-card">
             <div class="card-heading">
+                <p class="panel-eyebrow">Access control</p>
                 <h2>Sign In</h2>
                 <p>Enter the dashboard credentials configured in the runtime INI file.</p>
             </div>
@@ -40,6 +51,10 @@
 
                 <button type="submit" class="primary-button">Sign In</button>
             </form>
+
+            <p class="field-help">
+                The active dashboard session automatically expires based on the configured runtime session timeout.
+            </p>
         </section>
     </main>
 </body>

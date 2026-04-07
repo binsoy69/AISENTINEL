@@ -519,6 +519,22 @@ def _is_authenticated() -> bool:
     )
 
 
+def _is_safe_next_path(raw_path: str | None) -> bool:
+    value = str(raw_path or "").strip()
+    return value.startswith("/") and not value.startswith("//")
+
+
+def _session_setup_complete(snapshot: dict | None = None) -> bool:
+    if not _dashboard_require_session_setup:
+        return True
+    current_snapshot = snapshot if snapshot is not None else _dashboard_snapshot()
+    return bool(current_snapshot.get("session_details"))
+
+
+def _dashboard_entry_endpoint(snapshot: dict | None = None) -> str:
+    return "dashboard" if _session_setup_complete(snapshot) else "session_setup"
+
+
 def _login_required(view_func):
     @wraps(view_func)
     def wrapper(*args, **kwargs):
@@ -534,6 +550,31 @@ def _api_login_required(view_func):
     def wrapper(*args, **kwargs):
         if not _is_authenticated():
             return jsonify({"error": "authentication required"}), 401
+        return view_func(*args, **kwargs)
+
+    return wrapper
+
+
+def _session_setup_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not _session_setup_complete():
+            return redirect(url_for("session_setup"))
+        return view_func(*args, **kwargs)
+
+    return wrapper
+
+
+def _api_session_setup_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not _session_setup_complete():
+            return jsonify(
+                {
+                    "error": "session setup required",
+                    "redirect": url_for("session_setup"),
+                }
+            ), 403
         return view_func(*args, **kwargs)
 
     return wrapper
@@ -1292,14 +1333,18 @@ def create_flask_app():
     def index():
         if not _is_authenticated():
             return redirect(url_for("login"))
-        if _dashboard_require_session_setup and not _dashboard_snapshot()["session_details"]:
-            return redirect(url_for("session_setup"))
-        return redirect(url_for("dashboard"))
+        snapshot = _dashboard_snapshot()
+        return redirect(url_for(_dashboard_entry_endpoint(snapshot)))
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error_message = ""
         next_path = request.args.get("next", "").strip()
+
+        if _is_authenticated():
+            if _is_safe_next_path(next_path) and next_path != url_for("login"):
+                return redirect(next_path)
+            return redirect(url_for("index"))
 
         if request.method == "POST":
             username = request.form.get("username", "").strip()
@@ -1314,7 +1359,7 @@ def create_flask_app():
                 session.permanent = True
                 session["authenticated"] = True
                 session["username"] = username
-                if next_path.startswith("/"):
+                if _is_safe_next_path(next_path) and next_path != url_for("login"):
                     return redirect(next_path)
                 return redirect(url_for("index"))
 
@@ -1427,10 +1472,12 @@ def create_flask_app():
             has_saved_setup=has_saved_setup,
             setup_profile_path=str(setup_profile_path) if setup_profile_path else "",
             form_defaults=snapshot.get("session_form_defaults", {}),
+            can_open_dashboard=bool(snapshot["session_details"]),
         )
 
     @app.route("/dashboard")
     @_login_required
+    @_session_setup_required
     def dashboard():
         snapshot = _public_dashboard_snapshot()
         return render_template(
@@ -1441,6 +1488,7 @@ def create_flask_app():
 
     @app.route("/api/dashboard")
     @_api_login_required
+    @_api_session_setup_required
     def dashboard_api():
         return jsonify(_public_dashboard_snapshot())
 
@@ -1509,6 +1557,7 @@ def create_flask_app():
 
     @app.route("/video_feed")
     @_login_required
+    @_session_setup_required
     def video_feed():
         def generate():
             last_seq = -1

@@ -15,30 +15,66 @@
                 <div class="brand-mark brand-mark-small">
                     <span class="brand-mark-inner">S</span>
                 </div>
-                <div>
+                <div class="topbar-brand-copy">
                     <p class="topbar-title">Sentinel</p>
-                    <p class="topbar-subtitle" id="session-label">Live monitoring session</p>
+                    <p class="topbar-subtitle" id="session-label">Session setup required</p>
                 </div>
             </div>
 
-            <nav class="topnav">
-                <button class="nav-button is-active" type="button" data-section="overview">Dashboard</button>
-                <button class="nav-button" type="button" data-section="records">Records and Analytics</button>
-                <button class="nav-button" type="button" data-section="system">System Info</button>
+            <nav class="topnav" aria-label="Dashboard sections">
+                <button class="nav-button is-active" type="button" data-section="overview">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M3 3h6v6H3zM11 3h6v4h-6zM11 9h6v8h-6zM3 11h6v6H3z"></path>
+                        </svg>
+                    </span>
+                    <span>Dashboard</span>
+                </button>
+                <button class="nav-button" type="button" data-section="records">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M5 3h8l4 4v10H5zM13 3v4h4M8 10h6M8 13h6"></path>
+                        </svg>
+                    </span>
+                    <span>Records &amp; Analytics</span>
+                </button>
+                <button class="nav-button" type="button" data-section="history">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M10 4a6 6 0 1 1-5.2 3M4 3v4h4M10 7v4l3 2"></path>
+                        </svg>
+                    </span>
+                    <span>History</span>
+                </button>
+                <button class="nav-button" type="button" data-section="system">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M10 6.5A3.5 3.5 0 1 1 6.5 10 3.5 3.5 0 0 1 10 6.5zm0-4 1 2.3 2.5.6-.9 2.3 1.5 2-2 1.6.2 2.5-2.3-.7-2.3.7.2-2.5-2-1.6 1.5-2-.9-2.3 2.5-.6z"></path>
+                        </svg>
+                    </span>
+                    <span>System Info</span>
+                </button>
             </nav>
 
             <div class="topbar-meta">
-                <div class="meta-block">
-                    <span class="meta-label">Schedule</span>
+                <div class="meta-pill meta-pill-schedule">
+                    <span class="meta-pill-dot" aria-hidden="true"></span>
                     <strong id="schedule-label">--</strong>
                 </div>
-                <div class="meta-block">
-                    <span class="meta-label">Operator</span>
+                <div class="meta-pill meta-pill-timer">
+                    <span class="meta-pill-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" focusable="false">
+                            <path d="M10 5a5 5 0 1 1-5 5 5 5 0 0 1 5-5zm0-2v2m-3 0h6"></path>
+                        </svg>
+                    </span>
+                    <strong id="header-elapsed-label">00:00:00</strong>
+                </div>
+                <div class="meta-pill meta-pill-operator">
+                    <span class="meta-pill-label">Operator</span>
                     <strong>{{ username }}</strong>
                 </div>
-                <a class="ghost-button" href="{{ url_for('session_setup') }}">Session Setup</a>
-                <span class="status-pill" id="status-pill">Idle</span>
-                <a class="ghost-button" href="{{ url_for('logout') }}">Logout</a>
+                <span class="status-pill status-pill-state" id="status-pill">Idle</span>
+                <a class="ghost-button ghost-button-tight" href="{{ url_for('logout') }}">Logout</a>
             </div>
         </header>
 
@@ -105,10 +141,10 @@
         <section class="page-section" id="section-records">
             <article class="panel records-panel">
                 <div class="records-toolbar">
-                    <div class="records-tabs" aria-label="Records sections">
-                        <span class="records-tab is-active">Records</span>
-                        <span class="records-tab">Analytics</span>
-                        <span class="records-tab">Seat Map</span>
+                    <div class="records-heading">
+                        <p class="panel-eyebrow">Records &amp; Analytics</p>
+                        <h2>Saved incident evidence</h2>
+                        <p class="stat-foot">Search, verify, and export reviewed classroom evidence.</p>
                     </div>
                     <div class="records-actions">
                         <label class="sr-only" for="records-status-filter">Filter records</label>
@@ -123,15 +159,7 @@
                         <button class="primary-button records-export" id="records-export" type="button">Export</button>
                     </div>
                 </div>
-
                 <div class="records-card">
-                    <div class="panel-header">
-                        <div>
-                            <p class="panel-eyebrow">Cheating Records</p>
-                            <h2>Saved Incident Evidence</h2>
-                        </div>
-                    </div>
-
                     <div class="records-table-wrap">
                         <table class="records-table">
                             <thead>
@@ -148,6 +176,19 @@
                         </table>
                     </div>
                 </div>
+            </article>
+        </section>
+
+        <section class="page-section" id="section-history">
+            <article class="panel history-panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-eyebrow">History</p>
+                        <h2>Incident timeline</h2>
+                    </div>
+                    <p class="stat-foot">Most recent saved and live events in chronological order.</p>
+                </div>
+                <div class="history-list" id="history-list"></div>
             </article>
         </section>
 

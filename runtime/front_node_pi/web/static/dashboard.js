@@ -30,12 +30,14 @@ const state = {
     renderCache: {
         liveIncidents: "",
         records: "",
+        history: "",
     },
 };
 
 const selectors = {
     sessionLabel: document.getElementById("session-label"),
     scheduleLabel: document.getElementById("schedule-label"),
+    headerElapsedLabel: document.getElementById("header-elapsed-label"),
     statusPill: document.getElementById("status-pill"),
     statusBanner: document.getElementById("status-banner"),
     sourceLabel: document.getElementById("source-label"),
@@ -49,6 +51,7 @@ const selectors = {
     recordsStatusFilter: document.getElementById("records-status-filter"),
     recordsSearch: document.getElementById("records-search"),
     recordsExport: document.getElementById("records-export"),
+    historyList: document.getElementById("history-list"),
     systemGrid: document.getElementById("system-grid"),
     metricTotalIncidents: document.getElementById("metric-total-incidents"),
     metricLastType: document.getElementById("metric-last-type"),
@@ -151,6 +154,18 @@ function incidentMeta(incident) {
     return `${seatMetaLabel(incident)} | ${incident.camera_label || "--"} | ${incident.display_time || "--"}`;
 }
 
+function statusLabel(snapshot) {
+    if (snapshot.system_state === "alert") {
+        return "Alert";
+    }
+    if (snapshot.monitoring_active) {
+        return "Active";
+    }
+    return String(snapshot.status || "idle")
+        .replaceAll("_", " ")
+        .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 function incidentViewerUrl(incident) {
     return incident.gif_url || incident.poster_url || "";
 }
@@ -190,12 +205,31 @@ function findIncidentById(incidentId) {
     return null;
 }
 
+function historyIncidents(snapshot) {
+    const merged = [];
+    const seen = new Set();
+    for (const collection of [snapshot.saved_incidents || [], snapshot.recent_incidents || []]) {
+        for (const incident of collection) {
+            if (!incident || !incident.id || seen.has(incident.id)) {
+                continue;
+            }
+            seen.add(incident.id);
+            merged.push(incident);
+        }
+    }
+    return merged
+        .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")))
+        .slice(0, 12);
+}
+
 function renderStatus(snapshot) {
-    const statusText = (snapshot.status || "idle").replaceAll("_", " ");
-    selectors.statusPill.textContent = statusText.toUpperCase();
+    const tone = systemClass(snapshot) || "is-idle";
+    selectors.statusPill.textContent = statusLabel(snapshot);
+    selectors.statusPill.className = `status-pill status-pill-state ${tone}`.trim();
     selectors.feedPill.textContent = snapshot.monitoring_active
         ? (snapshot.runtime_mode === "video" ? "PLAYBACK" : "LIVE")
-        : statusText.toUpperCase();
+        : statusLabel(snapshot).toUpperCase();
+    selectors.feedPill.className = `status-pill status-pill-quiet ${tone}`.trim();
     selectors.statusBanner.textContent = snapshot.current_error || snapshot.status_message || "Waiting for runtime data.";
     selectors.statusBanner.className = `status-banner ${systemClass(snapshot)}`.trim();
 }
@@ -208,6 +242,7 @@ function renderSummary(snapshot) {
     selectors.scheduleLabel.textContent = session.schedule_label || "No schedule set";
     selectors.sourceLabel.textContent = `Source: ${snapshot.source_label || "--"}`;
     selectors.elapsedLabel.textContent = `Elapsed: ${metrics.elapsed_text || "00:00:00"}`;
+    selectors.headerElapsedLabel.textContent = metrics.elapsed_text || "00:00:00";
     selectors.updateLabel.textContent = `Last update: ${snapshot.last_update_iso || "--"}`;
 
     selectors.metricTotalIncidents.textContent = metrics.total_incidents ?? 0;
@@ -269,6 +304,59 @@ function renderIncidentList(snapshot) {
                         ${hasEvidence
                             ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">${escapeHtml(incidentOpenLabel(incident))}</button>`
                             : `<span class="ghost-button is-disabled">${escapeHtml(incidentOpenLabel(incident))}</span>`}
+                    </div>
+                </div>
+            </article>
+        `;
+    }).join("");
+}
+
+function renderHistory(snapshot) {
+    const items = historyIncidents(snapshot);
+    const signature = items.map((incident) => [
+        incident.id,
+        incident.created_at || "",
+        incident.summary || "",
+        incident.display_time || "",
+        incident.gif_url || "",
+        incident.poster_url || "",
+        normalizeReviewStatus(incident.review_status),
+    ].join(":")).join("|");
+
+    if (state.renderCache.history === signature) {
+        return;
+    }
+    state.renderCache.history = signature;
+
+    if (!items.length) {
+        selectors.historyList.innerHTML = `
+            <div class="history-card">
+                <div class="history-card-inner">
+                    <p class="history-title">No incident history yet</p>
+                    <p class="history-summary">Saved evidence and live alerts will appear here once monitoring starts.</p>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    selectors.historyList.innerHTML = items.map((incident) => {
+        const evidenceUrl = incidentViewerUrl(incident);
+        const hasEvidence = Boolean(evidenceUrl);
+        const statusMeta = reviewMeta(incident);
+        return `
+            <article class="history-card">
+                <div class="history-card-inner">
+                    <div class="history-title-row">
+                        <h3 class="history-title">${escapeHtml(incident.type_label || "Incident")}</h3>
+                        <span class="status-pill">${escapeHtml(statusMeta.label)}</span>
+                    </div>
+                    <p class="history-summary">${escapeHtml(incident.summary || "No incident summary available.")}</p>
+                    <div class="history-meta">${escapeHtml(incidentMeta(incident))}</div>
+                    <div class="history-actions">
+                        ${hasEvidence
+                            ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">${escapeHtml(incidentOpenLabel(incident))}</button>`
+                            : `<span class="ghost-button is-disabled">Evidence Pending</span>`}
                     </div>
                 </div>
             </article>
@@ -562,6 +650,17 @@ async function poll() {
 
     try {
         const response = await fetch("/api/dashboard", { cache: "no-store" });
+        if (response.status === 401) {
+            window.location.assign("/login");
+            return;
+        }
+        if (response.status === 403) {
+            const payload = await response.json().catch(() => ({}));
+            if (payload.redirect) {
+                window.location.assign(payload.redirect);
+            }
+            return;
+        }
         if (!response.ok) {
             return;
         }
@@ -579,6 +678,7 @@ function render(snapshot) {
     renderSummary(snapshot);
     renderIncidentList(snapshot);
     renderRecords(snapshot);
+    renderHistory(snapshot);
     renderSystem(snapshot);
     showPopup(snapshot.popup_incident);
 }
