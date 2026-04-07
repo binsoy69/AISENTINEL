@@ -1,0 +1,2 @@
+"""Central dashboard service package."""
+

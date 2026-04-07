@@ -14,3 +14,5 @@ tests/tests_on_pi/evidence*
 runtime/front_node_pi/__pycache__/*
 runtime/front_node_pi/data/*
 tests/__pycache__/*
+__pycache__/
+*.py[cod]

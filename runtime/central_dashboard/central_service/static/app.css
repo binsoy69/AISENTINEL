@@ -1,0 +1,237 @@
+:root {
+    --bg: #f3efe7;
+    --panel: #fffdf8;
+    --ink: #172126;
+    --muted: #61717d;
+    --line: rgba(23, 33, 38, 0.12);
+    --accent: #c55c2e;
+    --accent-soft: #f6ddcf;
+    --ok: #1f7a53;
+    --bad: #a33b2f;
+    --shadow: 0 18px 50px rgba(29, 41, 49, 0.10);
+    --radius: 22px;
+    --font: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: var(--font);
+    color: var(--ink);
+    background:
+        radial-gradient(circle at top left, rgba(197, 92, 46, 0.12), transparent 34%),
+        linear-gradient(180deg, #f8f4ed 0%, var(--bg) 100%);
+}
+.login-body, .dashboard-body { min-height: 100vh; }
+.login-shell, .dashboard-shell {
+    width: min(1280px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: 32px 0 48px;
+}
+.login-shell {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+}
+.login-panel, .session-card, .records-card, .status-card, .feed-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+.login-panel {
+    max-width: 520px;
+    padding: 36px;
+}
+.eyebrow {
+    margin: 0 0 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+h1, h2, p { margin-top: 0; }
+.lede {
+    color: var(--muted);
+    line-height: 1.6;
+}
+.login-form, .session-form {
+    display: grid;
+    gap: 14px;
+}
+.login-form label, .session-form label {
+    display: grid;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+}
+.login-form input, .session-form input, .feed-toolbar select, .review-select {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+}
+button, .ghost-link, .evidence-link {
+    appearance: none;
+    border: none;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+}
+button:hover, .ghost-link:hover, .evidence-link:hover { transform: translateY(-1px); }
+.login-form button, .session-buttons button, .evidence-link {
+    padding: 12px 18px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+}
+.session-buttons .secondary {
+    background: #e8ecef;
+    color: var(--ink);
+}
+.ghost-link { color: var(--ink); font-weight: 700; }
+.banner {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: #edf3f6;
+    color: var(--ink);
+    font-size: 14px;
+}
+.banner-error { background: #f7dfdb; color: var(--bad); }
+.hero, .session-card, .records-card { margin-bottom: 22px; }
+.hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 24px;
+}
+.session-card { padding: 24px; }
+.session-card-head, .records-head, .status-head, .feed-head, .feed-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: center;
+}
+.records-head, .session-card-head { align-items: start; margin-bottom: 18px; }
+.session-badge {
+    padding: 10px 14px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 700;
+}
+.session-form { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.notes-field { grid-column: span 2; }
+.session-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 18px;
+}
+.status-grid, .feed-grid {
+    display: grid;
+    gap: 18px;
+    margin-bottom: 22px;
+}
+.status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.feed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.status-card, .feed-card { padding: 18px; }
+.node-pill {
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.node-pill.is-online { background: #dcefe6; color: var(--ok); }
+.node-pill.is-offline { background: #f5e4de; color: var(--bad); }
+.status-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+}
+.metric {
+    padding: 12px;
+    border-radius: 16px;
+    background: #f7f4ee;
+}
+.metric-label {
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    margin-bottom: 6px;
+}
+.stream-shell {
+    margin-top: 14px;
+    overflow: hidden;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    aspect-ratio: 16 / 9;
+    background: #1b2428;
+    display: grid;
+    place-items: center;
+}
+.stream-shell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.stream-empty {
+    color: rgba(255, 255, 255, 0.76);
+    text-align: center;
+    padding: 24px;
+}
+.records-note {
+    color: var(--muted);
+    max-width: 360px;
+    font-size: 14px;
+}
+.records-table-wrap { overflow-x: auto; }
+.records-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.records-table th, .records-table td {
+    padding: 14px 10px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: middle;
+}
+.records-table th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+}
+.type-pill {
+    display: inline-flex;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 12px;
+}
+.students { color: var(--muted); font-weight: 600; }
+@media (max-width: 1080px) {
+    .session-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .notes-field { grid-column: span 2; }
+    .status-grid, .feed-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+    .dashboard-shell, .login-shell { width: min(100vw - 20px, 100%); }
+    .hero, .session-card-head, .records-head, .feed-head, .feed-toolbar, .status-head {
+        flex-direction: column;
+        align-items: start;
+    }
+    .session-form { grid-template-columns: 1fr; }
+    .notes-field { grid-column: auto; }
+}

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AISENTINEL Central Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="dashboard-body">
+    <script id="dashboard-bootstrap" type="application/json">{{ bootstrap|tojson }}</script>
+
+    <main class="dashboard-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">AISENTINEL Central</p>
+                <h1>Dual-node monitoring console</h1>
+                <p class="lede">One session, two live feeds, one evidence ledger.</p>
+            </div>
+            <div class="hero-actions">
+                <a class="ghost-link" href="{{ url_for('logout') }}">Logout</a>
+            </div>
+        </header>
+
+        <section class="session-card">
+            <div class="session-card-head">
+                <div>
+                    <p class="eyebrow">Session Control</p>
+                    <h2>Shared Exam Session</h2>
+                </div>
+                <div class="session-badge" id="session-status-pill">No Session</div>
+            </div>
+
+            <form id="session-form" class="session-form">
+                <label>
+                    <span>Subject Code</span>
+                    <input type="text" name="subject_code" placeholder="CS 321">
+                </label>
+                <label>
+                    <span>Professor</span>
+                    <input type="text" name="professor" placeholder="Dr. Reyes">
+                </label>
+                <label>
+                    <span>Date</span>
+                    <input type="date" name="session_date">
+                </label>
+                <label>
+                    <span>Start Time</span>
+                    <input type="time" name="start_time">
+                </label>
+                <label>
+                    <span>End Time</span>
+                    <input type="time" name="end_time">
+                </label>
+                <label class="notes-field">
+                    <span>Notes</span>
+                    <input type="text" name="notes" placeholder="Optional note for this run">
+                </label>
+            </form>
+
+            <div class="session-buttons">
+                <button id="create-session-button" type="button">Create Session</button>
+                <button id="start-session-button" type="button" class="secondary">Start Nodes</button>
+                <button id="restart-session-button" type="button" class="secondary">Restart Nodes</button>
+                <button id="stop-session-button" type="button" class="secondary">Stop Nodes</button>
+            </div>
+            <div class="banner" id="session-banner" hidden></div>
+        </section>
+
+        <section class="status-grid" id="node-status-grid"></section>
+        <section class="feed-grid" id="feed-grid"></section>
+
+        <section class="records-card">
+            <div class="records-head">
+                <div>
+                    <p class="eyebrow">Unified Records</p>
+                    <h2>Synced Incident Evidence</h2>
+                </div>
+                <div class="records-note">Camera labels show whether an incident came from the front or mid node.</div>
+            </div>
+            <div class="records-table-wrap">
+                <table class="records-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Camera</th>
+                            <th>Type</th>
+                            <th>Students</th>
+                            <th>Evidence</th>
+                            <th>Review</th>
+                        </tr>
+                    </thead>
+                    <tbody id="records-body"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Central Dashboard Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="login-body">
+    <main class="login-shell">
+        <section class="login-panel">
+            <p class="eyebrow">AISENTINEL Central</p>
+            <h1>Control both classroom nodes from one dashboard.</h1>
+            <p class="lede">Sign in to manage the shared session, watch both live feeds, and review synced evidence records.</p>
+
+            {% if error_message %}
+            <div class="banner banner-error">{{ error_message }}</div>
+            {% endif %}
+
+            <form method="post" class="login-form">
+                <input type="hidden" name="next" value="{{ next_path }}">
+                <label>
+                    <span>Username</span>
+                    <input type="text" name="username" autocomplete="username" required>
+                </label>
+                <label>
+                    <span>Password</span>
+                    <input type="password" name="password" autocomplete="current-password" required>
+                </label>
+                <button type="submit">Enter Dashboard</button>
+            </form>
+        </section>
+    </main>
+</body>
+</html>
