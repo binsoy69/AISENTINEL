@@ -45,6 +45,7 @@ class NodeAgentConfig:
     preview_fps: float
     jpeg_quality: int
     detector_mode: str
+    runtime_config_path: Path | None
     motion_threshold: float
     motion_min_area_ratio: float
     motion_cooldown_sec: float
@@ -101,6 +102,9 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         preview_fps=max(1.0, parser.getfloat("preview", "fps", fallback=10.0)),
         jpeg_quality=max(20, min(95, parser.getint("preview", "jpeg_quality", fallback=72))),
         detector_mode=parser.get("detector", "mode", fallback="motion").strip() or "motion",
+        runtime_config_path=_resolve_path(
+            parser.get("detector", "runtime_config_path", fallback="")
+        ),
         motion_threshold=max(1.0, parser.getfloat("detector", "motion_threshold", fallback=24.0)),
         motion_min_area_ratio=max(0.001, parser.getfloat("detector", "motion_min_area_ratio", fallback=0.012)),
         motion_cooldown_sec=max(1.0, parser.getfloat("detector", "motion_cooldown_sec", fallback=8.0)),

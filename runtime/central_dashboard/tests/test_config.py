@@ -28,6 +28,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.node_id, "front")
         self.assertEqual(config.port, 8091)
         self.assertEqual(config.source_mode, "webcam")
+        self.assertEqual(config.detector_mode, "front_runtime")
+        self.assertEqual(
+            config.runtime_config_path,
+            (ROOT / "node_front_runtime.ini").resolve(strict=False),
+        )
         self.assertIn("runtime", str(config.evidence_root))
         self.assertIn("central_dashboard", str(config.evidence_root))
 

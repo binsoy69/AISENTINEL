@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from datetime import datetime
 import base64
 import json
 from pathlib import Path
@@ -15,17 +13,19 @@ from urllib.parse import urlparse
 import cv2
 
 from central_dashboard.node_agent.detector import EvidenceBuilder, MotionDetector, annotate_frame
+from central_dashboard.node_agent.front_runtime import run_front_runtime_session
 from central_dashboard.node_agent.sync import LocalSyncQueue
-from central_dashboard.shared.dto import CommandAck, NodeDescriptor, NodeHeartbeat, SessionSpec
+from central_dashboard.shared.dto import CommandAck, IncidentManifest, NodeDescriptor, NodeHeartbeat, SessionSpec
 from central_dashboard.shared.http import StdlibHttpClient
 
 
 class NodeRuntime:
     """Supervises node registration, session execution, local feeds, and sync."""
 
-    def __init__(self, config, *, http_client=None) -> None:
+    def __init__(self, config, *, http_client=None, front_runtime_runner=None) -> None:
         self.config = config
         self.http_client = http_client or StdlibHttpClient()
+        self.front_runtime_runner = front_runtime_runner or run_front_runtime_session
         self.sync_queue = LocalSyncQueue(config.local_db_path)
         self.config.evidence_root.mkdir(parents=True, exist_ok=True)
 
@@ -116,7 +116,10 @@ class NodeRuntime:
             sync_backlog=self.sync_queue.backlog_count(),
             incident_count=incident_count,
             last_error=last_error,
-            extra={"profile": self.config.profile},
+            extra={
+                "profile": self.config.profile,
+                "detector_mode": self.config.detector_mode,
+            },
         )
 
     def status_payload(self) -> dict:
@@ -252,8 +255,10 @@ class NodeRuntime:
         return synced
 
     def _sync_manifest(self, payload: dict) -> bool:
-        manifest_path = Path(payload["manifest_path"])
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = payload.get("manifest_payload")
+        if not isinstance(manifest, dict):
+            manifest_path = Path(payload["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         result = self.http_client.post_json(
             f"{self.config.central_base_url}/api/v1/incidents",
             manifest,
@@ -284,6 +289,22 @@ class NodeRuntime:
         return result.ok
 
     def _run_session(self, session: SessionSpec) -> None:
+        try:
+            if self.config.detector_mode == "front_runtime":
+                self.front_runtime_runner(self, session)
+            else:
+                self._run_motion_session(session)
+        except Exception as exc:  # pragma: no cover - runtime safety
+            self._set_error(str(exc))
+            with self._lock:
+                self._status = "error"
+        finally:
+            with self._lock:
+                if self._status != "error":
+                    self._status = "idle"
+                self._session_thread = None
+
+    def _run_motion_session(self, session: SessionSpec) -> None:
         builder = EvidenceBuilder(self.config)
         detector = MotionDetector(
             self.config.motion_threshold,
@@ -292,10 +313,7 @@ class NodeRuntime:
         )
         capture = self._open_capture()
         if capture is None or not capture.isOpened():
-            self._set_error("Could not open configured capture source.")
-            with self._lock:
-                self._status = "error"
-            return
+            raise RuntimeError("Could not open configured capture source.")
 
         with self._lock:
             self._status = "running"
@@ -357,24 +375,55 @@ class NodeRuntime:
                 self._finalize_incident(builder, sequence)
         finally:
             capture.release()
-            with self._lock:
-                if self._status != "error":
-                    self._status = "idle"
-                self._session_thread = None
 
     def _finalize_incident(self, builder: EvidenceBuilder, sequence) -> None:
         manifest, assets = builder.finalize_sequence(sequence)
+        asset_payloads = []
+        for asset in assets:
+            if asset["asset_type"] == "manifest":
+                continue
+            asset_payloads.append(
+                {
+                    "asset_type": asset["asset_type"],
+                    "file_path": str(asset["file_path"]),
+                    "filename": asset["filename"],
+                }
+            )
+        self.record_finalized_incident(manifest, asset_payloads)
+
+    def mark_session_running(self) -> None:
+        with self._lock:
+            self._status = "running"
+            self._last_error = ""
+
+    def should_stop_requested(self) -> bool:
+        return self._shutdown.is_set() or self._session_stop.is_set()
+
+    def publish_detector_frames(
+        self,
+        raw_frame,
+        annotated_frame,
+        *,
+        processing_fps: float | None = None,
+    ) -> None:
+        with self._lock:
+            self._status = "running"
+            if processing_fps is not None:
+                self._fps = float(processing_fps)
+        self._publish_frames(raw_frame, annotated_frame)
+
+    def record_finalized_incident(
+        self,
+        manifest: IncidentManifest,
+        assets: list[dict],
+    ) -> None:
         self.sync_queue.enqueue(
             "manifest",
             manifest.incident_id,
             self.config.node_id,
-            {
-                "manifest_path": str(self.config.evidence_root / manifest.session_id / manifest.incident_id / "manifest.json"),
-            },
+            {"manifest_payload": manifest.to_dict()},
         )
         for asset in assets:
-            if asset["asset_type"] == "manifest":
-                continue
             self.sync_queue.enqueue(
                 "asset",
                 manifest.incident_id,

@@ -115,9 +115,29 @@ For detailed camera setup instructions, see `CAMERA_SETUP_GUIDE.md`.
 
 ---
 
-## 5. Desk Zone Calibration
+## 5. Node Calibration
 
-Before the exam, calibrate desk zone boundaries for the back 12 seats from the mid camera's perspective:
+For the central dashboard runtime, calibrate the mid node with the real Hailo
+setup flow before the exam. This saves a JSON setup profile and updates
+`runtime/central_dashboard/node_mid_runtime.ini` so the node agent can reuse it
+on startup.
+
+Webcam calibration:
+
+```bash
+cd ~/AISENTINEL
+python3 runtime/central_dashboard/scripts/calibrate_node_webcam.py --config runtime/central_dashboard/node_mid.ini
+```
+
+Optional video-based calibration for testing:
+
+```bash
+cd ~/AISENTINEL
+python3 runtime/central_dashboard/scripts/calibrate_node_video.py --config runtime/central_dashboard/node_mid.ini --video test-videos/mid.mp4
+```
+
+Legacy desk-zone experiments are still available if you need the older manual
+workflow:
 
 ```bash
 cd ~/AISENTINEL
@@ -150,8 +170,18 @@ If offline, sync to the Front Node over a direct Ethernet connection.
 cd ~/AISENTINEL
 source venv/bin/activate
 
-# Start the mid node detection pipeline
-python3 main.py --mode mid
+# Start the central service on the laptop/host
+python3 runtime/central_dashboard/scripts/run_central_service.py
+```
+
+On the mid-node Raspberry Pi:
+
+```bash
+cd ~/AISENTINEL
+source venv/bin/activate
+
+# Start the real mid-node agent used by the central dashboard
+python3 runtime/central_dashboard/scripts/run_node_agent.py --config runtime/central_dashboard/node_mid.ini
 ```
 
 ---

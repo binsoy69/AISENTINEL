@@ -62,6 +62,7 @@ class AuthTests(unittest.TestCase):
                 preview_fps=10.0,
                 jpeg_quality=70,
                 detector_mode="motion",
+                runtime_config_path=None,
                 motion_threshold=5.0,
                 motion_min_area_ratio=0.001,
                 motion_cooldown_sec=0.05,

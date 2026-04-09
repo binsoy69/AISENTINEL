@@ -1149,6 +1149,13 @@ def _finalize_evidence_sequence(sequence) -> None:
         frame_count=manifest["frame_count"],
     )
 
+    callback = sequence.get("incident_finalize_callback")
+    if callback is not None:
+        try:
+            callback(dict(manifest))
+        except Exception as exc:  # pragma: no cover - runtime safety
+            head_mod.log_info(f"Incident finalize callback error: {exc}")
+
 
 def get_evidence_target_students(sequence):
     """Return the student number(s) that should be highlighted in evidence."""
@@ -1263,7 +1270,8 @@ def _stop_evidence_writer(task_queue: Queue | None, thread: threading.Thread | N
 
 
 def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_type,
-                            event_ts_sec, **payload):
+                            event_ts_sec, incident_finalize_callback=None,
+                            **payload):
     """Save buffered pre-event frames, then queue event + post-event frames."""
     with _dashboard_lock:
         camera_label = _dashboard_state["source_label"]
@@ -1284,6 +1292,7 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
         "camera_label": camera_label,
         "session_details": session_details,
         "event_dir": None,
+        "incident_finalize_callback": incident_finalize_callback,
         **payload,
     }
     _ensure_sequence_storage(sequence)
@@ -1822,7 +1831,8 @@ def load_setup_from_profile(profile_path, first_frame, pose_estimator, tracker):
 def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                   student_map, baseline_yaw_map, assigned_students, student_lines,
                   source_label, port, roi_polygon=None, source_mode="video",
-                  source_fps=None):
+                  source_fps=None, frame_publish_callback=None,
+                  incident_finalize_callback=None, should_stop_callback=None):
     """Run all behavior detectors in a single Pi-side loop."""
     video_name = Path(str(source_label)).stem
     fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
@@ -1937,6 +1947,10 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
     try:
         while True:
+            if should_stop_callback is not None and should_stop_callback():
+                head_mod.log_info("Monitoring stop requested by the host runtime.")
+                break
+
             frame_loop_started_at = time.perf_counter()
             ret, frame = cap.read()
             if not ret:
@@ -2854,6 +2868,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         recent_evidence_frames,
                         "head",
                         ts_sec,
+                        incident_finalize_callback=incident_finalize_callback,
                         student_num=student_num,
                         behavior=behavior,
                     )
@@ -2867,6 +2882,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         recent_evidence_frames,
                         "passing",
                         ts_sec,
+                        incident_finalize_callback=incident_finalize_callback,
                         student_nums=[src_num, nbr_num],
                     )
                 )
@@ -2879,6 +2895,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         recent_evidence_frames,
                         "hands",
                         ts_sec,
+                        incident_finalize_callback=incident_finalize_callback,
                         video_name=video_name,
                         line_idx=line_idx,
                         student_num=student_num,
@@ -2893,6 +2910,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         recent_evidence_frames,
                         "object",
                         ts_sec,
+                        incident_finalize_callback=incident_finalize_callback,
                         student_num=event["student_num"],
                         class_name=event["class_name"],
                         confidence=event["confidence"],
@@ -2965,6 +2983,22 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 hand_detections=len(hand_boxes),
                 object_detections=len(object_dets),
             )
+
+            if frame_publish_callback is not None:
+                try:
+                    frame_publish_callback(
+                        raw_frame,
+                        annotated,
+                        {
+                            "frame_idx": frame_idx,
+                            "timestamp_sec": ts_sec,
+                            "processing_fps": display_processing_fps,
+                            "source_fps": fps,
+                            "inference_ms": inference_ms,
+                        },
+                    )
+                except Exception as exc:  # pragma: no cover - runtime safety
+                    head_mod.log_info(f"Frame publish callback error: {exc}")
 
             if total_frames > 0 and frame_idx % 500 == 0:
                 pct = frame_idx / total_frames * 100 if total_frames > 0 else 0

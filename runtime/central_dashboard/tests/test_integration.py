@@ -67,6 +67,7 @@ def build_node_config(tmpdir: Path, *, node_id: str, display_name: str, camera_l
         preview_fps=30.0,
         jpeg_quality=75,
         detector_mode="motion",
+        runtime_config_path=None,
         motion_threshold=5.0,
         motion_min_area_ratio=0.001,
         motion_cooldown_sec=0.05,
