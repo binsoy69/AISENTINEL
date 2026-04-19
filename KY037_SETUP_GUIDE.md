@@ -44,42 +44,37 @@ The test script is:
 
 - `tests/tests_on_pi/ky037_sound_threshold_test.py`
 
-Run a 30-second smoke test:
+Run the continuous sound detector:
 
 ```bash
 cd ~/AISENTINEL
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py --duration 30
+python3 tests/tests_on_pi/ky037_sound_threshold_test.py
 ```
 
-Run continuously until `Ctrl+C`:
+The script prints only:
 
-```bash
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py --duration 0
+```text
+no sound detected
+sound detected
 ```
 
-Save a 5-minute CSV log:
+If the script reports `sound detected` when there is no sound, your KY-037
+board may use opposite digital polarity. Rerun with:
 
 ```bash
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py --csv ky037_noise_log.csv --duration 300
-```
-
-If the script reports `NOISY` when the room is quiet, your KY-037 board may use
-opposite digital polarity. Rerun with:
-
-```bash
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py --active-high --duration 30
+python3 tests/tests_on_pi/ky037_sound_threshold_test.py --active-high
 ```
 
 ## Calibration
 
 1. Wire the KY-037 as shown above and boot the Raspberry Pi.
-2. Start the script with `--duration 0`.
-3. Keep the classroom quiet and watch the terminal state.
+2. Start the script.
+3. Keep the classroom quiet and watch the terminal output.
 4. Turn the KY-037 potentiometer slowly until normal room sound stays mostly
-   `quiet`.
+   `no sound detected`.
 5. Speak loudly, clap, or create the classroom sound level you want to flag.
 6. Continue adjusting until the onboard KY-037 digital LED and the script switch
-   to `NOISY` at the desired warning point.
+   to `sound detected` at the desired warning point.
 
 For a PDF-style classroom monitor, use the 45 dB and 55 dB values as behavior
 targets when calibrating against a real sound meter or phone SPL app. With this
@@ -87,11 +82,11 @@ digital-only setup, the Pi records only threshold crossings.
 
 ## Troubleshooting
 
-- Always `NOISY`:
+- Always `sound detected`:
   - Try `--active-high`.
   - Recheck `DO` / `D0` to GPIO17 physical pin `11`.
   - Adjust the potentiometer away from the most sensitive position.
-- Always `quiet`:
+- Always `no sound detected`:
   - Try speaking or clapping close to the microphone.
   - Recheck `VCC` to `3.3V` and `GND` to ground.
   - Adjust the potentiometer until the KY-037 onboard digital LED toggles.
