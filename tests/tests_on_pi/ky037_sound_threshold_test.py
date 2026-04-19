@@ -17,6 +17,8 @@ Prerequisite on Raspberry Pi OS:
 
 Usage:
     python3 tests/tests_on_pi/ky037_sound_threshold_test.py
+    python3 tests/tests_on_pi/ky037_sound_threshold_test.py --debug
+    python3 tests/tests_on_pi/ky037_sound_threshold_test.py --active-high
 """
 
 from __future__ import annotations
@@ -45,23 +47,34 @@ def load_gpio():
     return GPIO
 
 
-def detect_sound(GPIO, sound_sensor_pin: int) -> None:
+def is_sound_detected(GPIO, sound_sensor_pin: int, active_low: bool) -> tuple[bool, int]:
+    """Return interpreted sound state plus the raw GPIO value."""
+    raw_value = GPIO.input(sound_sensor_pin)
+    if active_low:
+        return raw_value == GPIO.LOW, raw_value
+    return raw_value == GPIO.HIGH, raw_value
+
+
+def detect_sound(GPIO, args: argparse.Namespace) -> None:
     """Read the KY-037 digital output and print the current detection state."""
-    sound_detected = GPIO.input(sound_sensor_pin)
-    if sound_detected == 1:
+    sound_detected, raw_value = is_sound_detected(GPIO, args.pin, args.active_low)
+    if sound_detected:
         print(SOUND_MESSAGE, flush=True)
     else:
         print(NO_SOUND_MESSAGE, flush=True)
+    if args.debug:
+        print(f"raw GPIO{args.pin}={raw_value}", flush=True)
 
 
 def monitor_gpio(args: argparse.Namespace) -> None:
     GPIO = load_gpio()
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(args.pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    pull_mode = GPIO.PUD_UP if args.active_low else GPIO.PUD_DOWN
+    GPIO.setup(args.pin, GPIO.IN, pull_up_down=pull_mode)
 
     try:
         while True:
-            detect_sound(GPIO, args.pin)
+            detect_sound(GPIO, args)
             time.sleep(args.poll_interval)
     except KeyboardInterrupt:
         return
@@ -79,11 +92,30 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SOUND_SENSOR_PIN,
         help="BCM GPIO pin connected to KY-037 D0 (default: 4)",
     )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--active-low",
+        dest="active_low",
+        action="store_true",
+        help="Treat raw GPIO LOW as sound detected (default)",
+    )
+    mode_group.add_argument(
+        "--active-high",
+        dest="active_low",
+        action="store_false",
+        help="Treat raw GPIO HIGH as sound detected",
+    )
+    parser.set_defaults(active_low=True)
     parser.add_argument(
         "--poll-interval",
         type=float,
         default=DEFAULT_POLL_INTERVAL_SECONDS,
         help="Seconds between GPIO reads (default: 0.2)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Also print the raw GPIO value after each detection message",
     )
 
     args = parser.parse_args()

@@ -58,8 +58,21 @@ no sound detected
 sound detected
 ```
 
-This version follows the referenced Raspberry Pi tutorial pattern: `GPIO4`
-reads `1` as `sound detected` and `0` as `no sound detected`.
+Many KY-037 boards use active-low digital output: when the sensor LED turns on,
+the Raspberry Pi may read GPIO value `0`. This script defaults to active-low, so
+GPIO `0` means `sound detected` and GPIO `1` means `no sound detected`.
+
+If your board behaves the opposite way, run:
+
+```bash
+python3 tests/tests_on_pi/ky037_sound_threshold_test.py --active-high
+```
+
+To see the raw GPIO value while testing, run:
+
+```bash
+python3 tests/tests_on_pi/ky037_sound_threshold_test.py --debug
+```
 
 ## Calibration
 
@@ -79,10 +92,13 @@ digital-only setup, the Pi records only threshold crossings.
 ## Troubleshooting
 
 - Always `sound detected`:
+  - Try `--active-high`.
   - Recheck `DO` / `D0` to GPIO4 physical pin `7`.
   - Adjust the potentiometer away from the most sensitive position.
 - Always `no sound detected`:
+  - Run with `--debug` and check whether raw GPIO changes between `0` and `1`.
   - Try speaking or clapping close to the microphone.
+  - Make sure KY-037 `DO` / `D0`, not `AO` / `A0`, is connected to GPIO4.
   - Recheck `VCC` to `3.3V` and `GND` to ground.
   - Adjust the potentiometer until the KY-037 onboard digital LED toggles.
 - GPIO permission or import error:
