@@ -28,14 +28,14 @@ Power off the Raspberry Pi before wiring.
 | --- | --- | --- | --- |
 | `VCC` or `+` | Pin `1` | `3.3V` | Power |
 | `GND` or `G` | Pin `6` | `GND` | Ground |
-| `DO` or `D0` | Pin `11` | `GPIO17` | Digital threshold output |
+| `DO` or `D0` | Pin `7` | `GPIO4` | Digital threshold output |
 | `AO` or `A0` | Leave unconnected | N/A | Analog output, requires ADC |
 
 ## Install Prerequisite
 
 ```bash
 sudo apt update
-sudo apt install python3-gpiozero python3-lgpio
+sudo apt install python3-rpi.gpio
 ```
 
 ## Test Script
@@ -58,12 +58,8 @@ no sound detected
 sound detected
 ```
 
-If the script reports `sound detected` when there is no sound, your KY-037
-board may use opposite digital polarity. Rerun with:
-
-```bash
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py --active-high
-```
+This version follows the referenced Raspberry Pi tutorial pattern: `GPIO4`
+reads `1` as `sound detected` and `0` as `no sound detected`.
 
 ## Calibration
 
@@ -83,15 +79,14 @@ digital-only setup, the Pi records only threshold crossings.
 ## Troubleshooting
 
 - Always `sound detected`:
-  - Try `--active-high`.
-  - Recheck `DO` / `D0` to GPIO17 physical pin `11`.
+  - Recheck `DO` / `D0` to GPIO4 physical pin `7`.
   - Adjust the potentiometer away from the most sensitive position.
 - Always `no sound detected`:
   - Try speaking or clapping close to the microphone.
   - Recheck `VCC` to `3.3V` and `GND` to ground.
   - Adjust the potentiometer until the KY-037 onboard digital LED toggles.
 - GPIO permission or import error:
-  - Install GPIO support with `sudo apt install python3-gpiozero python3-lgpio`.
+  - Install GPIO support with `sudo apt install python3-rpi.gpio`.
   - Run on Raspberry Pi OS, not on a desktop test machine.
 - Need real dB readings:
   - Add an ADC such as MCP3008 or ADS1115 and read KY-037 `AO` / `A0` through
