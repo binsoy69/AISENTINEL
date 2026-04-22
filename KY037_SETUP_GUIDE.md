@@ -89,6 +89,12 @@ When sound monitoring is enabled in the front-node runtime config:
 Noise incidents are intentionally saved without image or GIF evidence. The
 dashboards display them as `No media`.
 
+If the front node is connected to the shared central dashboard, also review
+the network settings in `runtime/central_dashboard/README.md`. The sound sensor
+does not add new host-IP fields. The node still uses `node_front.ini` for
+`host`, `port`, and `central_base_url`, and the central service still uses
+`central_service.ini` for its `host` and `port`.
+
 ## Runtime Config
 
 Add or update the `[sound_sensor]` section in the front-node runtime INI:
@@ -244,6 +250,17 @@ script first.
 
 ## Troubleshooting
 
+- The central service or node agent says `Cannot assign requested address`:
+  - This usually means `host` was set to an IP address that does not belong to
+    the machine running that process.
+  - Keep `host = 0.0.0.0` in `runtime/central_dashboard/central_service.ini`
+    and in `runtime/central_dashboard/node_front.ini` unless you intentionally
+    want to bind to one specific local interface.
+  - Set `central_base_url` in `runtime/central_dashboard/node_front.ini` to the
+    actual IP of the machine running the central dashboard, for example
+    `http://192.168.1.50:8090`.
+  - Use `hostname -I` on Raspberry Pi OS or `ipconfig` on Windows to confirm
+    the real machine IP first.
 - `i2cdetect -y 1` does not show `48`:
   - Recheck `SDA` to Pi pin `3` and `SCL` to Pi pin `5`.
   - Confirm I2C is enabled in `raspi-config`.
