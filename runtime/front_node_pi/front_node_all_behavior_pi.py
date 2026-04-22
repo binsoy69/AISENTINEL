@@ -53,6 +53,7 @@ import front_node_hands_under_table_pi as hands_mod
 import front_node_cellphone_cheat_pi as obj_mod
 import front_node_all_behavior_setup_io as setup_io
 from runtime_config import resolve_cli_path
+from sound_monitor import build_noise_summary
 
 # ── Paths ────────────────────────────────────────────────────
 POSE_MODEL_PATH = head_mod.POSE_MODEL_PATH
@@ -64,6 +65,7 @@ HEAD_EVIDENCE_DIR = EVIDENCE_DIR / "head_behavior"
 PASSING_EVIDENCE_DIR = EVIDENCE_DIR / "passing_papers"
 HANDS_EVIDENCE_DIR = EVIDENCE_DIR / "hands"
 OBJECT_EVIDENCE_DIR = EVIDENCE_DIR / "objects"
+NOISE_EVIDENCE_DIR = EVIDENCE_DIR / "noise"
 EVIDENCE_PRE_EVENT_FRAMES = 10
 EVIDENCE_POST_EVENT_FRAMES = 10
 
@@ -174,6 +176,7 @@ def _new_dashboard_metrics() -> dict:
         "hand_alerts": 0,
         "hand_warnings": 0,
         "object_alerts": 0,
+        "noise_alerts": 0,
         "tracked_students": 0,
         "assigned_students": 0,
         "processing_fps": 0.0,
@@ -187,6 +190,11 @@ def _new_dashboard_metrics() -> dict:
         "object_detections": 0,
         "last_incident_type": "No incidents yet",
         "last_incident_time": "",
+        "sound_db": None,
+        "sound_threshold_db": None,
+        "sound_status": "disabled",
+        "sound_over_threshold": False,
+        "sound_updated_at": "",
     }
 
 
@@ -265,7 +273,7 @@ def _sorted_saved_incident_ids(index: dict) -> list[str]:
     )
 
 
-def _upsert_recent_incident_locked(incident: dict) -> dict:
+def _upsert_recent_incident_locked(incident: dict, *, show_popup: bool = True) -> dict:
     incident_id = incident["id"]
     existing = _dashboard_state["incident_index"].get(incident_id)
     if existing is None:
@@ -278,7 +286,8 @@ def _upsert_recent_incident_locked(incident: dict) -> dict:
         removed_id = _dashboard_state["recent_incident_ids"].pop()
         _dashboard_state["incident_index"].pop(removed_id, None)
 
-    _dashboard_state["popup_incident_id"] = incident_id
+    if show_popup:
+        _dashboard_state["popup_incident_id"] = incident_id
     _dashboard_state["last_alert_at_iso"] = incident.get("created_at", _dashboard_now_iso())
     _update_dashboard_timestamp_locked()
     return existing
@@ -298,6 +307,7 @@ def refresh_saved_incidents() -> None:
         PASSING_EVIDENCE_DIR,
         HANDS_EVIDENCE_DIR,
         OBJECT_EVIDENCE_DIR,
+        NOISE_EVIDENCE_DIR,
     ):
         events_dir = base_dir / EVENTS_DIRNAME
         if events_dir.exists():
@@ -425,7 +435,9 @@ def update_dashboard_metrics(**metrics) -> None:
     with _dashboard_lock:
         current = _dashboard_state.setdefault("metrics", _new_dashboard_metrics())
         current.update(metrics)
-        if current.get("total_incidents", 0) > 0:
+        if current.get("sound_over_threshold"):
+            _dashboard_state["system_state"] = "alert"
+        elif current.get("total_incidents", 0) > 0:
             _dashboard_state["system_state"] = "alert"
         elif _dashboard_state.get("monitoring_active"):
             _dashboard_state["system_state"] = "active"
@@ -439,6 +451,73 @@ def record_dashboard_incident(incident: dict) -> None:
         metrics["last_incident_type"] = stored.get("type_label", "Incident")
         metrics["last_incident_time"] = stored.get("display_time", "")
         _dashboard_state["system_state"] = "alert"
+
+
+def dashboard_noise_alert_count() -> int:
+    with _dashboard_lock:
+        metrics = _dashboard_state.setdefault("metrics", _new_dashboard_metrics())
+        return int(metrics.get("noise_alerts", 0) or 0)
+
+
+def record_dashboard_noise_incident(
+    *,
+    estimated_db: float,
+    threshold_db: float,
+    source_label: str,
+    session_details: dict | None,
+) -> dict:
+    incident_id = f"noise-{datetime.now().strftime('%Y%m%d%H%M%S')}-{int(time.time() * 1000) % 10000:04d}"
+    event_dir = _evidence_group_dir("noise") / incident_id
+    event_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = event_dir / "manifest.json"
+    manifest_relpath = _relative_evidence_path(manifest_path)
+    manifest = {
+        "id": incident_id,
+        "created_at": _dashboard_now_iso(),
+        "display_time": _format_clock(),
+        "event_clock": _format_clock(),
+        "status": "ready",
+        "severity": "alert",
+        "behavior_type": "noise",
+        "type_label": "Noise Threshold Exceeded",
+        "summary": build_noise_summary(estimated_db, threshold_db),
+        "student_numbers": [],
+        "camera_label": source_label,
+        "session_details": dict(session_details or _dashboard_state.get("session_details", {})),
+        "confidence": None,
+        "confidence_pct": None,
+        "poster_relpath": "",
+        "gif_relpath": "",
+        "manifest_relpath": manifest_relpath,
+        "frame_relpaths": [],
+        "frame_count": 0,
+        "review_status": DEFAULT_EVIDENCE_REVIEW_STATUS,
+        "reviewed_at": "",
+        "reviewed_by": "",
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    with _dashboard_lock:
+        _dashboard_state["saved_index"][manifest["id"]] = dict(manifest)
+        _dashboard_state["saved_incident_ids"] = _sorted_saved_incident_ids(
+            _dashboard_state["saved_index"]
+        )
+        stored = _upsert_recent_incident_locked(dict(manifest), show_popup=False)
+        metrics = _dashboard_state.setdefault("metrics", _new_dashboard_metrics())
+        metrics["noise_alerts"] = int(metrics.get("noise_alerts", 0) or 0) + 1
+        metrics["last_incident_type"] = stored.get("type_label", "Incident")
+        metrics["last_incident_time"] = stored.get("display_time", "")
+        metrics["total_incidents"] = (
+            int(metrics.get("head_alerts", 0) or 0)
+            + int(metrics.get("passing_alerts", 0) or 0)
+            + int(metrics.get("hand_alerts", 0) or 0)
+            + int(metrics.get("object_alerts", 0) or 0)
+            + int(metrics.get("noise_alerts", 0) or 0)
+        )
+        _dashboard_state["system_state"] = "alert"
+        _update_dashboard_timestamp_locked()
+
+    return manifest
 
 
 def update_dashboard_incident(incident_id: str, **updates) -> None:
@@ -1005,6 +1084,8 @@ def _evidence_group_dir(behavior_type: str) -> Path:
         return PASSING_EVIDENCE_DIR / EVENTS_DIRNAME
     if behavior_type == "hands":
         return HANDS_EVIDENCE_DIR / EVENTS_DIRNAME
+    if behavior_type == "noise":
+        return NOISE_EVIDENCE_DIR / EVENTS_DIRNAME
     return OBJECT_EVIDENCE_DIR / EVENTS_DIRNAME
 
 
@@ -2962,6 +3043,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     + passing_alert_total
                     + hand_alert_total
                     + object_alert_total
+                    + dashboard_noise_alert_count()
                 ),
                 head_alerts=head_alert_total,
                 passing_alerts=passing_alert_total,
@@ -3033,6 +3115,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             + passing_alert_total
             + hand_alert_total
             + object_alert_total
+            + dashboard_noise_alert_count()
         ),
         head_alerts=head_alert_total,
         passing_alerts=passing_alert_total,

@@ -99,6 +99,35 @@
             </article>
         </section>
 
+        <section class="panel noise-panel">
+            <div class="panel-header">
+                <div>
+                    <p class="panel-eyebrow">Classroom Noise</p>
+                    <h2>KY-037 Sound Sensor</h2>
+                </div>
+                <span class="status-pill status-pill-quiet" id="noise-status-pill">Disabled</span>
+            </div>
+            <div class="session-summary-grid noise-summary-grid">
+                <div class="summary-chip">
+                    <span class="summary-chip-label">Current Level</span>
+                    <strong id="noise-db-value">--</strong>
+                </div>
+                <div class="summary-chip">
+                    <span class="summary-chip-label">Alert Threshold</span>
+                    <strong id="noise-threshold-value">--</strong>
+                </div>
+                <div class="summary-chip">
+                    <span class="summary-chip-label">Sensor State</span>
+                    <strong id="noise-sensor-value">Disabled</strong>
+                </div>
+                <div class="summary-chip">
+                    <span class="summary-chip-label">Last Update</span>
+                    <strong id="noise-update-value">--</strong>
+                </div>
+            </div>
+            <div class="banner banner-warning hidden" id="noise-alert-banner">Noise level is above the configured threshold.</div>
+        </section>
+
         <section class="overview-grid page-section is-active" id="section-overview">
             <article class="panel panel-stream">
                 <div class="panel-header">

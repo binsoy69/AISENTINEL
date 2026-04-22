@@ -76,6 +76,7 @@
         </header>
 
         <div class="banner banner-info dashboard-banner" id="dashboard-banner" hidden></div>
+        <div class="banner banner-warning dashboard-banner" id="noise-banner" hidden></div>
 
         <section class="dashboard-section is-active" id="section-overview">
             <section class="stats-grid">
@@ -219,6 +220,35 @@
                             </section>
                         </div>
                     </details>
+                </article>
+
+                <article class="panel noise-panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-eyebrow">Classroom Noise</p>
+                            <h2>Front-Node Sound Level</h2>
+                            <p class="panel-copy">Live KY-037 telemetry from the front node heartbeat.</p>
+                        </div>
+                        <span class="status-pill status-pill-inline" id="noise-status-pill">Disabled</span>
+                    </div>
+                    <div class="session-summary-grid noise-summary-grid">
+                        <div class="summary-chip">
+                            <span class="summary-chip-label">Current Level</span>
+                            <strong id="noise-db-value">--</strong>
+                        </div>
+                        <div class="summary-chip">
+                            <span class="summary-chip-label">Alert Threshold</span>
+                            <strong id="noise-threshold-value">--</strong>
+                        </div>
+                        <div class="summary-chip">
+                            <span class="summary-chip-label">Sensor State</span>
+                            <strong id="noise-sensor-value">Disabled</strong>
+                        </div>
+                        <div class="summary-chip">
+                            <span class="summary-chip-label">Last Update</span>
+                            <strong id="noise-update-value">--</strong>
+                        </div>
+                    </div>
                 </article>
             </section>
 

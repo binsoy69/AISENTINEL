@@ -4,7 +4,10 @@ The reference paper `Design_of_a_Classroom_Noise_Monitoring_Tool_Using_.pdf`
 uses the KY-037 as part of a classroom noise monitor and describes behavior
 around classroom thresholds such as 45 dB and 55 dB. This setup uses the
 KY-037 analog output through an ADS1015 ADC so the Raspberry Pi can calibrate
-the sensor once and then continuously output estimated dB.
+the sensor once and then continuously output estimated dB. The calibrated
+sensor is now integrated into the front-node runtime and the central dashboard
+stack, so the front node can report live classroom noise during an active
+monitoring session.
 
 ## Important Notes
 
@@ -58,11 +61,69 @@ If `ADDR` is tied to `GND`, `i2cdetect -y 1` should normally show `48`.
 
 ## Scripts
 
-This setup now uses two scripts:
+This setup now uses two scripts plus one shared runtime module:
 
+- shared runtime helpers: `runtime/front_node_pi/sound_monitor.py`
 - calibration script: `tests/tests_on_pi/ky037_ads1015_calibrate.py`
 - test script: `tests/tests_on_pi/ky037_sound_threshold_test.py`
 - default config file: `tests/tests_on_pi/ky037_ads1015_config.json`
+
+The two Pi helper scripts now import the ADS1015 sampling and dB estimation
+logic from `runtime/front_node_pi/sound_monitor.py`, so the runtime and the
+setup scripts use the same implementation.
+
+## Runtime Integration
+
+When sound monitoring is enabled in the front-node runtime config:
+
+- the front node samples the KY-037 only while a monitoring session is active
+- the front-node local dashboard shows live estimated dB, threshold, and
+  sensor state
+- the central shared dashboard shows the front-node noise telemetry through the
+  node heartbeat
+- a `Noise Threshold Exceeded` incident is saved only when the estimated dB
+  crosses above the configured threshold
+- repeated loud windows are suppressed until the level drops below the
+  threshold and the cooldown has elapsed
+
+Noise incidents are intentionally saved without image or GIF evidence. The
+dashboards display them as `No media`.
+
+## Runtime Config
+
+Add or update the `[sound_sensor]` section in the front-node runtime INI:
+
+```ini
+[sound_sensor]
+enabled = true
+calibration_config = tests/tests_on_pi/ky037_ads1015_config.json
+alert_threshold_db = 55.0
+incident_cooldown_sec = 10.0
+i2c_bus = 1
+i2c_address = 0x48
+adc_channel = 0
+full_scale = 4.096
+data_rate = 1600
+sample_interval = 0.002
+window_seconds = 1.0
+```
+
+Field meaning:
+
+- `enabled`: turns session-scoped sound monitoring on or off
+- `calibration_config`: saved JSON file produced by the calibration script
+- `alert_threshold_db`: dB value that triggers the live dashboard warning and
+  saved noise incident
+- `incident_cooldown_sec`: minimum time between saved threshold-crossing noise
+  incidents
+- `i2c_bus`, `i2c_address`, `adc_channel`, `full_scale`, `data_rate`,
+  `sample_interval`, `window_seconds`: ADS1015 sampling settings used at
+  runtime
+
+Recommended repo defaults:
+
+- enable the sensor only on the real front-node webcam configs
+- keep it disabled on video playback configs and on the mid node
 
 ## Calibration Script
 
@@ -158,6 +219,15 @@ debug address=0x48 channel=A0 mean=1.6320V min=1.5900V max=1.6740V rate=1600SPS 
 The test script expects the calibration file to already contain both reference
 values. If they are missing, it will stop and tell you to run the calibration
 script first.
+
+## Dashboard Behavior
+
+- Below threshold: dashboards show the current dB and normal sensor state.
+- At or above threshold: dashboards show a live noise alert banner/status.
+- On threshold crossing: a `Noise Threshold Exceeded` incident is saved.
+- While the level stays above threshold: no duplicate incidents are created.
+- After the level drops below threshold and rises again: a new incident can be
+  created after cooldown.
 
 ## Calibration Notes
 

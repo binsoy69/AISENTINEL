@@ -18,8 +18,12 @@ from central_dashboard.central_service.config import BrowserAuthConfig, CentralS
 from central_dashboard.node_agent.app import create_app as create_node_app
 from central_dashboard.node_agent.config import NodeAgentConfig
 from central_dashboard.node_agent.state import NodeRuntime
+from central_dashboard.shared.dto import IncidentManifest
 
-from test_support import InProcessHttpClient
+try:
+    from .test_support import InProcessHttpClient
+except ImportError:  # pragma: no cover - direct script execution
+    from test_support import InProcessHttpClient
 
 
 class FakeCapture:
@@ -108,6 +112,7 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             central_app = create_central_app(central_config, http_client=http_client)
             http_client.register_app("http://central.test:8090", central_app)
             central_client = central_app.test_client()
+            self.addCleanup(central_app.extensions["central_connection"].close)
 
             front_config = build_node_config(
                 tmpdir,
@@ -128,6 +133,8 @@ class CentralNodeIntegrationTests(unittest.TestCase):
 
             front_runtime = NodeRuntime(front_config, http_client=http_client)
             mid_runtime = NodeRuntime(mid_config, http_client=http_client)
+            self.addCleanup(front_runtime.close)
+            self.addCleanup(mid_runtime.close)
 
             base_frames = [
                 np.zeros((180, 320, 3), dtype=np.uint8),
@@ -192,11 +199,50 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                 front_runtime.sync_once()
                 mid_runtime.sync_once()
 
+            front_runtime.update_sound_telemetry(
+                {
+                    "enabled": True,
+                    "current_db": 60.8,
+                    "threshold_db": 55.0,
+                    "over_threshold": True,
+                    "status": "alert",
+                    "updated_at": "2026-04-22T12:00:00Z",
+                    "last_error": "",
+                }
+            )
+            self.assertTrue(front_runtime.heartbeat_once())
+            front_runtime.record_finalized_incident(
+                IncidentManifest(
+                    incident_id="noise-001",
+                    session_id=session_id,
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="noise",
+                    type_label="Noise Threshold Exceeded",
+                    student_numbers=[],
+                    created_at="2026-04-22T12:00:00Z",
+                    display_time="12:00 PM",
+                    frame_count=0,
+                    summary="Estimated noise 60.8 dB exceeded 55.0 dB threshold.",
+                    sync_status="queued",
+                    sync_attempts=0,
+                    asset_names=[],
+                ),
+                [],
+            )
+            for _ in range(10):
+                front_runtime.sync_once()
+                mid_runtime.sync_once()
+
             dashboard_response = central_client.get("/api/v1/dashboard")
             self.assertEqual(dashboard_response.status_code, 200)
             payload = dashboard_response.get_json()
             self.assertEqual(len(payload["nodes"]), 2)
             self.assertGreaterEqual(len(payload["incidents"]), 2)
+            self.assertTrue(payload["nodes"][0]["extra"]["sound"]["enabled"] or payload["nodes"][1]["extra"]["sound"]["enabled"])
+            noise_incident = next(item for item in payload["incidents"] if item["behavior_type"] == "noise")
+            self.assertEqual(noise_incident["poster_url"], "")
+            self.assertEqual(noise_incident["gif_url"], "")
             self.assertIn("sessions_history", payload)
             self.assertEqual(payload["sessions_history"][0]["session_id"], session_id)
             self.assertGreaterEqual(payload["sessions_history"][0]["incident_count"], 2)

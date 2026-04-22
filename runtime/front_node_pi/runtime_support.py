@@ -85,6 +85,7 @@ def configure_runtime_paths(
     )
     modules.combined_mod.HANDS_EVIDENCE_DIR = config.evidence_root / "hands"
     modules.combined_mod.OBJECT_EVIDENCE_DIR = config.evidence_root / "objects"
+    modules.combined_mod.NOISE_EVIDENCE_DIR = config.evidence_root / "noise"
 
     modules.head_mod.EVIDENCE_DIR = config.evidence_root / "head_behavior"
     modules.pass_mod.EVIDENCE_DIR = config.evidence_root / "passing_papers"

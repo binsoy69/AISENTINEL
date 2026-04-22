@@ -1,57 +1,49 @@
 #!/usr/bin/env python3
-"""Shared ADS1015 helpers for KY-037 Raspberry Pi scripts."""
+"""Shared CLI/config helpers for the KY-037 Raspberry Pi scripts."""
 
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
-import math
 from pathlib import Path
 import sys
-import time
 
 
-I2C_INSTALL_COMMAND = "sudo apt install python3-smbus i2c-tools"
-DEFAULT_I2C_BUS = 1
-DEFAULT_I2C_ADDRESS = 0x48
-DEFAULT_CHANNEL = 0
-DEFAULT_FULL_SCALE = 4.096
-DEFAULT_DATA_RATE = 1600
-DEFAULT_SAMPLE_INTERVAL_SECONDS = 0.002
-DEFAULT_WINDOW_SECONDS = 1.0
-DEFAULT_QUIET_DB = 45.0
-DEFAULT_LOUD_DB = 55.0
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FRONT_RUNTIME_DIR = REPO_ROOT / "runtime" / "front_node_pi"
+if str(FRONT_RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(FRONT_RUNTIME_DIR))
+
+from sound_monitor import (  # noqa: E402
+    CHANNEL_TO_MUX_BITS,
+    DATA_RATE_TO_BITS,
+    DEFAULT_CHANNEL,
+    DEFAULT_DATA_RATE,
+    DEFAULT_FULL_SCALE,
+    DEFAULT_I2C_ADDRESS,
+    DEFAULT_I2C_BUS,
+    DEFAULT_LOUD_DB,
+    DEFAULT_QUIET_DB,
+    DEFAULT_SAMPLE_INTERVAL_SECONDS,
+    DEFAULT_WINDOW_SECONDS,
+    FULL_SCALE_TO_PGA_BITS,
+    I2C_INSTALL_COMMAND,
+    build_config_word,
+    classify_db,
+    close_bus,
+    code_to_voltage,
+    estimate_db,
+    load_smbus,
+    open_ads1015,
+    print_i2c_error,
+    read_conversion_code,
+    sample_window,
+    utc_now_iso,
+    write_config,
+)
+
+
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("ky037_ads1015_config.json")
-
-REG_CONVERSION = 0x00
-REG_CONFIG = 0x01
-
-CHANNEL_TO_MUX_BITS = {
-    0: 0b100,
-    1: 0b101,
-    2: 0b110,
-    3: 0b111,
-}
-
-FULL_SCALE_TO_PGA_BITS = {
-    6.144: 0b000,
-    4.096: 0b001,
-    2.048: 0b010,
-    1.024: 0b011,
-    0.512: 0b100,
-    0.256: 0b101,
-}
-
-DATA_RATE_TO_BITS = {
-    128: 0b000,
-    250: 0b001,
-    490: 0b010,
-    920: 0b011,
-    1600: 0b100,
-    2400: 0b101,
-    3300: 0b110,
-}
 
 CONFIG_KEYS = (
     "bus",
@@ -80,31 +72,6 @@ DEFAULT_CONFIG = {
     "ref_quiet_rms_mv": None,
     "ref_loud_rms_mv": None,
 }
-
-
-def utc_now_iso() -> str:
-    """Return a stable UTC timestamp for saved calibration files."""
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
-
-
-def load_smbus():
-    """Import SMBus lazily so --help and py_compile still work off-Pi."""
-    try:
-        from smbus import SMBus
-    except ImportError:
-        try:
-            from smbus2 import SMBus
-        except ImportError:
-            print("[ERROR] Neither `smbus` nor `smbus2` is installed.")
-            print(f"Install I2C dependencies with: {I2C_INSTALL_COMMAND}")
-            sys.exit(1)
-
-    return SMBus
 
 
 def load_config_file(config_path: Path) -> dict:
@@ -223,132 +190,3 @@ def require_calibration(settings: argparse.Namespace) -> None:
     )
     print(f"Expected config file: {settings.config_file}")
     sys.exit(1)
-
-
-def build_config_word(channel: int, full_scale: float, data_rate: int) -> int:
-    """Build an ADS1015 continuous-conversion config word for single-ended reads."""
-    return (
-        (1 << 15)
-        | (CHANNEL_TO_MUX_BITS[channel] << 12)
-        | (FULL_SCALE_TO_PGA_BITS[full_scale] << 9)
-        | (0 << 8)
-        | (DATA_RATE_TO_BITS[data_rate] << 5)
-        | 0x0003
-    )
-
-
-def write_config(bus, address: int, config_word: int) -> None:
-    """Write the ADS1015 config register in big-endian byte order."""
-    bus.write_i2c_block_data(
-        address,
-        REG_CONFIG,
-        [(config_word >> 8) & 0xFF, config_word & 0xFF],
-    )
-
-
-def open_ads1015(settings: argparse.Namespace):
-    """Open the I2C bus and configure the ADS1015 for continuous reads."""
-    SMBus = load_smbus()
-    bus = SMBus(settings.bus)
-    config_word = build_config_word(
-        settings.channel,
-        settings.full_scale,
-        settings.data_rate,
-    )
-    write_config(bus, settings.address, config_word)
-    time.sleep(max(0.01, 2.0 / settings.data_rate))
-    return bus
-
-
-def close_bus(bus) -> None:
-    """Close an SMBus handle if the implementation exposes close()."""
-    close = getattr(bus, "close", None)
-    if callable(close):
-        close()
-
-
-def read_conversion_code(bus, address: int) -> int:
-    """Read the ADS1015 conversion register and decode the signed 12-bit value."""
-    data = bus.read_i2c_block_data(address, REG_CONVERSION, 2)
-    raw = (data[0] << 8) | data[1]
-    code = raw >> 4
-    if code & 0x800:
-        code -= 1 << 12
-    return code
-
-
-def code_to_voltage(code: int, full_scale: float) -> float:
-    """Convert a signed ADS1015 code to volts."""
-    return (code / 2048.0) * full_scale
-
-
-def estimate_db(
-    rms_mv: float,
-    ref_quiet_rms_mv: float,
-    ref_loud_rms_mv: float,
-    quiet_db: float,
-    loud_db: float,
-) -> float:
-    """Linearly map calibrated RMS millivolts into an estimated dB value."""
-    slope = (loud_db - quiet_db) / (ref_loud_rms_mv - ref_quiet_rms_mv)
-    return quiet_db + ((rms_mv - ref_quiet_rms_mv) * slope)
-
-
-def classify_db(estimated_db: float, quiet_db: float, loud_db: float) -> str:
-    """Map estimated dB to paper-style classroom categories."""
-    if estimated_db < quiet_db:
-        return "normal"
-    if estimated_db < loud_db:
-        return "warning"
-    return "loud"
-
-
-def sample_window(bus, settings: argparse.Namespace) -> dict[str, float]:
-    """Collect one measurement window and compute signal statistics."""
-    samples: list[float] = []
-    deadline = time.monotonic() + settings.window_seconds
-
-    while time.monotonic() < deadline:
-        code = read_conversion_code(bus, settings.address)
-        samples.append(code_to_voltage(code, settings.full_scale))
-        time.sleep(settings.sample_interval)
-
-    if not samples:
-        raise RuntimeError("No ADC samples were collected in the measurement window.")
-
-    mean_v = sum(samples) / len(samples)
-    rms_v = math.sqrt(sum((sample - mean_v) ** 2 for sample in samples) / len(samples))
-    min_v = min(samples)
-    max_v = max(samples)
-    p2p_v = max_v - min_v
-
-    result = {
-        "mean_v": mean_v,
-        "min_v": min_v,
-        "max_v": max_v,
-        "rms_mv": rms_v * 1000.0,
-        "p2p_mv": p2p_v * 1000.0,
-        "sample_count": float(len(samples)),
-    }
-
-    if (
-        settings.ref_quiet_rms_mv is not None
-        and settings.ref_loud_rms_mv is not None
-    ):
-        result["estimated_db"] = estimate_db(
-            rms_mv=result["rms_mv"],
-            ref_quiet_rms_mv=settings.ref_quiet_rms_mv,
-            ref_loud_rms_mv=settings.ref_loud_rms_mv,
-            quiet_db=settings.quiet_db,
-            loud_db=settings.loud_db,
-        )
-    return result
-
-
-def print_i2c_error(settings: argparse.Namespace, exc: OSError) -> None:
-    """Print a consistent ADS1015 communication error."""
-    print(f"[ERROR] Could not communicate with ADS1015 at 0x{settings.address:02X}: {exc}")
-    print(
-        "Check I2C wiring, enable I2C on the Raspberry Pi, and verify the "
-        "address with `i2cdetect -y 1`."
-    )

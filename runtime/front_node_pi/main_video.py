@@ -22,6 +22,7 @@ from runtime_support import (
     load_runtime_modules,
     require_detection_environment,
 )
+from sound_monitor import SoundMonitorService
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -145,6 +146,7 @@ def main() -> None:
         hand_detector = None
         object_detector = None
         cap = None
+        sound_service = None
 
         try:
             video_path = _resolve_dashboard_video_path(
@@ -292,6 +294,31 @@ def main() -> None:
             )
             head_mod.log_info("Starting all-behavior detection...")
 
+            def handle_sound_telemetry(payload: dict) -> None:
+                combined_mod.update_dashboard_metrics(
+                    sound_db=payload.get("current_db"),
+                    sound_threshold_db=payload.get("threshold_db"),
+                    sound_status=payload.get("status", "disabled"),
+                    sound_over_threshold=bool(payload.get("over_threshold")),
+                    sound_updated_at=payload.get("updated_at", ""),
+                )
+
+            def handle_sound_incident(payload: dict) -> None:
+                combined_mod.record_dashboard_noise_incident(
+                    estimated_db=float(payload["estimated_db"]),
+                    threshold_db=float(payload["threshold_db"]),
+                    source_label=str(video_path),
+                    session_details=session_details,
+                )
+
+            sound_service = SoundMonitorService(
+                config.sound_sensor,
+                on_telemetry=handle_sound_telemetry,
+                on_threshold_cross=handle_sound_incident,
+                log_fn=head_mod.log_info,
+            )
+            sound_service.start()
+
             combined_mod.run_detection(
                 cap,
                 pose_estimator,
@@ -327,6 +354,8 @@ def main() -> None:
         finally:
             if cap is not None:
                 cap.release()
+            if sound_service is not None:
+                sound_service.stop()
             if hasattr(pose_estimator, "close"):
                 pose_estimator.close()
             if hasattr(hand_detector, "close"):
@@ -367,6 +396,13 @@ def main() -> None:
             "subject_code": default_video_hint.stem if default_video_hint is not None else "",
             "professor": "Video Replay",
         },
+    )
+    combined_mod.update_dashboard_metrics(
+        sound_db=None,
+        sound_threshold_db=config.sound_sensor.alert_threshold_db,
+        sound_status="idle" if config.sound_sensor.enabled else "disabled",
+        sound_over_threshold=False,
+        sound_updated_at="",
     )
 
     server_thread = combined_mod.start_web_server(port)

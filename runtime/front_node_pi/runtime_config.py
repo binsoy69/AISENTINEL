@@ -95,6 +95,21 @@ class EvidenceConfig:
 
 
 @dataclass(frozen=True)
+class SoundSensorConfig:
+    enabled: bool
+    calibration_config: Path | None
+    alert_threshold_db: float
+    incident_cooldown_sec: float
+    i2c_bus: int
+    i2c_address: int
+    adc_channel: int
+    full_scale: float
+    data_rate: int
+    sample_interval: float
+    window_seconds: float
+
+
+@dataclass(frozen=True)
 class WebDashboardConfig:
     username: str
     password: str
@@ -124,6 +139,7 @@ class FrontNodeRuntimeConfig:
     hands_under_table: HandsUnderTableConfig
     object_detection: ObjectDetectionConfig
     evidence: EvidenceConfig
+    sound_sensor: SoundSensorConfig
     web_dashboard: WebDashboardConfig
 
 
@@ -586,6 +602,90 @@ def load_runtime_config(
                 "post_event_frames",
                 10,
                 getter_name="getint",
+            ),
+        ),
+        sound_sensor=SoundSensorConfig(
+            enabled=_get_value(
+                parser,
+                ["sound_sensor"],
+                "enabled",
+                False,
+                getter_name="getboolean",
+            ),
+            calibration_config=resolve_repo_path(
+                _get_value(
+                    parser,
+                    ["sound_sensor"],
+                    "calibration_config",
+                    "",
+                )
+            ),
+            alert_threshold_db=_get_value(
+                parser,
+                ["sound_sensor"],
+                "alert_threshold_db",
+                55.0,
+                getter_name="getfloat",
+            ),
+            incident_cooldown_sec=_get_value(
+                parser,
+                ["sound_sensor"],
+                "incident_cooldown_sec",
+                10.0,
+                getter_name="getfloat",
+            ),
+            i2c_bus=_get_value(
+                parser,
+                ["sound_sensor"],
+                "i2c_bus",
+                1,
+                getter_name="getint",
+            ),
+            i2c_address=int(
+                str(
+                    _get_value(
+                        parser,
+                        ["sound_sensor"],
+                        "i2c_address",
+                        "0x48",
+                    )
+                ),
+                0,
+            ),
+            adc_channel=_get_value(
+                parser,
+                ["sound_sensor"],
+                "adc_channel",
+                0,
+                getter_name="getint",
+            ),
+            full_scale=_get_value(
+                parser,
+                ["sound_sensor"],
+                "full_scale",
+                4.096,
+                getter_name="getfloat",
+            ),
+            data_rate=_get_value(
+                parser,
+                ["sound_sensor"],
+                "data_rate",
+                1600,
+                getter_name="getint",
+            ),
+            sample_interval=_get_value(
+                parser,
+                ["sound_sensor"],
+                "sample_interval",
+                0.002,
+                getter_name="getfloat",
+            ),
+            window_seconds=_get_value(
+                parser,
+                ["sound_sensor"],
+                "window_seconds",
+                1.0,
+                getter_name="getfloat",
             ),
         ),
         web_dashboard=WebDashboardConfig(

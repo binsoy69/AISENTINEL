@@ -103,6 +103,7 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
 }
 .banner-danger { background: rgba(255, 101, 88, 0.14); border-color: rgba(255, 101, 88, 0.28); color: #ffc2bc; }
 .banner-info { background: rgba(51, 157, 255, 0.12); border-color: rgba(51, 157, 255, 0.25); color: #bbdcff; }
+.banner-warning { background: rgba(241, 196, 76, 0.12); border-color: rgba(241, 196, 76, 0.25); color: #ffe4a2; }
 .banner-success { background: rgba(39, 209, 123, 0.12); border-color: rgba(39, 209, 123, 0.26); color: #bdf5d8; }
 
 .primary-button, .ghost-button, .workspace-tab, .nav-button {
@@ -242,6 +243,10 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
 }
 .summary-chip strong, .node-metric strong, .system-card-meta-item strong {
     font-family: var(--font-heading); font-size: 1rem; letter-spacing: -0.02em; overflow-wrap: anywhere;
+}
+.noise-panel {
+    display: grid;
+    gap: 0.875rem;
 }
 .node-card-metrics, .feed-footer, .session-actions, .records-actions, .seatmap-legend {
     display: flex; flex-wrap: wrap; gap: 10px;

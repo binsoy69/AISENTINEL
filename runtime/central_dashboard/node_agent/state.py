@@ -15,8 +15,9 @@ import cv2
 from central_dashboard.node_agent.detector import EvidenceBuilder, MotionDetector, annotate_frame
 from central_dashboard.node_agent.front_runtime import run_front_runtime_session
 from central_dashboard.node_agent.sync import LocalSyncQueue
-from central_dashboard.shared.dto import CommandAck, IncidentManifest, NodeDescriptor, NodeHeartbeat, SessionSpec
+from central_dashboard.shared.dto import CommandAck, IncidentManifest, NodeDescriptor, NodeHeartbeat, SessionSpec, utc_now_iso
 from central_dashboard.shared.http import StdlibHttpClient
+from sound_monitor import DEFAULT_SOUND_SNAPSHOT
 
 
 class NodeRuntime:
@@ -49,6 +50,7 @@ class NodeRuntime:
         self._banner_text = ""
         self._banner_expires = 0.0
         self._registration_ok = False
+        self._sound_state = dict(DEFAULT_SOUND_SNAPSHOT)
 
     def start_background(self) -> None:
         if self._background_started:
@@ -119,6 +121,7 @@ class NodeRuntime:
             extra={
                 "profile": self.config.profile,
                 "detector_mode": self.config.detector_mode,
+                "sound": dict(self._sound_state),
             },
         )
 
@@ -438,6 +441,12 @@ class NodeRuntime:
             )
         with self._lock:
             self._incident_count += 1
+
+    def update_sound_telemetry(self, payload: dict) -> None:
+        with self._lock:
+            if "updated_at" not in payload:
+                payload = {"updated_at": utc_now_iso(), **payload}
+            self._sound_state.update(payload)
 
     def _publish_frames(self, raw_frame, annotated_frame) -> None:
         publish_interval = 1.0 / self.config.preview_fps

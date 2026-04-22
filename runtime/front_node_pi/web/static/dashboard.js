@@ -15,6 +15,7 @@ const TYPE_TONE_META = {
     passing: "is-passing",
     hands: "is-hands",
     object: "is-object",
+    noise: "is-noise",
 };
 
 const state = {
@@ -59,6 +60,12 @@ const selectors = {
     metricTracked: document.getElementById("metric-tracked"),
     metricFps: document.getElementById("metric-fps"),
     metricInference: document.getElementById("metric-inference"),
+    noiseStatusPill: document.getElementById("noise-status-pill"),
+    noiseDbValue: document.getElementById("noise-db-value"),
+    noiseThresholdValue: document.getElementById("noise-threshold-value"),
+    noiseSensorValue: document.getElementById("noise-sensor-value"),
+    noiseUpdateValue: document.getElementById("noise-update-value"),
+    noiseAlertBanner: document.getElementById("noise-alert-banner"),
     alertToast: document.getElementById("alert-toast"),
     alertToastSeat: document.getElementById("alert-toast-seat"),
     alertToastType: document.getElementById("alert-toast-type"),
@@ -203,7 +210,36 @@ function incidentOpenLabel(incident) {
     if (incident.poster_url) {
         return "View Snapshot";
     }
-    return "Evidence Pending";
+    return "No Media";
+}
+
+function formatDbValue(value) {
+    return Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)} dB` : "--";
+}
+
+function noiseStatusTone(metrics) {
+    if (metrics.sound_over_threshold) {
+        return "is-error";
+    }
+    const status = String(metrics.sound_status || "").toLowerCase();
+    if (status === "monitoring" || status === "idle") {
+        return "is-active";
+    }
+    if (status === "disabled") {
+        return "is-created";
+    }
+    if (status === "error") {
+        return "is-error";
+    }
+    return "is-created";
+}
+
+function noiseStatusLabel(metrics) {
+    if (metrics.sound_over_threshold) {
+        return "Over Threshold";
+    }
+    const status = String(metrics.sound_status || "disabled").replaceAll("_", " ");
+    return status.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function incidentSearchText(incident) {
@@ -277,6 +313,16 @@ function renderSummary(snapshot) {
     selectors.metricTracked.textContent = `${metrics.tracked_students ?? 0} / ${metrics.assigned_students ?? 0}`;
     selectors.metricFps.textContent = Number(metrics.processing_fps || 0).toFixed(1);
     selectors.metricInference.textContent = `Inference ${Number(metrics.inference_ms || 0).toFixed(0)} ms`;
+    selectors.noiseStatusPill.textContent = noiseStatusLabel(metrics);
+    selectors.noiseStatusPill.className = `status-pill status-pill-quiet ${noiseStatusTone(metrics)}`.trim();
+    selectors.noiseDbValue.textContent = formatDbValue(metrics.sound_db);
+    selectors.noiseThresholdValue.textContent = formatDbValue(metrics.sound_threshold_db);
+    selectors.noiseSensorValue.textContent = noiseStatusLabel(metrics);
+    selectors.noiseUpdateValue.textContent = metrics.sound_updated_at || "--";
+    selectors.noiseAlertBanner.classList.toggle("hidden", !metrics.sound_over_threshold);
+    selectors.noiseAlertBanner.textContent = metrics.sound_over_threshold
+        ? `Noise alert: ${formatDbValue(metrics.sound_db)} exceeds ${formatDbValue(metrics.sound_threshold_db)}.`
+        : "Noise level is above the configured threshold.";
 
     const hasLiveFeed = snapshot.monitoring_active || snapshot.status === "completed";
     selectors.streamImage.classList.toggle("is-hidden", !hasLiveFeed);
@@ -391,7 +437,7 @@ function renderHistory(snapshot) {
                     <div class="history-actions">
                         ${hasEvidence
                             ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">${escapeHtml(incidentOpenLabel(incident))}</button>`
-                            : `<span class="ghost-button is-disabled">Evidence Pending</span>`}
+                            : `<span class="ghost-button is-disabled">No Media</span>`}
                     </div>
                 </div>
             </article>
@@ -467,7 +513,7 @@ function renderRecords(snapshot) {
                 <td>
                     ${hasEvidence
                         ? `<button class="ghost-button records-view-button" type="button" data-open-evidence="${escapeHtml(incident.id)}">View</button>`
-                        : `<span class="ghost-button is-disabled">Pending</span>`}
+                        : `<span class="ghost-button is-disabled">No Media</span>`}
                 </td>
                 <td>
                     <label class="review-select-wrap ${statusMeta.className}">

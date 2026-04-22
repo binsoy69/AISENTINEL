@@ -17,6 +17,7 @@ const els = {
     headerElapsedLabel: document.getElementById("header-elapsed-label"),
     statusPill: document.getElementById("status-pill"),
     banner: document.getElementById("dashboard-banner"),
+    noiseBanner: document.getElementById("noise-banner"),
     sessionPanel: document.getElementById("session-panel"),
     sessionAccordion: document.getElementById("session-accordion"),
     sessionToggle: document.getElementById("session-toggle"),
@@ -40,6 +41,11 @@ const els = {
     metricSeatFoot: document.getElementById("metric-seat-foot"),
     metricOnlineNodes: document.getElementById("metric-online-nodes"),
     metricOnlineFoot: document.getElementById("metric-online-foot"),
+    noiseStatusPill: document.getElementById("noise-status-pill"),
+    noiseDbValue: document.getElementById("noise-db-value"),
+    noiseThresholdValue: document.getElementById("noise-threshold-value"),
+    noiseSensorValue: document.getElementById("noise-sensor-value"),
+    noiseUpdateValue: document.getElementById("noise-update-value"),
     feedGrid: document.getElementById("feed-grid"),
     recordsContextLabel: document.getElementById("records-context-label"),
     recordsBody: document.getElementById("records-body"),
@@ -199,10 +205,46 @@ function sessionElapsedText(session) {
 
 function toneClass(label) {
     const value = String(label || "").toLowerCase();
+    if (value.includes("noise")) return "is-warning";
     if (value.includes("phone") || value.includes("object")) return "is-danger";
     if (value.includes("head") || value.includes("movement")) return "is-warning";
     if (value.includes("verified")) return "is-success";
     return "is-generic";
+}
+
+function formatDbValue(value) {
+    return Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)} dB` : "--";
+}
+
+function frontNodeSound() {
+    const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
+    const frontNode = nodes.find((node) => String(node.profile || "").trim() === "front")
+        || nodes.find((node) => node.extra?.sound)
+        || null;
+    return frontNode?.extra?.sound || null;
+}
+
+function noiseStatusLabel(sound) {
+    if (!sound) return "Unavailable";
+    if (sound.over_threshold) return "Over Threshold";
+    return String(sound.status || "disabled")
+        .replaceAll("_", " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function renderNoise() {
+    const sound = frontNodeSound();
+    const enabled = Boolean(sound?.enabled);
+    els.noiseStatusPill.textContent = noiseStatusLabel(sound);
+    els.noiseStatusPill.className = `status-pill status-pill-inline ${sound?.over_threshold ? "is-error" : enabled ? "is-active" : "is-created"}`;
+    els.noiseDbValue.textContent = formatDbValue(sound?.current_db);
+    els.noiseThresholdValue.textContent = formatDbValue(sound?.threshold_db);
+    els.noiseSensorValue.textContent = noiseStatusLabel(sound);
+    els.noiseUpdateValue.textContent = sound?.updated_at || "--";
+    els.noiseBanner.hidden = !sound?.over_threshold;
+    els.noiseBanner.textContent = sound?.over_threshold
+        ? `Front-node noise alert: ${formatDbValue(sound.current_db)} exceeds ${formatDbValue(sound.threshold_db)}.`
+        : "";
 }
 
 function showBanner(message, isError = false) {
@@ -451,6 +493,7 @@ function ensureFeedCard(node) {
                 <span class="meta-chip" data-feed-state></span>
                 <span class="meta-chip" data-feed-fps></span>
                 <span class="meta-chip" data-feed-backlog></span>
+                <span class="meta-chip" data-feed-sound></span>
             </div>
         </article>
     `);
@@ -474,6 +517,10 @@ function renderFeeds() {
         card.querySelector("[data-feed-state]").textContent = `State: ${sessionStatusLabel(node.state || "unknown")}`;
         card.querySelector("[data-feed-fps]").textContent = `FPS: ${Number(node.fps || 0).toFixed(1)}`;
         card.querySelector("[data-feed-backlog]").textContent = `Backlog: ${Number(node.sync_backlog || 0)}`;
+        const sound = node.extra?.sound || null;
+        card.querySelector("[data-feed-sound]").textContent = sound?.enabled
+            ? `Noise: ${formatDbValue(sound.current_db)} / ${formatDbValue(sound.threshold_db)}`
+            : "Noise: disabled";
         if (node.online && streamUrl) {
             if (image.getAttribute("src") !== streamUrl) image.setAttribute("src", streamUrl);
             image.classList.remove("hidden");
@@ -543,7 +590,7 @@ function renderRecords() {
             <td>${escapeHtml(seatSummary(incident))}</td>
             <td><span class="type-pill ${toneClass(incident.type_label)}">${escapeHtml(incident.type_label || incident.behavior_type || "Incident")}</span></td>
             <td>${escapeHtml(incident.camera_label || incident.node_id || "--")}</td>
-            <td>${incident.gif_url || incident.poster_url ? `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(incident.gif_url ? "View GIF" : "View Snapshot")}</button>` : `<span class="evidence-button is-disabled">Pending</span>`}</td>
+            <td>${incident.gif_url || incident.poster_url ? `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(incident.gif_url ? "View GIF" : "View Snapshot")}</button>` : `<span class="evidence-button is-disabled">No media</span>`}</td>
             <td><select class="review-select ${reviewMeta(incident.review_status).className}" data-review-incident="${escapeHtml(incident.incident_id)}">${reviewOptions(incident.review_status)}</select></td>
         </tr>
     `).join("") : `<tr><td class="table-empty" colspan="6">${escapeHtml(selectionMissing ? "Select a subject code and session first to load stored records." : state.recordsQuery || state.recordsFilter !== "all" ? "No records match the current search or review filter." : session ? "No synced incidents are available for the selected session yet." : "No synced incidents are available for this workspace yet.")}</td></tr>`;
@@ -673,7 +720,8 @@ function renderSystem() {
     els.systemGrid.innerHTML = nodes.length ? nodes.map((node) => {
         const seen = parseIso(node.last_seen_at);
         const errorText = String(node.last_error || "").trim();
-        return `<article class="system-card"><div class="system-card-head"><div><p class="panel-eyebrow">${escapeHtml(node.camera_label || node.node_id)}</p><h3>${escapeHtml(node.display_name || node.node_id)}</h3></div><span class="node-pill ${node.online ? "is-online" : "is-offline"}">${node.online ? "Online" : "Offline"}</span></div><div class="system-card-meta"><div class="system-card-meta-item"><span class="system-meta-label">Runtime State</span><strong>${escapeHtml(sessionStatusLabel(node.state || "unknown"))}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Seen</span><strong>${escapeHtml(seen ? `${formatDate(seen)} ${formatTime(seen)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Processing FPS</span><strong>${Number(node.fps || 0).toFixed(1)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sync Backlog</span><strong>${Number(node.sync_backlog || 0)}</strong></div></div><div class="system-card-error ${errorText ? "has-error" : ""}">${escapeHtml(errorText || "No node error reported in the latest heartbeat.")}</div></article>`;
+        const sound = node.extra?.sound || null;
+        return `<article class="system-card"><div class="system-card-head"><div><p class="panel-eyebrow">${escapeHtml(node.camera_label || node.node_id)}</p><h3>${escapeHtml(node.display_name || node.node_id)}</h3></div><span class="node-pill ${node.online ? "is-online" : "is-offline"}">${node.online ? "Online" : "Offline"}</span></div><div class="system-card-meta"><div class="system-card-meta-item"><span class="system-meta-label">Runtime State</span><strong>${escapeHtml(sessionStatusLabel(node.state || "unknown"))}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Seen</span><strong>${escapeHtml(seen ? `${formatDate(seen)} ${formatTime(seen)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Processing FPS</span><strong>${Number(node.fps || 0).toFixed(1)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sync Backlog</span><strong>${Number(node.sync_backlog || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Level</span><strong>${sound?.enabled ? formatDbValue(sound.current_db) : "Disabled"}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Threshold</span><strong>${sound?.enabled ? formatDbValue(sound.threshold_db) : "--"}</strong></div></div><div class="system-card-error ${errorText ? "has-error" : ""}">${escapeHtml(errorText || sound?.last_error || "No node error reported in the latest heartbeat.")}</div></article>`;
     }).join("") : `<article class="system-card"><h3>Waiting for node registration</h3><p class="panel-copy">System details will appear once the front and mid nodes register with the central service.</p></article>`;
 }
 
@@ -714,6 +762,7 @@ function render() {
     syncSessionAccordionState();
     renderSessionSummary();
     renderMetrics();
+    renderNoise();
     renderFeeds();
     renderRecordsScope();
     renderRecords();

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 import sys
 
 import cv2
 
-from central_dashboard.shared.dto import IncidentManifest, SessionSpec, utc_now_iso
+from central_dashboard.shared.dto import IncidentManifest, SessionSpec, make_id, utc_now_iso
 
 
 FRONT_NODE_RUNTIME_DIR = Path(__file__).resolve().parents[2] / "front_node_pi"
@@ -17,6 +18,7 @@ if str(FRONT_NODE_RUNTIME_DIR) not in sys.path:
 
 import runtime_config as front_runtime_config  # type: ignore
 import runtime_support as front_runtime_support  # type: ignore
+from sound_monitor import SoundMonitorService, build_noise_summary
 
 
 def run_front_runtime_session(runtime, session: SessionSpec) -> None:
@@ -25,6 +27,15 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
     node_config = runtime.config
     runtime_cfg, modules = load_front_runtime_context(node_config)
     _require_hailo_runtime(modules)
+    runtime.update_sound_telemetry(
+        {
+            "enabled": runtime_cfg.sound_sensor.enabled,
+            "threshold_db": runtime_cfg.sound_sensor.alert_threshold_db,
+            "status": "idle" if runtime_cfg.sound_sensor.enabled else "disabled",
+            "over_threshold": False,
+            "last_error": "",
+        }
+    )
 
     combined_mod = modules.combined_mod
     setup_io = modules.setup_io
@@ -67,6 +78,7 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
     hand_detector = None
     object_detector = None
     cap = None
+    sound_service = None
 
     try:
         capture_bundle = _open_capture_bundle(
@@ -147,6 +159,29 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
 
         runtime.mark_session_running()
 
+        def sound_telemetry_callback(payload: dict) -> None:
+            runtime.update_sound_telemetry(payload)
+
+        def sound_incident_callback(payload: dict) -> None:
+            runtime.record_finalized_incident(
+                _build_noise_incident_manifest(
+                    node_config=node_config,
+                    session=session,
+                    source_label=source_display_label,
+                    estimated_db=float(payload["estimated_db"]),
+                    threshold_db=float(payload["threshold_db"]),
+                ),
+                [],
+            )
+
+        sound_service = SoundMonitorService(
+            runtime_cfg.sound_sensor,
+            on_telemetry=sound_telemetry_callback,
+            on_threshold_cross=sound_incident_callback,
+            log_fn=head_mod.log_info,
+        )
+        sound_service.start()
+
         def frame_publish_callback(raw_frame, annotated_frame, metrics: dict) -> None:
             runtime.publish_detector_frames(
                 raw_frame,
@@ -185,6 +220,8 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
     finally:
         if cap is not None:
             cap.release()
+        if sound_service is not None:
+            sound_service.stop()
         if hasattr(pose_estimator, "close"):
             pose_estimator.close()
         if hasattr(hand_detector, "close"):
@@ -406,6 +443,35 @@ def _normalize_front_runtime_incident(
         asset_names=asset_names,
     )
     return manifest, assets
+
+
+def _build_noise_incident_manifest(
+    *,
+    node_config,
+    session: SessionSpec,
+    source_label: str,
+    estimated_db: float,
+    threshold_db: float,
+) -> IncidentManifest:
+    return IncidentManifest(
+        incident_id=make_id("noise"),
+        session_id=session.session_id,
+        node_id=node_config.node_id,
+        camera_label=node_config.camera_label or source_label,
+        behavior_type="noise",
+        type_label="Noise Threshold Exceeded",
+        student_numbers=[],
+        created_at=utc_now_iso(),
+        display_time=datetime.now().strftime("%I:%M %p").lstrip("0"),
+        review_status="unverified",
+        poster_path="",
+        gif_path="",
+        frame_count=0,
+        summary=build_noise_summary(estimated_db, threshold_db),
+        sync_status="queued",
+        sync_attempts=0,
+        asset_names=[],
+    )
 
 
 def _incident_asset_name(incident_root: PurePosixPath, relpath: str) -> str:

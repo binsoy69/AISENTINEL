@@ -32,6 +32,9 @@ can run either:
 - Nodes self-register with the central service using per-node API keys.
 - Each node keeps detection local and exposes both raw and annotated preview
   streams.
+- The front node can also publish live KY-037 classroom-noise telemetry through
+  its heartbeat when `sound_sensor.enabled = true` in the front-node runtime
+  INI.
 - Evidence is saved locally first, then synced to the central service with
   retry-on-failure queueing.
 - The shipped `front` and `mid` node configs default to `detector.mode =
@@ -77,6 +80,9 @@ python runtime/central_dashboard/scripts/calibrate_node_video.py --config runtim
 - Uses the real Hailo-backed all-behavior pipeline from `runtime/front_node_pi`
 - Produces real student-number incidents, poster/gif evidence, and live
   annotated previews
+- On the front node, can also report estimated dB from the KY-037 + ADS1015,
+  show live threshold warnings in the central dashboard, and sync saved
+  `noise` incidents without media attachments
 
 `motion`
 - Keeps the original motion-anomaly fallback backend available

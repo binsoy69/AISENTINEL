@@ -132,6 +132,101 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertIn(b"Content-Type: image/jpeg", chunk)
             runtime.close()
 
+    def test_node_runtime_heartbeat_exposes_sound_and_noise_incident_needs_no_assets(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config = NodeAgentConfig(
+                config_path=tmpdir / "node.ini",
+                node_id="front",
+                display_name="Front Node",
+                camera_label="Front Camera",
+                profile="front",
+                host="front.test",
+                port=8091,
+                api_key="front-key",
+                central_base_url="http://central.test:8090",
+                registration_interval_sec=10.0,
+                heartbeat_interval_sec=10.0,
+                sync_interval_sec=10.0,
+                http_timeout_sec=5.0,
+                local_db_path=tmpdir / "queue.sqlite3",
+                source_mode="webcam",
+                camera_index=0,
+                video_path=None,
+                preview_width=640,
+                preview_fps=15.0,
+                jpeg_quality=75,
+                detector_mode="front_runtime",
+                runtime_config_path=tmpdir / "runtime.ini",
+                motion_threshold=5.0,
+                motion_min_area_ratio=0.001,
+                motion_cooldown_sec=0.05,
+                annotated_banner_ttl_sec=1.0,
+                evidence_root=tmpdir / "evidence",
+                pre_event_frames=2,
+                post_event_frames=2,
+            )
+
+            def fake_runner(runtime: NodeRuntime, session) -> None:
+                runtime.mark_session_running()
+                runtime.update_sound_telemetry(
+                    {
+                        "enabled": True,
+                        "current_db": 61.4,
+                        "threshold_db": 55.0,
+                        "over_threshold": True,
+                        "status": "alert",
+                        "updated_at": "2026-04-22T12:00:00Z",
+                        "last_error": "",
+                    }
+                )
+                runtime.record_finalized_incident(
+                    IncidentManifest(
+                        incident_id="noise-001",
+                        session_id=session.session_id,
+                        node_id=config.node_id,
+                        camera_label=config.camera_label,
+                        behavior_type="noise",
+                        type_label="Noise Threshold Exceeded",
+                        student_numbers=[],
+                        created_at="2026-04-22T12:00:00Z",
+                        display_time="12:00 PM",
+                        frame_count=0,
+                        summary="Estimated noise 61.4 dB exceeded 55.0 dB threshold.",
+                        sync_status="queued",
+                        sync_attempts=0,
+                        asset_names=[],
+                    ),
+                    [],
+                )
+
+            runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
+            ack = runtime.start_session(
+                {
+                    "subject_code": "CS321",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-22",
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                }
+            )
+            self.assertTrue(ack.ok)
+            runtime._session_thread.join(timeout=2.0)  # type: ignore[union-attr]
+
+            heartbeat = runtime.heartbeat()
+            self.assertTrue(heartbeat.extra["sound"]["enabled"])
+            self.assertEqual(heartbeat.extra["sound"]["current_db"], 61.4)
+            self.assertTrue(heartbeat.extra["sound"]["over_threshold"])
+
+            due_items = runtime.sync_queue.due_items(limit=10)
+            self.assertEqual(len(due_items), 1)
+            self.assertEqual(due_items[0].item_type, "manifest")
+            self.assertEqual(
+                due_items[0].payload["manifest_payload"]["behavior_type"],
+                "noise",
+            )
+            runtime.close()
+
     def test_normalize_front_runtime_incident_uses_incident_relative_asset_names(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
