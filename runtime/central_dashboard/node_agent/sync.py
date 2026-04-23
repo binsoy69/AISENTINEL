@@ -84,6 +84,17 @@ class LocalSyncQueue:
         self.connection.execute("DELETE FROM sync_queue WHERE item_id=?", (item_id,))
         self.connection.commit()
 
+    def has_pending_manifest(self, incident_id: str) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT 1 FROM sync_queue
+            WHERE incident_id=? AND item_type='manifest'
+            LIMIT 1
+            """,
+            (incident_id,),
+        ).fetchone()
+        return row is not None
+
     def mark_retry(self, item: SyncQueueItem, error_message: str) -> None:
         delay_sec = min(60, max(2, 2 ** min(item.attempts + 1, 5)))
         next_retry_at = (

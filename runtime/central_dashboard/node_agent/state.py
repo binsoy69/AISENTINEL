@@ -20,6 +20,11 @@ from central_dashboard.shared.http import StdlibHttpClient
 from sound_monitor import DEFAULT_SOUND_SNAPSHOT
 
 
+SYNC_OK = "ok"
+SYNC_RETRY = "retry"
+SYNC_DROP = "drop"
+
+
 class NodeRuntime:
     """Supervises node registration, session execution, local feeds, and sync."""
 
@@ -244,12 +249,17 @@ class NodeRuntime:
         for item in self.sync_queue.due_items():
             try:
                 if item.item_type == "manifest":
-                    ok = self._sync_manifest(item.payload)
+                    disposition = SYNC_OK if self._sync_manifest(item.payload) else SYNC_RETRY
                 else:
-                    ok = self._sync_asset(item.payload)
-                if ok:
+                    if self.sync_queue.has_pending_manifest(item.incident_id):
+                        self.sync_queue.mark_retry(item, "waiting for incident manifest sync")
+                        continue
+                    disposition = self._sync_asset(item.payload)
+                if disposition == SYNC_OK:
                     self.sync_queue.mark_done(item.item_id)
                     synced += 1
+                elif disposition == SYNC_DROP:
+                    self.sync_queue.mark_done(item.item_id)
                 else:
                     self.sync_queue.mark_retry(item, "sync failed")
             except Exception as exc:  # pragma: no cover - runtime network safety
@@ -270,8 +280,10 @@ class NodeRuntime:
         )
         return result.ok
 
-    def _sync_asset(self, payload: dict) -> bool:
+    def _sync_asset(self, payload: dict) -> str:
         file_path = Path(payload["file_path"])
+        if not file_path.exists():
+            return SYNC_DROP
         content = file_path.read_bytes()
         asset_payload = {
             "incident_id": payload["incident_id"],
@@ -289,7 +301,11 @@ class NodeRuntime:
             headers=self._auth_headers(),
             timeout=self.config.http_timeout_sec,
         )
-        return result.ok
+        if result.ok:
+            return SYNC_OK
+        if result.status_code == 404 and _is_incident_not_found(result):
+            return SYNC_DROP
+        return SYNC_RETRY
 
     def _run_session(self, session: SessionSpec) -> None:
         try:
@@ -524,3 +540,12 @@ class NodeRuntime:
     def _set_error(self, message: str) -> None:
         with self._lock:
             self._last_error = str(message)
+
+
+def _is_incident_not_found(result) -> bool:
+    payload = result.json_data
+    if isinstance(payload, dict):
+        error_text = str(payload.get("error") or payload.get("message") or "")
+    else:
+        error_text = result.text
+    return "incident not found" in error_text.lower()

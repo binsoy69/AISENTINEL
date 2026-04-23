@@ -10,6 +10,9 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from central_dashboard.node_agent.sync import LocalSyncQueue
+from central_dashboard.node_agent.config import NodeAgentConfig
+from central_dashboard.node_agent.state import NodeRuntime
+from central_dashboard.shared.http import HttpResult
 
 
 class SyncQueueTests(unittest.TestCase):
@@ -36,6 +39,133 @@ class SyncQueueTests(unittest.TestCase):
 
             self.assertEqual(queue.backlog_count(), 0)
             queue.close()
+
+    def test_has_pending_manifest_reports_incident_dependency(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = LocalSyncQueue(Path(tmpdir) / "queue.sqlite3")
+            queue.enqueue("manifest", "incident-1", "front", {"manifest_payload": {}})
+            queue.enqueue("asset", "incident-1", "front", {"filename": "poster.jpg"})
+            queue.enqueue("asset", "incident-2", "front", {"filename": "poster.jpg"})
+
+            self.assertTrue(queue.has_pending_manifest("incident-1"))
+            self.assertFalse(queue.has_pending_manifest("incident-2"))
+            queue.close()
+
+
+class FakeHttpClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def post_json(self, url: str, payload: dict, *, headers=None, timeout=5.0):
+        self.requests.append((url, payload))
+        if self.responses:
+            return self.responses.pop(0)
+        return HttpResult(200, {"ok": True}, '{"ok": true}')
+
+
+def build_config(tmpdir: Path) -> NodeAgentConfig:
+    return NodeAgentConfig(
+        config_path=tmpdir / "node.ini",
+        node_id="front",
+        display_name="Front Node",
+        camera_label="Front Camera",
+        profile="front",
+        host="front.test",
+        port=8091,
+        api_key="front-key",
+        central_base_url="http://central.test:8090",
+        registration_interval_sec=10.0,
+        heartbeat_interval_sec=10.0,
+        sync_interval_sec=10.0,
+        http_timeout_sec=5.0,
+        local_db_path=tmpdir / "queue.sqlite3",
+        source_mode="webcam",
+        camera_index=0,
+        video_path=None,
+        preview_width=640,
+        preview_fps=15.0,
+        jpeg_quality=75,
+        detector_mode="motion",
+        runtime_config_path=None,
+        motion_threshold=5.0,
+        motion_min_area_ratio=0.001,
+        motion_cooldown_sec=0.05,
+        annotated_banner_ttl_sec=1.0,
+        evidence_root=tmpdir / "evidence",
+        pre_event_frames=2,
+        post_event_frames=2,
+    )
+
+
+class NodeRuntimeSyncTests(unittest.TestCase):
+    def test_asset_waits_when_manifest_is_still_pending(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            asset_path = tmpdir / "poster.jpg"
+            asset_path.write_bytes(b"jpeg-data")
+            http_client = FakeHttpClient([HttpResult(503, {"error": "down"}, "down")])
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "manifest",
+                "incident-1",
+                "front",
+                {"manifest_payload": {"incident_id": "incident-1", "node_id": "front"}},
+            )
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "poster",
+                    "file_path": str(asset_path),
+                    "filename": "poster.jpg",
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/incidents"))
+            self.assertEqual(runtime.sync_queue.backlog_count(), 2)
+            runtime.close()
+
+    def test_stale_asset_404_incident_not_found_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            asset_path = tmpdir / "poster.jpg"
+            asset_path.write_bytes(b"jpeg-data")
+            http_client = FakeHttpClient(
+                [
+                    HttpResult(
+                        404,
+                        {"error": "Incident not found."},
+                        '{"error": "Incident not found."}',
+                    )
+                ]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "poster",
+                    "file_path": str(asset_path),
+                    "filename": "poster.jpg",
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/evidence/upload"))
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
 
 
 if __name__ == "__main__":
