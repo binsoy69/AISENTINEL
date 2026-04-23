@@ -278,11 +278,11 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertEqual(incident.student_numbers, [5])
             self.assertEqual(
                 [asset["filename"] for asset in assets],
-                ["frames/f01_event.jpg", "evidence.gif", "frames/f00_pre.jpg"],
+                ["frames/f01_event.jpg", "evidence.gif"],
             )
             self.assertEqual(
                 [asset["asset_type"] for asset in assets],
-                ["poster", "gif", "frame"],
+                ["poster", "gif"],
             )
 
     def test_resolve_calibration_path_prefers_saved_default_and_auto_fallback(self):

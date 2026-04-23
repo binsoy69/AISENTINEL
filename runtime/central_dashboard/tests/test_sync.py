@@ -51,6 +51,19 @@ class SyncQueueTests(unittest.TestCase):
             self.assertFalse(queue.has_pending_manifest("incident-2"))
             queue.close()
 
+    def test_purge_asset_type_removes_existing_frame_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = LocalSyncQueue(Path(tmpdir) / "queue.sqlite3")
+            queue.enqueue("asset", "incident-1", "front", {"asset_type": "frame", "filename": "frame_001.jpg"})
+            queue.enqueue("asset", "incident-1", "front", {"asset_type": "gif", "filename": "evidence.gif"})
+            queue.enqueue("asset", "incident-2", "front", {"asset_type": "frame", "filename": "frame_002.jpg"})
+
+            self.assertEqual(queue.purge_asset_type("frame"), 2)
+            self.assertEqual(queue.backlog_count(), 1)
+            item = queue.due_items()[0]
+            self.assertEqual(item.payload["asset_type"], "gif")
+            queue.close()
+
 
 class FakeHttpClient:
     def __init__(self, responses):
@@ -199,6 +212,47 @@ class NodeRuntimeSyncTests(unittest.TestCase):
 
             self.assertEqual(len(http_client.requests), 1)
             self.assertTrue(http_client.requests[0][0].endswith("/api/v1/evidence/upload"))
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
+    def test_frame_assets_are_purged_before_sync(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            frame_path = tmpdir / "frame.jpg"
+            gif_path = tmpdir / "evidence.gif"
+            frame_path.write_bytes(b"frame-data")
+            gif_path.write_bytes(b"gif-data")
+            http_client = FakeHttpClient([HttpResult(200, {"ok": True}, '{"ok": true}')])
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "frame",
+                    "file_path": str(frame_path),
+                    "filename": "frame.jpg",
+                },
+            )
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "gif",
+                    "file_path": str(gif_path),
+                    "filename": "evidence.gif",
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertEqual(http_client.requests[0][1]["asset_type"], "gif")
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 

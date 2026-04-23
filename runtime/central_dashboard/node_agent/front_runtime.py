@@ -395,8 +395,6 @@ def _normalize_front_runtime_incident(
     ).parent
     poster_relpath = str(front_manifest.get("poster_relpath") or "").strip()
     gif_relpath = str(front_manifest.get("gif_relpath") or "").strip()
-    frame_relpaths = [str(value) for value in (front_manifest.get("frame_relpaths") or [])]
-
     assets = []
     asset_names = []
 
@@ -420,18 +418,6 @@ def _normalize_front_runtime_incident(
             }
         )
 
-    for relpath in frame_relpaths:
-        if relpath == poster_relpath:
-            continue
-        asset_names.append(_incident_asset_name(incident_root, relpath))
-        assets.append(
-            {
-                "asset_type": "frame",
-                "file_path": _local_evidence_path(evidence_root, relpath),
-                "filename": asset_names[-1],
-            }
-        )
-
     manifest = IncidentManifest(
         incident_id=str(front_manifest.get("id", "")).strip(),
         session_id=session.session_id,
@@ -448,7 +434,7 @@ def _normalize_front_runtime_incident(
         or "unverified",
         poster_path="",
         gif_path="",
-        frame_count=int(front_manifest.get("frame_count") or len(frame_relpaths)),
+        frame_count=int(front_manifest.get("frame_count") or 0),
         summary=str(front_manifest.get("summary", "")).strip(),
         sync_status="queued",
         sync_attempts=0,

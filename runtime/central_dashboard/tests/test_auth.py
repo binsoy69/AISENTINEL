@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ if str(TEST_ROOT) not in sys.path:
 
 from central_dashboard.central_service.app import create_app as create_central_app
 from central_dashboard.central_service.config import BrowserAuthConfig, CentralServiceConfig, KnownNodeConfig
+from central_dashboard.central_service.proxy import relay_stream_chunks
 from central_dashboard.node_agent.app import create_app as create_node_app
 from central_dashboard.node_agent.config import NodeAgentConfig
 
@@ -90,6 +92,22 @@ class AuthTests(unittest.TestCase):
             relative_path = upload_response.get_json()["relative_path"]
             self.assertTrue(relative_path.startswith("session-1/front/incident-1/"))
 
+            bad_upload_response = client.post(
+                "/api/v1/evidence/upload",
+                json={
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "poster",
+                    "filename": "bad.jpg",
+                    "content_base64": "not base64",
+                    "content_sha256": "",
+                    "size_bytes": 9,
+                },
+                headers=headers,
+            )
+            self.assertEqual(bad_upload_response.status_code, 400)
+            self.assertIn("Invalid evidence content", bad_upload_response.get_json()["error"])
+
             app.extensions["central_connection"].close()
 
     def test_node_agent_routes_require_api_key(self):
@@ -131,6 +149,21 @@ class AuthTests(unittest.TestCase):
             response = client.get("/agent/v1/status")
             self.assertEqual(response.status_code, 401)
             app.extensions["node_runtime"].close()
+
+    def test_stream_relay_stops_on_incomplete_read(self):
+        class BrokenStream:
+            def __init__(self):
+                self.closed = False
+
+            def read(self, _chunk_size):
+                raise http.client.IncompleteRead(b"partial")
+
+            def close(self):
+                self.closed = True
+
+        stream = BrokenStream()
+        self.assertEqual(list(relay_stream_chunks(stream)), [])
+        self.assertTrue(stream.closed)
 
 
 if __name__ == "__main__":

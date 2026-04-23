@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 import base64
+import binascii
 import posixpath
 
 from central_dashboard.shared.dto import (
@@ -273,19 +274,33 @@ class CentralServiceManager:
         return {"ok": True, "incident": self._public_incident(manifest.incident_id)}
 
     def store_asset(self, payload: dict) -> dict:
-        asset = EvidenceAsset.from_dict(payload)
+        try:
+            asset = EvidenceAsset.from_dict(payload)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": f"Invalid evidence payload: {exc}", "status_code": 400}
+
+        if not asset.incident_id or not asset.session_id or not asset.filename:
+            return {"ok": False, "error": "Missing required evidence fields.", "status_code": 400}
+
         incident = self.repository.get_incident(asset.incident_id)
         if incident is None:
             return {"ok": False, "error": "Incident not found.", "status_code": 404}
 
-        content = base64.b64decode(asset.content_base64.encode("ascii"))
+        try:
+            content = base64.b64decode(asset.content_base64.encode("ascii"), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            return {"ok": False, "error": f"Invalid evidence content: {exc}", "status_code": 400}
+
         relative_path = posixpath.join(
             asset.session_id,
             asset.node_id,
             asset.incident_id,
             asset.filename,
         )
-        file_path = self.safe_evidence_path(relative_path)
+        try:
+            file_path = self.safe_evidence_path(relative_path)
+        except ValueError:
+            return {"ok": False, "error": "Invalid evidence path.", "status_code": 400}
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(content)
         self.repository.attach_asset_path(asset.incident_id, asset.asset_type, relative_path)

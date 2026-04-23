@@ -95,6 +95,29 @@ class LocalSyncQueue:
         ).fetchone()
         return row is not None
 
+    def purge_asset_type(self, asset_type: str) -> int:
+        rows = self.connection.execute(
+            "SELECT item_id, payload_json FROM sync_queue WHERE item_type='asset'"
+        ).fetchall()
+        item_ids = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                continue
+            if str(payload.get("asset_type") or "") == asset_type:
+                item_ids.append(row["item_id"])
+
+        if not item_ids:
+            return 0
+
+        self.connection.executemany(
+            "DELETE FROM sync_queue WHERE item_id=?",
+            [(item_id,) for item_id in item_ids],
+        )
+        self.connection.commit()
+        return len(item_ids)
+
     def mark_retry(self, item: SyncQueueItem, error_message: str) -> None:
         delay_sec = min(60, max(2, 2 ** min(item.attempts + 1, 5)))
         next_retry_at = (

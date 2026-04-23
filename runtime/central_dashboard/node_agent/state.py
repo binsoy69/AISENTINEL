@@ -245,6 +245,7 @@ class NodeRuntime:
             return False
 
     def sync_once(self) -> int:
+        self.sync_queue.purge_asset_type("frame")
         synced = 0
         for item in self.sync_queue.due_items():
             try:
@@ -445,6 +446,8 @@ class NodeRuntime:
             {"manifest_payload": manifest.to_dict()},
         )
         for asset in assets:
+            if asset["asset_type"] == "frame":
+                continue
             self.sync_queue.enqueue(
                 "asset",
                 manifest.incident_id,
