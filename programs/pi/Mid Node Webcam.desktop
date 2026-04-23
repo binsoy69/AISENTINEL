@@ -2,7 +2,6 @@
 Type=Application
 Name=AISENTINEL Mid Node Webcam
 Comment=Run the mid node with its configured webcam
-Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/run_mid_node_webcam.sh'
+Exec=sh -c "desktop_file=\"$1\"; repo_root=\"$(cd \"$(dirname \"$(readlink -f \"$desktop_file\")\")/../..\" && pwd)\"; cd \"$repo_root\" && AISENTINEL_KEEP_TERMINAL=1 bash programs/pi/run_mid_node_webcam.sh" sh %k
 Terminal=true
 Categories=Utility;
-

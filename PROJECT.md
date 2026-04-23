@@ -94,14 +94,22 @@ overlays stay out of the dashboard stream.
 
 ## Raspberry Pi Double-Click Support
 
-`programs/pi/` contains `.desktop` launchers and `.sh` scripts. They run the
+`programs/pi/` contains `.desktop` launchers, `.sh` scripts, and an installer.
+Run this once on each Pi:
+
+```bash
+bash programs/pi/install_desktop_launchers.sh
+```
+
+The installer creates absolute-path launchers on the Pi Desktop. They run the
 current repo configs and append logs under:
 
 ```text
 runtime/central_dashboard/data/logs/
 ```
 
-Make them executable once on the Pi:
+If you want to run the source scripts directly, you can also make them
+executable:
 
 ```bash
 chmod +x programs/pi/*.sh "programs/pi/"*.desktop

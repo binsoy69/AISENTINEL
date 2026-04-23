@@ -88,21 +88,27 @@ central_base_url = http://192.168.1.50:8090
 
 Raspberry Pi launchers are in `programs/pi/`.
 
-First time on the Pi, make them executable:
+Recommended first-time setup on each Pi:
 
 ```bash
-chmod +x programs/pi/*.sh "programs/pi/"*.desktop
+bash programs/pi/install_desktop_launchers.sh
 ```
 
-Then double-click the `.desktop` file for the node program you need. The
-launcher opens a terminal, runs the matching Python program from the repo root,
-and writes logs to:
+This creates absolute-path launchers on the Pi Desktop and marks them
+executable/trusted where the desktop environment allows it. Then double-click
+the desktop launcher for the node program you need.
+
+The launcher opens a terminal, runs the matching Python program from the repo
+root, keeps the terminal open after errors, and writes logs to:
 
 ```text
 runtime/central_dashboard/data/logs/
 ```
 
 Changing the INI config files takes effect the next time you run the launcher.
+
+If a copied `.desktop` file still does not open, right-click it and choose
+`Allow Launching` if Raspberry Pi Desktop offers that option.
 
 ## Windows Central Dashboard EXE
 

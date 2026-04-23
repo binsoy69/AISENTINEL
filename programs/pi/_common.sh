@@ -29,6 +29,21 @@ run_python_launcher() {
         source ".venv/bin/activate"
     fi
 
+    set +e
     python3 "${launcher_path}"
-}
+    local status=$?
+    set -e
 
+    echo
+    echo "=============================================================================="
+    echo "AISENTINEL launcher finished with exit code: ${status}"
+    echo "Finished: $(date)"
+    echo "=============================================================================="
+
+    if [[ "${AISENTINEL_KEEP_TERMINAL:-0}" == "1" ]]; then
+        echo
+        read -r -p "Press Enter to close this window..." _
+    fi
+
+    return "${status}"
+}

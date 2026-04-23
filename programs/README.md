@@ -40,8 +40,17 @@ Video replay reads `[video_source] default_video` from the matching runtime INI:
 
 ## Raspberry Pi Double-Click Files
 
-The `pi/` folder contains `.sh` scripts and `.desktop` launchers. The `.desktop`
-files call the `.sh` scripts, and the scripts call the Python launchers above.
+The `pi/` folder contains `.sh` scripts, source `.desktop` launchers, and an
+installer:
+
+```bash
+bash programs/pi/install_desktop_launchers.sh
+```
+
+Run that installer on the Raspberry Pi. It writes absolute-path launchers to the
+Pi Desktop, marks them executable, and tries to mark them trusted. The generated
+`.desktop` files call the `.sh` scripts, and the scripts call the Python
+launchers above.
 
 Logs are appended under:
 

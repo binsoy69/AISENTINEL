@@ -2,7 +2,6 @@
 Type=Application
 Name=AISENTINEL Calibrate Mid Webcam
 Comment=Create or update the mid node webcam setup profile
-Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/calibrate_mid_webcam.sh'
+Exec=sh -c "desktop_file=\"$1\"; repo_root=\"$(cd \"$(dirname \"$(readlink -f \"$desktop_file\")\")/../..\" && pwd)\"; cd \"$repo_root\" && AISENTINEL_KEEP_TERMINAL=1 bash programs/pi/calibrate_mid_webcam.sh" sh %k
 Terminal=true
 Categories=Utility;
-

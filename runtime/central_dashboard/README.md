@@ -199,14 +199,16 @@ Raspberry Pi launchers live in:
 programs/pi/
 ```
 
-Make them executable once:
+Recommended first-time setup on each Pi:
 
 ```bash
-chmod +x programs/pi/*.sh "programs/pi/"*.desktop
+bash programs/pi/install_desktop_launchers.sh
 ```
 
-Double-click the `.desktop` launcher or run the `.sh` directly. Output appears
-in the terminal and is appended to:
+This creates launchers on the Pi Desktop with absolute paths. Double-click one
+of those launchers, or run the `.sh` scripts directly from a terminal. Output
+appears in the terminal, the terminal stays open after failures, and logs are
+appended to:
 
 ```text
 runtime/central_dashboard/data/logs/
@@ -214,6 +216,9 @@ runtime/central_dashboard/data/logs/
 
 Config changes apply on the next launch because the scripts always read the
 current repo INI files.
+
+If Raspberry Pi Desktop asks whether to trust or execute the launcher, choose
+`Allow Launching`.
 
 ## Windows Central Dashboard EXE
 
