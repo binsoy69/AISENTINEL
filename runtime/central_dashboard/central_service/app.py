@@ -188,8 +188,7 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     @node_api_required
     def incidents_api():
         payload = request.get_json(silent=True) or {}
-        if str(payload.get("node_id", "")).strip() != request.node_id:
-            return jsonify({"error": "node_id does not match authenticated header"}), 400
+        payload["node_id"] = request.node_id
         result = manager.upsert_incident(payload)
         status_code = int(result.pop("status_code", 200))
         return jsonify(result), status_code
@@ -198,8 +197,7 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     @node_api_required
     def upload_evidence_api():
         payload = request.get_json(silent=True) or {}
-        if str(payload.get("node_id", "")).strip() != request.node_id:
-            return jsonify({"error": "node_id does not match authenticated header"}), 400
+        payload["node_id"] = request.node_id
         result = manager.store_asset(payload)
         status_code = int(result.pop("status_code", 200))
         return jsonify(result), status_code

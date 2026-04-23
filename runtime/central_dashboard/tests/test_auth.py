@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,60 @@ class AuthTests(unittest.TestCase):
             client = app.test_client()
             response = client.post("/api/v1/nodes/register", json={"node_id": "front"})
             self.assertEqual(response.status_code, 401)
+            app.extensions["central_connection"].close()
+
+    def test_central_node_payload_node_id_uses_authenticated_header(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config = CentralServiceConfig(
+                config_path=tmpdir / "central.ini",
+                host="127.0.0.1",
+                port=8090,
+                db_path=tmpdir / "central.sqlite3",
+                evidence_root=tmpdir / "evidence",
+                node_offline_after_sec=10,
+                proxy_timeout_sec=5.0,
+                stream_timeout_sec=5.0,
+                browser_auth=BrowserAuthConfig("admin", "admin123", "secret", 60),
+                known_nodes={"front": KnownNodeConfig("front", "Front Node", "Front Camera", "front-key")},
+            )
+            app = create_central_app(config)
+            client = app.test_client()
+            headers = {"X-Node-Id": "front", "X-Api-Key": "front-key"}
+
+            manifest_response = client.post(
+                "/api/v1/incidents",
+                json={
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "node_id": "wrong-node",
+                    "camera_label": "Front Camera",
+                    "behavior_type": "noise",
+                    "type_label": "Noise Threshold Exceeded",
+                    "created_at": "2026-04-23T04:04:00Z",
+                },
+                headers=headers,
+            )
+            self.assertEqual(manifest_response.status_code, 200)
+
+            upload_response = client.post(
+                "/api/v1/evidence/upload",
+                json={
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "node_id": "wrong-node",
+                    "asset_type": "poster",
+                    "filename": "poster.jpg",
+                    "content_base64": base64.b64encode(b"jpeg-data").decode("ascii"),
+                    "content_sha256": "",
+                    "size_bytes": 9,
+                },
+                headers=headers,
+            )
+            self.assertEqual(upload_response.status_code, 200)
+            relative_path = upload_response.get_json()["relative_path"]
+            self.assertTrue(relative_path.startswith("session-1/front/incident-1/"))
+
             app.extensions["central_connection"].close()
 
     def test_node_agent_routes_require_api_key(self):
