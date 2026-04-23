@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 import sys
+import threading
 
 import cv2
 
@@ -79,6 +80,8 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
     object_detector = None
     cap = None
     sound_service = None
+    latest_raw_frame = {"frame": None}
+    latest_raw_frame_lock = threading.Lock()
 
     try:
         capture_bundle = _open_capture_bundle(
@@ -90,6 +93,8 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
         first_frame = capture_bundle["first_frame"]
         source_display_label = capture_bundle["source_label"]
         actual_fps = capture_bundle["fps"]
+        with latest_raw_frame_lock:
+            latest_raw_frame["frame"] = first_frame.copy()
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or first_frame.shape[1])
         disp_scale = min(1.0, 1280 / width) if width > 1280 else 1.0
@@ -163,16 +168,21 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             runtime.update_sound_telemetry(payload)
 
         def sound_incident_callback(payload: dict) -> None:
-            runtime.record_finalized_incident(
-                _build_noise_incident_manifest(
-                    node_config=node_config,
-                    session=session,
-                    source_label=source_display_label,
-                    estimated_db=float(payload["estimated_db"]),
-                    threshold_db=float(payload["threshold_db"]),
-                ),
-                [],
+            with latest_raw_frame_lock:
+                noise_frame = latest_raw_frame.get("frame")
+            incident, assets = _build_noise_incident_evidence(
+                node_config=node_config,
+                session=session,
+                source_label=source_display_label,
+                estimated_db=float(payload["estimated_db"]),
+                threshold_db=float(payload["threshold_db"]),
+                frame=noise_frame,
             )
+            if not assets:
+                head_mod.log_info(
+                    "Noise threshold incident has no available camera frame for poster evidence."
+                )
+            runtime.record_finalized_incident(incident, assets)
 
         sound_service = SoundMonitorService(
             runtime_cfg.sound_sensor,
@@ -183,6 +193,8 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
         sound_service.start()
 
         def frame_publish_callback(raw_frame, annotated_frame, metrics: dict) -> None:
+            with latest_raw_frame_lock:
+                latest_raw_frame["frame"] = raw_frame
             runtime.publish_detector_frames(
                 raw_frame,
                 annotated_frame,
@@ -445,16 +457,37 @@ def _normalize_front_runtime_incident(
     return manifest, assets
 
 
-def _build_noise_incident_manifest(
+def _build_noise_incident_evidence(
     *,
     node_config,
     session: SessionSpec,
     source_label: str,
     estimated_db: float,
     threshold_db: float,
-) -> IncidentManifest:
-    return IncidentManifest(
-        incident_id=make_id("noise"),
+    frame,
+) -> tuple[IncidentManifest, list[dict]]:
+    incident_id = make_id("noise")
+    assets = []
+    asset_names = []
+    frame_count = 0
+
+    if frame is not None:
+        incident_dir = node_config.evidence_root / session.session_id / incident_id
+        incident_dir.mkdir(parents=True, exist_ok=True)
+        poster_path = incident_dir / "poster.jpg"
+        if cv2.imwrite(str(poster_path), frame):
+            asset_names.append("poster.jpg")
+            assets.append(
+                {
+                    "asset_type": "poster",
+                    "file_path": poster_path,
+                    "filename": "poster.jpg",
+                }
+            )
+            frame_count = 1
+
+    manifest = IncidentManifest(
+        incident_id=incident_id,
         session_id=session.session_id,
         node_id=node_config.node_id,
         camera_label=node_config.camera_label or source_label,
@@ -466,12 +499,13 @@ def _build_noise_incident_manifest(
         review_status="unverified",
         poster_path="",
         gif_path="",
-        frame_count=0,
+        frame_count=frame_count,
         summary=build_noise_summary(estimated_db, threshold_db),
         sync_status="queued",
         sync_attempts=0,
-        asset_names=[],
+        asset_names=asset_names,
     )
+    return manifest, assets
 
 
 def _incident_asset_name(incident_root: PurePosixPath, relpath: str) -> str:

@@ -116,6 +116,9 @@ STREAM_JPEG_QUALITY = 68
 STREAM_MAX_WIDTH = 960
 STREAM_MAX_FPS = 12.0
 PROCESSING_FPS_EMA_ALPHA = 0.18
+# Central dashboard streams use evidence-style previews, so the full diagnostic
+# overlay is disabled unless a developer needs local visual debugging.
+DIAGNOSTIC_OVERLAY_ENABLED = False
 DEFAULT_EVIDENCE_REVIEW_STATUS = "unverified"
 EVIDENCE_REVIEW_STATUS_CHOICES = {
     DEFAULT_EVIDENCE_REVIEW_STATUS,
@@ -1177,27 +1180,64 @@ def _save_grouped_evidence_frame(sequence, frame, frame_tag: str) -> None:
 
 
 def _write_sequence_gif(sequence) -> str:
-    if not PIL_AVAILABLE or not sequence.get("frame_paths"):
-        return ""
-
-    frames = []
-    for frame_path in sequence["frame_paths"]:
-        with Image.open(frame_path) as image:
-            frames.append(image.convert("P", palette=Image.ADAPTIVE))
-
-    if not frames:
+    if not sequence.get("frame_paths"):
         return ""
 
     gif_path = sequence["event_dir"] / "evidence.gif"
-    frames[0].save(
-        gif_path,
-        save_all=True,
-        append_images=frames[1:],
-        duration=220,
-        loop=0,
-        optimize=False,
-    )
-    return _relative_evidence_path(gif_path)
+
+    if PIL_AVAILABLE:
+        try:
+            frames = []
+            for frame_path in sequence["frame_paths"]:
+                with Image.open(frame_path) as image:
+                    frames.append(image.convert("P", palette=Image.ADAPTIVE))
+
+            if frames:
+                frames[0].save(
+                    gif_path,
+                    save_all=True,
+                    append_images=frames[1:],
+                    duration=220,
+                    loop=0,
+                    optimize=False,
+                )
+                return _relative_evidence_path(gif_path)
+        except Exception as exc:  # pragma: no cover - depends on image codecs
+            head_mod.log_info(f"Pillow GIF writer failed; trying OpenCV fallback: {exc}")
+
+    if not hasattr(cv2, "Animation") or not hasattr(cv2, "imwriteanimation"):
+        head_mod.log_info(
+            "GIF evidence unavailable: install Pillow or OpenCV with GIF animation support."
+        )
+        return ""
+
+    try:
+        if hasattr(cv2, "haveImageWriter") and not cv2.haveImageWriter(".gif"):
+            head_mod.log_info(
+                "GIF evidence unavailable: OpenCV does not report GIF writer support."
+            )
+            return ""
+
+        cv_frames = []
+        for frame_path in sequence["frame_paths"]:
+            frame = cv2.imread(str(frame_path))
+            if frame is not None:
+                cv_frames.append(frame)
+
+        if not cv_frames:
+            head_mod.log_info("GIF evidence unavailable: no readable evidence frames.")
+            return ""
+
+        animation = cv2.Animation()
+        animation.frames = cv_frames
+        animation.durations = [220] * len(cv_frames)
+        animation.loop_count = 0
+        if cv2.imwriteanimation(str(gif_path), animation):
+            return _relative_evidence_path(gif_path)
+        head_mod.log_info("GIF evidence unavailable: OpenCV GIF writer returned false.")
+    except Exception as exc:  # pragma: no cover - depends on image codecs
+        head_mod.log_info(f"GIF evidence unavailable: OpenCV fallback failed: {exc}")
+    return ""
 
 
 def _finalize_evidence_sequence(sequence) -> None:
@@ -2088,6 +2128,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     last_stream_publish_at = 0.0
     smoothed_processing_fps = 0.0
     evidence_task_queue, evidence_worker = _start_evidence_writer()
+    diagnostic_overlay_enabled = DIAGNOSTIC_OVERLAY_ENABLED
 
     try:
         while True:
@@ -2135,8 +2176,8 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
             inference_ms = (time.perf_counter() - t0) * 1000
 
-            annotated = frame.copy()
-            if roi_polygon is not None:
+            annotated = frame.copy() if diagnostic_overlay_enabled else None
+            if diagnostic_overlay_enabled and roi_polygon is not None:
                 cv2.polylines(
                     annotated, [roi_polygon], True, (0, 255, 255), 1, cv2.LINE_AA
                 )
@@ -2158,9 +2199,10 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 x1, y1, x2, y2 = [int(v) for v in bbox]
 
                 if tid == -1 or tid not in assigned_tids:
-                    cv2.rectangle(
-                        annotated, (x1, y1), (x2, y2), head_mod.COL_UNASSIGNED, 1
-                    )
+                    if diagnostic_overlay_enabled:
+                        cv2.rectangle(
+                            annotated, (x1, y1), (x2, y2), head_mod.COL_UNASSIGNED, 1
+                        )
                     continue
 
                 kp = det["keypoints"]
@@ -2173,14 +2215,15 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     "labels": [],
                 }
 
-                pass_mod.draw_skeleton(annotated, kp_xy, kp_conf)
-                for kp_idx in (pass_mod.KP_LEFT_WRIST, pass_mod.KP_RIGHT_WRIST):
-                    if kp_idx < len(kp_conf) and kp_conf[kp_idx] > pass_mod.KP_CONF_THRESH:
-                        wx = int(kp_xy[kp_idx][0])
-                        wy = int(kp_xy[kp_idx][1])
-                        cv2.circle(
-                            annotated, (wx, wy), 5, pass_mod.COL_WRIST, -1, cv2.LINE_AA
-                        )
+                if diagnostic_overlay_enabled:
+                    pass_mod.draw_skeleton(annotated, kp_xy, kp_conf)
+                    for kp_idx in (pass_mod.KP_LEFT_WRIST, pass_mod.KP_RIGHT_WRIST):
+                        if kp_idx < len(kp_conf) and kp_conf[kp_idx] > pass_mod.KP_CONF_THRESH:
+                            wx = int(kp_xy[kp_idx][0])
+                            wy = int(kp_xy[kp_idx][1])
+                            cv2.circle(
+                                annotated, (wx, wy), 5, pass_mod.COL_WRIST, -1, cv2.LINE_AA
+                            )
 
                 display = per_student_display[tid]
                 head_state = head_students[tid]
@@ -2224,7 +2267,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 is_turned, shoulder_angle, turn_dir = head_mod.detect_shoulder_turn(
                     kp_xy, kp_conf
                 )
-                if (
+                if diagnostic_overlay_enabled and (
                     kp_conf[head_mod.KP_LEFT_SHOULDER] > head_mod.KP_CONF_THRESH
                     and kp_conf[head_mod.KP_RIGHT_SHOULDER] > head_mod.KP_CONF_THRESH
                 ):
@@ -2295,15 +2338,16 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             hand_boxes = []
             for det in hand_dets:
                 hand_boxes.append(det["bbox"])
-                x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), hands_mod.COL_HAND, 2)
-                hands_mod.draw_label(
-                    annotated,
-                    f"hand {det['confidence']:.0%}",
-                    x1,
-                    y1 - 2,
-                    hands_mod.COL_HAND,
-                )
+                if diagnostic_overlay_enabled:
+                    x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), hands_mod.COL_HAND, 2)
+                    hands_mod.draw_label(
+                        annotated,
+                        f"hand {det['confidence']:.0%}",
+                        x1,
+                        y1 - 2,
+                        hands_mod.COL_HAND,
+                    )
 
             student_hands = defaultdict(list)
             for hand_bbox in hand_boxes:
@@ -2319,17 +2363,18 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
                 if best_tid is not None and best_dist <= hands_mod.HAND_ASSOC_MARGIN_PX:
                     student_hands[best_tid].append(hand_bbox)
-                    sx1, sy1, sx2, sy2 = student_tracks[best_tid]
-                    s_cx = int((sx1 + sx2) / 2)
-                    s_cy = int((sy1 + sy2) / 2)
-                    cv2.line(
-                        annotated,
-                        (int(hx), int(hy)),
-                        (s_cx, s_cy),
-                        hands_mod.COL_ASSOC_LINE,
-                        1,
-                        cv2.LINE_AA,
-                    )
+                    if diagnostic_overlay_enabled:
+                        sx1, sy1, sx2, sy2 = student_tracks[best_tid]
+                        s_cx = int((sx1 + sx2) / 2)
+                        s_cy = int((sy1 + sy2) / 2)
+                        cv2.line(
+                            annotated,
+                            (int(hx), int(hy)),
+                            (s_cx, s_cy),
+                            hands_mod.COL_ASSOC_LINE,
+                            1,
+                            cv2.LINE_AA,
+                        )
 
             for i, state in enumerate(line_states):
                 tid = state.assigned_student_id
@@ -2447,60 +2492,62 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     display["labels"].append(label)
                     display["color"] = elevate_color(display["color"], color)
 
-            hands_mod.draw_table_edge_lines(
-                annotated, student_lines, line_states, assigned_students
-            )
-
-            for i, state in enumerate(line_states):
-                if state.hands_missing_start <= 0:
-                    continue
-
-                line = student_lines[i] if i < len(student_lines) else None
-                if line is None:
-                    continue
-
-                elapsed = ts_sec - state.hands_missing_start
-                pt1 = line[0]
-                pt2 = line[1]
-                label_x = int((pt1[0] + pt2[0]) / 2) + 8
-                label_y = int((pt1[1] + pt2[1]) / 2) + 22
-
-                if (
-                    elapsed >= hands_mod.HANDS_MISSING_SUSTAIN_SEC
-                    and state.last_visible_hands == 0
-                ):
-                    text = f"ALERT! 0 hands ({elapsed:.1f}s)"
-                    color = hands_mod.COL_ALERT
-                elif (
-                    elapsed >= hands_mod.HANDS_MISSING_SUSTAIN_SEC
-                    and state.last_visible_hands == 1
-                ):
-                    text = f"WARNING! 1 hand ({elapsed:.1f}s)"
-                    color = hands_mod.COL_WARNING
-                else:
-                    text = f"Watching line ({elapsed:.1f}s)"
-                    color = hands_mod.COL_WARNING
-
-                cv2.putText(
-                    annotated,
-                    text,
-                    (label_x, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 0, 0),
-                    3,
-                    cv2.LINE_AA,
+            if diagnostic_overlay_enabled:
+                hands_mod.draw_table_edge_lines(
+                    annotated, student_lines, line_states, assigned_students
                 )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (label_x, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    color,
-                    2,
-                    cv2.LINE_AA,
-                )
+
+            if diagnostic_overlay_enabled:
+                for i, state in enumerate(line_states):
+                    if state.hands_missing_start <= 0:
+                        continue
+
+                    line = student_lines[i] if i < len(student_lines) else None
+                    if line is None:
+                        continue
+
+                    elapsed = ts_sec - state.hands_missing_start
+                    pt1 = line[0]
+                    pt2 = line[1]
+                    label_x = int((pt1[0] + pt2[0]) / 2) + 8
+                    label_y = int((pt1[1] + pt2[1]) / 2) + 22
+
+                    if (
+                        elapsed >= hands_mod.HANDS_MISSING_SUSTAIN_SEC
+                        and state.last_visible_hands == 0
+                    ):
+                        text = f"ALERT! 0 hands ({elapsed:.1f}s)"
+                        color = hands_mod.COL_ALERT
+                    elif (
+                        elapsed >= hands_mod.HANDS_MISSING_SUSTAIN_SEC
+                        and state.last_visible_hands == 1
+                    ):
+                        text = f"WARNING! 1 hand ({elapsed:.1f}s)"
+                        color = hands_mod.COL_WARNING
+                    else:
+                        text = f"Watching line ({elapsed:.1f}s)"
+                        color = hands_mod.COL_WARNING
+
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (label_x, label_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 0, 0),
+                        3,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (label_x, label_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        color,
+                        2,
+                        cv2.LINE_AA,
+                    )
 
             # Pass 3: passing papers interactions on the same tracked poses.
             evaluated_pairs = set()
@@ -2551,7 +2598,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     ps.frame_proximity_dist = prox_dist
                     ps.frame_proximity = prox_dist < scaled_prox_px
 
-                    if prox_dist < scaled_prox_px * 1.5:
+                    if diagnostic_overlay_enabled and prox_dist < scaled_prox_px * 1.5:
                         best_pts = None
                         best_dist = 9999.0
                         for wrist_a, wrist_b in (
@@ -2621,14 +2668,15 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                                 f"PROX S#{neighbor_num} {prox_dist:.0f}px {interaction_dur:.1f}s"
                             )
 
-                        cv2.line(
-                            annotated,
-                            (int(center_a[0]), int(center_a[1])),
-                            (int(center_b[0]), int(center_b[1])),
-                            pass_mod.COL_NEIGHBOR_LINE,
-                            2,
-                            cv2.LINE_AA,
-                        )
+                        if diagnostic_overlay_enabled:
+                            cv2.line(
+                                annotated,
+                                (int(center_a[0]), int(center_a[1])),
+                                (int(center_b[0]), int(center_b[1])),
+                                pass_mod.COL_NEIGHBOR_LINE,
+                                2,
+                                cv2.LINE_AA,
+                            )
 
                         if (
                             interaction_dur >= pass_mod.MIN_INTERACTION_SEC
@@ -2675,7 +2723,8 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 color = obj_mod.CLASS_COLORS.get(cls_name, (255, 255, 255))
                 object_stats[cls_name] += 1
 
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                if diagnostic_overlay_enabled:
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 label_prefix = cls_name.replace("_", " ")
 
                 if assoc_tid != -1 and assoc_tid in student_map:
@@ -2683,20 +2732,21 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     frame_object_boxes[(student_num, cls_name)].append(
                         tuple(det["bbox"])
                     )
-                    hands_mod.draw_label(
-                        annotated,
-                        f"{label_prefix} {conf:.0%} [S#{student_num}]",
-                        x1,
-                        y1 - 2,
-                        color,
-                    )
+                    if diagnostic_overlay_enabled:
+                        hands_mod.draw_label(
+                            annotated,
+                            f"{label_prefix} {conf:.0%} [S#{student_num}]",
+                            x1,
+                            y1 - 2,
+                            color,
+                        )
                     display = per_student_display.get(assoc_tid)
                     if display is not None:
                         display["labels"].append(f"{cls_name.upper()} {conf:.0%}")
                         display["color"] = elevate_color(
                             display["color"], head_mod.COL_FLAGGED
                         )
-                else:
+                elif diagnostic_overlay_enabled:
                     hands_mod.draw_label(
                         annotated,
                         f"{label_prefix} {conf:.0%}",
@@ -2727,35 +2777,36 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     )
 
             # Pass 5: final student boxes and labels.
-            for i, det in enumerate(pose_dets):
-                tid = track_ids[i]
-                if tid == -1 or tid not in assigned_tids:
-                    continue
+            if diagnostic_overlay_enabled:
+                for i, det in enumerate(pose_dets):
+                    tid = track_ids[i]
+                    if tid == -1 or tid not in assigned_tids:
+                        continue
 
-                bbox = det["bbox"]
-                x1, y1, x2, y2 = [int(v) for v in bbox]
-                display = per_student_display.get(
-                    tid, {"color": head_mod.COL_NORMAL, "labels": []}
-                )
-                student_num = student_map[tid]
-                line_idx = line_index_by_tid.get(tid)
-                suffix = f" | L{line_idx + 1}" if line_idx is not None else ""
-
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), display["color"], 2)
-                head_mod.draw_label(
-                    annotated,
-                    f"Student #{student_num}{suffix}",
-                    x1,
-                    y1 - 2,
-                    display["color"],
-                )
-
-                label_y = y1 + 18
-                for label in display["labels"]:
-                    head_mod.draw_label(
-                        annotated, label, x1, label_y, display["color"]
+                    bbox = det["bbox"]
+                    x1, y1, x2, y2 = [int(v) for v in bbox]
+                    display = per_student_display.get(
+                        tid, {"color": head_mod.COL_NORMAL, "labels": []}
                     )
-                    label_y += 18
+                    student_num = student_map[tid]
+                    line_idx = line_index_by_tid.get(tid)
+                    suffix = f" | L{line_idx + 1}" if line_idx is not None else ""
+
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), display["color"], 2)
+                    head_mod.draw_label(
+                        annotated,
+                        f"Student #{student_num}{suffix}",
+                        x1,
+                        y1 - 2,
+                        display["color"],
+                    )
+
+                    label_y = y1 + 18
+                    for label in display["labels"]:
+                        head_mod.draw_label(
+                            annotated, label, x1, label_y, display["color"]
+                        )
+                        label_y += 18
 
             # HUD + banners.
             elapsed_wall = time.perf_counter() - t_start
@@ -2787,32 +2838,195 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 else average_processing_fps
             )
 
-            hud_lines = [
-                (
-                    f"Frame: {frame_idx}/{total_frames} | "
-                    f"Time: {head_mod.fmt_ts(ts_sec)}"
-                    if total_frames > 0
-                    else f"Frame: {frame_idx} | Live time: {head_mod.fmt_ts(ts_sec)}"
-                ),
-                f"Video FPS: {fps:.1f} | Processing FPS: {display_processing_fps:.1f}",
-                (
-                    f"Tracked: {tracked_count}/{len(student_map)} | "
-                    f"Hands: {len(hand_boxes)} | Obj: {len(object_dets)} | "
-                    f"Inf: {inference_ms:.0f}ms"
-                ),
-                (
-                    f"Head A: {head_alert_total} | Passing A: {passing_alert_total} | "
-                    f"Hands A/W: {hand_alert_total}/{hand_warning_total} | "
-                    f"Obj A: {object_alert_total}"
-                ),
-            ]
+            if diagnostic_overlay_enabled:
+                hud_lines = [
+                    (
+                        f"Frame: {frame_idx}/{total_frames} | "
+                        f"Time: {head_mod.fmt_ts(ts_sec)}"
+                        if total_frames > 0
+                        else f"Frame: {frame_idx} | Live time: {head_mod.fmt_ts(ts_sec)}"
+                    ),
+                    f"Video FPS: {fps:.1f} | Processing FPS: {display_processing_fps:.1f}",
+                    (
+                        f"Tracked: {tracked_count}/{len(student_map)} | "
+                        f"Hands: {len(hand_boxes)} | Obj: {len(object_dets)} | "
+                        f"Inf: {inference_ms:.0f}ms"
+                    ),
+                    (
+                        f"Head A: {head_alert_total} | Passing A: {passing_alert_total} | "
+                        f"Hands A/W: {hand_alert_total}/{hand_warning_total} | "
+                        f"Obj A: {object_alert_total}"
+                    ),
+                ]
 
-            for idx, line in enumerate(hud_lines):
-                y_pos = 25 + idx * 28
+                for idx, line in enumerate(hud_lines):
+                    y_pos = 25 + idx * 28
+                    cv2.putText(
+                        annotated,
+                        line,
+                        (10, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 0, 0),
+                        3,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        line,
+                        (10, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        hud_color,
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+                draw_fps_badge(annotated, display_processing_fps, hud_color)
+
+                banner_y = height - 30
+                for event in frame_object_alerts:
+                    text = (
+                        f"ALERT: Student #{event['student_num']} - "
+                        f"{event['class_name'].replace('_', ' ').upper()}"
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 0),
+                        4,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        head_mod.COL_FLAGGED,
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    banner_y -= 35
+
+                for line_idx, student_num in frame_hand_alerts:
+                    text = (
+                        f"ALERT: Student #{student_num} hands missing near "
+                        f"Line #{line_idx + 1}"
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 0),
+                        4,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        hands_mod.COL_ALERT,
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    banner_y -= 35
+
+                for line_idx, student_num in frame_hand_warnings:
+                    text = (
+                        f"WARNING: Student #{student_num} long hands-missing event "
+                        f"near Line #{line_idx + 1}"
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 0),
+                        4,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        hands_mod.COL_WARNING,
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    banner_y -= 35
+
+                for behavior, student_num in head_frame_events:
+                    text = (
+                        f"ALERT: Student #{student_num} - "
+                        f"{behavior.replace('_', ' ').upper()}"
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 0),
+                        4,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        head_mod.COL_FLAGGED,
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    banner_y -= 35
+
+                for src_num, nbr_num, direction in passing_frame_events:
+                    text = (
+                        f"ALERT: S#{src_num} & S#{nbr_num} PASSING PAPERS ({direction})"
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 0),
+                        4,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated,
+                        text,
+                        (10, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        head_mod.COL_FLAGGED,
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    banner_y -= 35
+
+                ts_text = head_mod.fmt_ts(ts_sec)
+                (ts_width, _), _ = cv2.getTextSize(
+                    ts_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1
+                )
                 cv2.putText(
                     annotated,
-                    line,
-                    (10, y_pos),
+                    ts_text,
+                    (width - ts_width - 10, height - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
                     (0, 0, 0),
@@ -2821,176 +3035,14 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 )
                 cv2.putText(
                     annotated,
-                    line,
-                    (10, y_pos),
+                    ts_text,
+                    (width - ts_width - 10, height - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    hud_color,
-                    2,
+                    (255, 255, 255),
+                    1,
                     cv2.LINE_AA,
                 )
-
-            draw_fps_badge(annotated, display_processing_fps, hud_color)
-
-            banner_y = height - 30
-            for event in frame_object_alerts:
-                text = (
-                    f"ALERT: Student #{event['student_num']} - "
-                    f"{event['class_name'].replace('_', ' ').upper()}"
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 0),
-                    4,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    head_mod.COL_FLAGGED,
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y -= 35
-
-            for line_idx, student_num in frame_hand_alerts:
-                text = (
-                    f"ALERT: Student #{student_num} hands missing near "
-                    f"Line #{line_idx + 1}"
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 0),
-                    4,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    hands_mod.COL_ALERT,
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y -= 35
-
-            for line_idx, student_num in frame_hand_warnings:
-                text = (
-                    f"WARNING: Student #{student_num} long hands-missing event "
-                    f"near Line #{line_idx + 1}"
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 0),
-                    4,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    hands_mod.COL_WARNING,
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y -= 35
-
-            for behavior, student_num in head_frame_events:
-                text = (
-                    f"ALERT: Student #{student_num} - "
-                    f"{behavior.replace('_', ' ').upper()}"
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 0),
-                    4,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    head_mod.COL_FLAGGED,
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y -= 35
-
-            for src_num, nbr_num, direction in passing_frame_events:
-                text = (
-                    f"ALERT: S#{src_num} & S#{nbr_num} PASSING PAPERS ({direction})"
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 0),
-                    4,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    annotated,
-                    text,
-                    (10, banner_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    head_mod.COL_FLAGGED,
-                    2,
-                    cv2.LINE_AA,
-                )
-                banner_y -= 35
-
-            ts_text = head_mod.fmt_ts(ts_sec)
-            (ts_width, _), _ = cv2.getTextSize(
-                ts_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1
-            )
-            cv2.putText(
-                annotated,
-                ts_text,
-                (width - ts_width - 10, height - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 0),
-                3,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                annotated,
-                ts_text,
-                (width - ts_width - 10, height - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
 
             evidence_snapshot = {
                 "raw_frame": raw_frame,

@@ -132,7 +132,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertIn(b"Content-Type: image/jpeg", chunk)
             runtime.close()
 
-    def test_node_runtime_heartbeat_exposes_sound_and_noise_incident_needs_no_assets(self):
+    def test_node_runtime_heartbeat_exposes_sound_and_noise_incident_queues_snapshot(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             config = NodeAgentConfig(
@@ -168,6 +168,9 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             )
 
             def fake_runner(runtime: NodeRuntime, session) -> None:
+                poster_path = tmpdir / "evidence" / session.session_id / "noise-001" / "poster.jpg"
+                poster_path.parent.mkdir(parents=True, exist_ok=True)
+                poster_path.write_bytes(b"noise-jpeg")
                 runtime.mark_session_running()
                 runtime.update_sound_telemetry(
                     {
@@ -191,13 +194,19 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                         student_numbers=[],
                         created_at="2026-04-22T12:00:00Z",
                         display_time="12:00 PM",
-                        frame_count=0,
+                        frame_count=1,
                         summary="Estimated noise 61.4 dB exceeded 55.0 dB threshold.",
                         sync_status="queued",
                         sync_attempts=0,
-                        asset_names=[],
+                        asset_names=["poster.jpg"],
                     ),
-                    [],
+                    [
+                        {
+                            "asset_type": "poster",
+                            "file_path": poster_path,
+                            "filename": "poster.jpg",
+                        }
+                    ],
                 )
 
             runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
@@ -219,12 +228,16 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertTrue(heartbeat.extra["sound"]["over_threshold"])
 
             due_items = runtime.sync_queue.due_items(limit=10)
-            self.assertEqual(len(due_items), 1)
-            self.assertEqual(due_items[0].item_type, "manifest")
+            self.assertEqual(len(due_items), 2)
+            self.assertEqual({item.item_type for item in due_items}, {"manifest", "asset"})
+            manifest_item = next(item for item in due_items if item.item_type == "manifest")
+            asset_item = next(item for item in due_items if item.item_type == "asset")
             self.assertEqual(
-                due_items[0].payload["manifest_payload"]["behavior_type"],
+                manifest_item.payload["manifest_payload"]["behavior_type"],
                 "noise",
             )
+            self.assertEqual(asset_item.payload["asset_type"], "poster")
+            self.assertEqual(asset_item.payload["filename"], "poster.jpg")
             runtime.close()
 
     def test_normalize_front_runtime_incident_uses_incident_relative_asset_names(self):

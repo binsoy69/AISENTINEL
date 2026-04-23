@@ -86,8 +86,9 @@ When sound monitoring is enabled in the front-node runtime config:
 - repeated loud windows are suppressed until the level drops below the
   threshold and the cooldown has elapsed
 
-Noise incidents are intentionally saved without image or GIF evidence. The
-dashboards display them as `No media`.
+Noise incidents save one JPG snapshot from the latest front-node camera frame.
+They intentionally do not create GIF evidence; GIFs are reserved for visual
+student-behavior incidents.
 
 If the front node is connected to the shared central dashboard, also review
 the network settings in `runtime/central_dashboard/README.md`. The sound sensor

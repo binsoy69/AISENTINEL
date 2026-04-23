@@ -78,6 +78,7 @@ const state = {
     recordsSessionId: "",
     recordsFilter: "all",
     recordsQuery: "",
+    knownIncidentIds: new Set((Array.isArray(initialState.incidents) ? initialState.incidents : []).map((incident) => String(incident.incident_id || "")).filter(Boolean)),
     sessionHydrated: false,
     sessionFormDirty: false,
     sessionDefaultsApplied: false,
@@ -119,6 +120,24 @@ function allIncidents() {
     return Array.isArray(state.snapshot.incidents) ? state.snapshot.incidents : [];
 }
 
+function snapshotIncidents(snapshot) {
+    return Array.isArray(snapshot?.incidents) ? snapshot.incidents : [];
+}
+
+function newIncidentsFromSnapshot(snapshot) {
+    return snapshotIncidents(snapshot).filter((incident) => {
+        const incidentId = String(incident.incident_id || "");
+        return incidentId && !state.knownIncidentIds.has(incidentId);
+    });
+}
+
+function rememberIncidentIds(snapshot) {
+    for (const incident of snapshotIncidents(snapshot)) {
+        const incidentId = String(incident.incident_id || "");
+        if (incidentId) state.knownIncidentIds.add(incidentId);
+    }
+}
+
 function sessionIncidents() {
     const session = currentSession();
     return session ? allIncidents().filter((incident) => incident.session_id === session.session_id) : [];
@@ -141,6 +160,26 @@ function seatNumbers(incident) {
 function seatSummary(incident) {
     const seats = seatNumbers(incident);
     return seats.length ? seats.join(", ") : "--";
+}
+
+function incidentAlertMessage(incident) {
+    const typeLabel = incident.type_label || incident.behavior_type || "Incident";
+    const seats = seatNumbers(incident);
+    if (String(incident.behavior_type || "").toLowerCase() === "noise") {
+        return `ALERT: ${typeLabel}`;
+    }
+    if (seats.length === 1) {
+        return `ALERT: Student #${seats[0]} - ${typeLabel}`;
+    }
+    if (seats.length > 1) {
+        return `ALERT: Students #${seats.join(", #")} - ${typeLabel}`;
+    }
+    return `ALERT: ${typeLabel}`;
+}
+
+function incidentsInCurrentWorkspace(incidents) {
+    const session = workspaceSession();
+    return session ? incidents.filter((incident) => incident.session_id === session.session_id) : incidents;
 }
 
 function workspaceFlaggedSeats() {
@@ -783,8 +822,15 @@ async function refresh() {
     if (state.pollInFlight) return;
     state.pollInFlight = true;
     try {
-        state.snapshot = await fetchJson("/api/v1/dashboard");
+        const nextSnapshot = await fetchJson("/api/v1/dashboard");
+        const newIncidents = newIncidentsFromSnapshot(nextSnapshot);
+        state.snapshot = nextSnapshot;
+        rememberIncidentIds(nextSnapshot);
         render();
+        const visibleNewIncidents = incidentsInCurrentWorkspace(newIncidents);
+        if (visibleNewIncidents.length) {
+            showBanner(incidentAlertMessage(latestIncident(visibleNewIncidents)), true);
+        }
     } finally {
         state.pollInFlight = false;
     }

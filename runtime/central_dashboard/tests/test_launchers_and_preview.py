@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import os
 from pathlib import Path
 import tempfile
@@ -24,6 +25,11 @@ import front_node_all_behavior_pi as combined_runtime
 
 
 class LauncherAndPreviewTests(unittest.TestCase):
+    def _configured_default_video_name(self, runtime_config_name: str) -> str:
+        parser = configparser.ConfigParser()
+        parser.read(central_dashboard_config(runtime_config_name), encoding="utf-8")
+        return Path(parser.get("video_source", "default_video")).name
+
     def test_video_launchers_resolve_configured_default_videos(self):
         front_video = validate_node_video_config(
             central_dashboard_config("node_front_video.ini")
@@ -32,8 +38,8 @@ class LauncherAndPreviewTests(unittest.TestCase):
             central_dashboard_config("node_mid_video.ini")
         )
 
-        self.assertEqual(front_video.name, "Frontcam-set1-001.mp4")
-        self.assertEqual(mid_video.name, "Midcam-set1-001.mp4")
+        self.assertEqual(front_video.name, self._configured_default_video_name("node_front_runtime.ini"))
+        self.assertEqual(mid_video.name, self._configured_default_video_name("node_mid_runtime.ini"))
         self.assertTrue(front_video.exists())
         self.assertTrue(mid_video.exists())
 
@@ -104,4 +110,3 @@ api_key = front-key
 
 if __name__ == "__main__":
     unittest.main()
-

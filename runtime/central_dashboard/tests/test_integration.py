@@ -211,6 +211,9 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                 }
             )
             self.assertTrue(front_runtime.heartbeat_once())
+            noise_poster_path = tmpdir / "front" / "noise-001" / "poster.jpg"
+            noise_poster_path.parent.mkdir(parents=True, exist_ok=True)
+            noise_poster_path.write_bytes(b"noise-jpeg")
             front_runtime.record_finalized_incident(
                 IncidentManifest(
                     incident_id="noise-001",
@@ -222,13 +225,54 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                     student_numbers=[],
                     created_at="2026-04-22T12:00:00Z",
                     display_time="12:00 PM",
-                    frame_count=0,
+                    frame_count=1,
                     summary="Estimated noise 60.8 dB exceeded 55.0 dB threshold.",
                     sync_status="queued",
                     sync_attempts=0,
-                    asset_names=[],
+                    asset_names=["poster.jpg"],
                 ),
-                [],
+                [
+                    {
+                        "asset_type": "poster",
+                        "file_path": noise_poster_path,
+                        "filename": "poster.jpg",
+                    }
+                ],
+            )
+            cheat_poster_path = tmpdir / "front" / "cheat-001" / "poster.jpg"
+            cheat_gif_path = tmpdir / "front" / "cheat-001" / "evidence.gif"
+            cheat_poster_path.parent.mkdir(parents=True, exist_ok=True)
+            cheat_poster_path.write_bytes(b"cheat-jpeg")
+            cheat_gif_path.write_bytes(b"cheat-gif")
+            front_runtime.record_finalized_incident(
+                IncidentManifest(
+                    incident_id="cheat-001",
+                    session_id=session_id,
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="object",
+                    type_label="Phone Detected",
+                    student_numbers=[5],
+                    created_at="2026-04-22T12:00:01Z",
+                    display_time="12:00 PM",
+                    frame_count=2,
+                    summary="Student #05 phone detected",
+                    sync_status="queued",
+                    sync_attempts=0,
+                    asset_names=["poster.jpg", "evidence.gif"],
+                ),
+                [
+                    {
+                        "asset_type": "poster",
+                        "file_path": cheat_poster_path,
+                        "filename": "poster.jpg",
+                    },
+                    {
+                        "asset_type": "gif",
+                        "file_path": cheat_gif_path,
+                        "filename": "evidence.gif",
+                    },
+                ],
             )
             for _ in range(10):
                 front_runtime.sync_once()
@@ -241,8 +285,19 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(len(payload["incidents"]), 2)
             self.assertTrue(payload["nodes"][0]["extra"]["sound"]["enabled"] or payload["nodes"][1]["extra"]["sound"]["enabled"])
             noise_incident = next(item for item in payload["incidents"] if item["behavior_type"] == "noise")
-            self.assertEqual(noise_incident["poster_url"], "")
+            self.assertTrue(noise_incident["poster_url"])
             self.assertEqual(noise_incident["gif_url"], "")
+            noise_poster_response = central_client.get(noise_incident["poster_url"])
+            self.assertEqual(noise_poster_response.status_code, 200)
+            self.assertEqual(noise_poster_response.data, b"noise-jpeg")
+            noise_poster_response.close()
+            cheat_incident = next(item for item in payload["incidents"] if item["incident_id"] == "cheat-001")
+            self.assertTrue(cheat_incident["poster_url"])
+            self.assertTrue(cheat_incident["gif_url"])
+            cheat_gif_response = central_client.get(cheat_incident["gif_url"])
+            self.assertEqual(cheat_gif_response.status_code, 200)
+            self.assertEqual(cheat_gif_response.data, b"cheat-gif")
+            cheat_gif_response.close()
             self.assertIn("sessions_history", payload)
             self.assertEqual(payload["sessions_history"][0]["session_id"], session_id)
             self.assertGreaterEqual(payload["sessions_history"][0]["incident_count"], 2)
