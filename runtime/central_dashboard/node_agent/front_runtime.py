@@ -390,16 +390,13 @@ def _normalize_front_runtime_incident(
     evidence_root: Path,
     front_manifest: dict,
 ) -> tuple[IncidentManifest, list[dict]]:
-    incident_root = PurePosixPath(
-        str(front_manifest.get("manifest_relpath") or "manifest.json")
-    ).parent
-    poster_relpath = str(front_manifest.get("poster_relpath") or "").strip()
+    poster_relpath = _best_poster_relpath(front_manifest)
     gif_relpath = str(front_manifest.get("gif_relpath") or "").strip()
     assets = []
     asset_names = []
 
     if poster_relpath:
-        asset_names.append(_incident_asset_name(incident_root, poster_relpath))
+        asset_names.append("poster.jpg")
         assets.append(
             {
                 "asset_type": "poster",
@@ -409,7 +406,7 @@ def _normalize_front_runtime_incident(
         )
 
     if gif_relpath:
-        asset_names.append(_incident_asset_name(incident_root, gif_relpath))
+        asset_names.append("evidence.gif")
         assets.append(
             {
                 "asset_type": "gif",
@@ -441,6 +438,25 @@ def _normalize_front_runtime_incident(
         asset_names=asset_names,
     )
     return manifest, assets
+
+
+def _best_poster_relpath(front_manifest: dict) -> str:
+    poster_relpath = str(front_manifest.get("poster_relpath") or "").strip()
+    if poster_relpath:
+        return poster_relpath
+
+    frame_relpaths = [
+        str(value).strip()
+        for value in (front_manifest.get("frame_relpaths") or [])
+        if str(value).strip()
+    ]
+    if not frame_relpaths:
+        return ""
+
+    event_matches = [
+        value for value in frame_relpaths if "_event" in PurePosixPath(value).name
+    ]
+    return event_matches[0] if event_matches else frame_relpaths[len(frame_relpaths) // 2]
 
 
 def _build_noise_incident_evidence(
@@ -492,14 +508,6 @@ def _build_noise_incident_evidence(
         asset_names=asset_names,
     )
     return manifest, assets
-
-
-def _incident_asset_name(incident_root: PurePosixPath, relpath: str) -> str:
-    asset_path = PurePosixPath(relpath)
-    try:
-        return asset_path.relative_to(incident_root).as_posix()
-    except ValueError:
-        return asset_path.name
 
 
 def _local_evidence_path(evidence_root: Path, relpath: str) -> Path:

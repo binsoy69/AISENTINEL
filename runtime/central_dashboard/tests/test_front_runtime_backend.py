@@ -240,7 +240,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertEqual(asset_item.payload["filename"], "poster.jpg")
             runtime.close()
 
-    def test_normalize_front_runtime_incident_uses_incident_relative_asset_names(self):
+    def test_normalize_front_runtime_incident_uses_stable_upload_asset_names(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             evidence_root = tmpdir / "evidence"
@@ -278,12 +278,44 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertEqual(incident.student_numbers, [5])
             self.assertEqual(
                 [asset["filename"] for asset in assets],
-                ["frames/f01_event.jpg", "evidence.gif"],
+                ["poster.jpg", "evidence.gif"],
             )
             self.assertEqual(
                 [asset["asset_type"] for asset in assets],
                 ["poster", "gif"],
             )
+
+    def test_normalize_front_runtime_incident_falls_back_to_event_frame_for_poster(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            evidence_root = tmpdir / "evidence"
+            event_frame = evidence_root / "objects" / "events" / "incident-001" / "frames" / "f11_event.jpg"
+            event_frame.parent.mkdir(parents=True, exist_ok=True)
+            event_frame.write_bytes(b"x")
+
+            incident, assets = _normalize_front_runtime_incident(
+                node_config=SimpleNamespace(node_id="front", camera_label="Front Camera"),
+                session=SimpleNamespace(session_id="session-001"),
+                evidence_root=evidence_root,
+                front_manifest={
+                    "id": "incident-001",
+                    "behavior_type": "object",
+                    "type_label": "Cheat Sheet",
+                    "student_numbers": [8],
+                    "created_at": "2026-04-08T10:00:00Z",
+                    "display_time": "10:00 AM",
+                    "summary": "Student #08 cheat sheet detected",
+                    "frame_count": 1,
+                    "manifest_relpath": "objects/events/incident-001/manifest.json",
+                    "frame_relpaths": ["objects/events/incident-001/frames/f11_event.jpg"],
+                },
+            )
+
+            self.assertEqual(incident.asset_names, ["poster.jpg"])
+            self.assertEqual(len(assets), 1)
+            self.assertEqual(assets[0]["asset_type"], "poster")
+            self.assertEqual(assets[0]["filename"], "poster.jpg")
+            self.assertEqual(assets[0]["file_path"], event_frame)
 
     def test_resolve_calibration_path_prefers_saved_default_and_auto_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:

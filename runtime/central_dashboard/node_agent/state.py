@@ -15,7 +15,15 @@ import cv2
 from central_dashboard.node_agent.detector import EvidenceBuilder, MotionDetector, annotate_frame
 from central_dashboard.node_agent.front_runtime import run_front_runtime_session
 from central_dashboard.node_agent.sync import LocalSyncQueue
-from central_dashboard.shared.dto import CommandAck, IncidentManifest, NodeDescriptor, NodeHeartbeat, SessionSpec, utc_now_iso
+from central_dashboard.shared.dto import (
+    CommandAck,
+    IncidentManifest,
+    NodeDescriptor,
+    NodeHeartbeat,
+    SessionSpec,
+    SyncQueueItem,
+    utc_now_iso,
+)
 from central_dashboard.shared.http import StdlibHttpClient
 from sound_monitor import DEFAULT_SOUND_SNAPSHOT
 
@@ -255,7 +263,7 @@ class NodeRuntime:
                     if self.sync_queue.has_pending_manifest(item.incident_id):
                         self.sync_queue.mark_retry(item, "waiting for incident manifest sync")
                         continue
-                    disposition = self._sync_asset(item.payload)
+                    disposition = self._sync_asset(item)
                 if disposition == SYNC_OK:
                     self.sync_queue.mark_done(item.item_id)
                     synced += 1
@@ -281,7 +289,8 @@ class NodeRuntime:
         )
         return result.ok
 
-    def _sync_asset(self, payload: dict) -> str:
+    def _sync_asset(self, item: SyncQueueItem) -> str:
+        payload = item.payload
         file_path = Path(payload["file_path"])
         if not file_path.exists():
             return SYNC_DROP
@@ -305,9 +314,14 @@ class NodeRuntime:
         if result.ok:
             return SYNC_OK
         if result.status_code == 400:
-            return SYNC_DROP
+            error_text = _result_error_text(result) or "bad evidence upload request"
+            self._set_error(f"evidence upload failed: {error_text}")
+            return SYNC_DROP if item.attempts >= 3 else SYNC_RETRY
         if result.status_code == 404 and _is_incident_not_found(result):
+            self._set_error(f"evidence upload dropped: {_result_error_text(result)}")
             return SYNC_DROP
+        if result.status_code:
+            self._set_error(f"evidence upload failed ({result.status_code}): {_result_error_text(result)}")
         return SYNC_RETRY
 
     def _run_session(self, session: SessionSpec) -> None:
@@ -554,3 +568,10 @@ def _is_incident_not_found(result) -> bool:
     else:
         error_text = result.text
     return "incident not found" in error_text.lower()
+
+
+def _result_error_text(result) -> str:
+    payload = result.json_data
+    if isinstance(payload, dict):
+        return str(payload.get("error") or payload.get("message") or result.text or "").strip()
+    return str(result.text or "").strip()
