@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import http.client
+from io import BytesIO
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +92,44 @@ class AuthTests(unittest.TestCase):
             self.assertEqual(upload_response.status_code, 200)
             relative_path = upload_response.get_json()["relative_path"]
             self.assertTrue(relative_path.startswith("session-1/front/incident-1/"))
+
+            nested_upload_response = client.post(
+                "/api/v1/evidence/upload",
+                json={
+                    "incident_id": "incident-1",
+                    "asset_type": "poster",
+                    "filename": "objects/events/incident-1/frames/f11_event.jpg",
+                    "content_base64": (
+                        "data:image/jpeg;base64,"
+                        + base64.b64encode(b"event-frame").decode("ascii")
+                    ),
+                    "content_sha256": "",
+                    "size_bytes": 11,
+                },
+                headers=headers,
+            )
+            self.assertEqual(nested_upload_response.status_code, 200)
+            self.assertEqual(
+                nested_upload_response.get_json()["relative_path"],
+                "session-1/front/incident-1/poster.jpg",
+            )
+
+            multipart_response = client.post(
+                "/api/v1/evidence/upload",
+                data={
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "gif",
+                    "file": (BytesIO(b"gif-data"), "from-form.gif"),
+                },
+                headers=headers,
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(multipart_response.status_code, 200)
+            self.assertEqual(
+                multipart_response.get_json()["relative_path"],
+                "session-1/front/incident-1/evidence.gif",
+            )
 
             bad_upload_response = client.post(
                 "/api/v1/evidence/upload",

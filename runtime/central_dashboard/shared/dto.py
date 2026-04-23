@@ -198,13 +198,34 @@ class EvidenceAsset:
 
     @classmethod
     def from_dict(cls, payload: dict) -> "EvidenceAsset":
+        filename = str(
+            payload.get("filename")
+            or payload.get("name")
+            or payload.get("file_name")
+            or ""
+        ).strip()
+        asset_type = str(payload.get("asset_type") or "").strip()
+        if not asset_type:
+            lowered = filename.lower()
+            asset_type = "gif" if lowered.endswith(".gif") else "poster"
+
+        content_base64 = str(
+            payload.get("content_base64")
+            or payload.get("file_base64")
+            or payload.get("content")
+            or payload.get("data")
+            or ""
+        ).strip()
+        if "," in content_base64 and ";base64" in content_base64.split(",", 1)[0]:
+            content_base64 = content_base64.split(",", 1)[1].strip()
+
         return cls(
             incident_id=str(payload.get("incident_id", "")).strip(),
             session_id=str(payload.get("session_id", "")).strip(),
             node_id=str(payload.get("node_id", "")).strip(),
-            asset_type=str(payload.get("asset_type", "")).strip(),
-            filename=str(payload.get("filename", "")).strip(),
-            content_base64=str(payload.get("content_base64", "")).strip(),
+            asset_type=asset_type,
+            filename=filename,
+            content_base64=content_base64,
             content_sha256=str(payload.get("content_sha256", "")).strip(),
             size_bytes=int(payload.get("size_bytes") or 0),
             relative_path=str(payload.get("relative_path", "")).strip(),

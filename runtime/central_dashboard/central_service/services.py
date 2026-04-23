@@ -279,12 +279,20 @@ class CentralServiceManager:
         except (TypeError, ValueError) as exc:
             return {"ok": False, "error": f"Invalid evidence payload: {exc}", "status_code": 400}
 
-        if not asset.incident_id or not asset.session_id or not asset.filename:
+        if not asset.incident_id:
             return {"ok": False, "error": "Missing required evidence fields.", "status_code": 400}
 
         incident = self.repository.get_incident(asset.incident_id)
         if incident is None:
             return {"ok": False, "error": "Incident not found.", "status_code": 404}
+
+        if not asset.session_id:
+            asset.session_id = str(incident.get("session_id", "")).strip()
+        asset.asset_type = _normalize_asset_type(asset.asset_type, asset.filename)
+        asset.filename = _normalize_asset_filename(asset.asset_type, asset.filename)
+
+        if not asset.session_id or not asset.filename or not asset.content_base64:
+            return {"ok": False, "error": "Missing required evidence fields.", "status_code": 400}
 
         try:
             content = base64.b64decode(asset.content_base64.encode("ascii"), validate=True)
@@ -364,3 +372,24 @@ class CentralServiceManager:
         item["poster_url"] = f"/api/v1/evidence/{poster_path}" if poster_path else ""
         item["gif_url"] = f"/api/v1/evidence/{gif_path}" if gif_path else ""
         return item
+
+
+def _normalize_asset_type(asset_type: str, filename: str) -> str:
+    normalized = str(asset_type or "").strip().lower()
+    if normalized in {"poster", "gif", "frame"}:
+        return normalized
+    lowered = str(filename or "").lower()
+    return "gif" if lowered.endswith(".gif") else "poster"
+
+
+def _normalize_asset_filename(asset_type: str, filename: str) -> str:
+    if asset_type == "poster":
+        return "poster.jpg"
+    if asset_type == "gif":
+        return "evidence.gif"
+
+    normalized = str(filename or "").replace("\\", "/").strip()
+    normalized = posixpath.normpath(normalized).lstrip("/")
+    if normalized in {"", ".", ".."} or normalized.startswith("../"):
+        return ""
+    return normalized

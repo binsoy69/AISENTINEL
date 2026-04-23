@@ -12,6 +12,7 @@ if str(TEST_ROOT) not in sys.path:
 from central_dashboard.node_agent.sync import LocalSyncQueue
 from central_dashboard.node_agent.config import NodeAgentConfig
 from central_dashboard.node_agent.state import NodeRuntime
+from central_dashboard.shared.dto import SessionSpec
 from central_dashboard.shared.http import HttpResult
 
 
@@ -271,6 +272,51 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual(len(http_client.requests), 1)
             self.assertEqual(http_client.requests[0][1]["asset_type"], "gif")
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
+    def test_active_session_items_are_prioritized_over_stale_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            stale_path = tmpdir / "stale.jpg"
+            stale_path.write_bytes(b"stale")
+            http_client = FakeHttpClient(
+                [HttpResult(200, {"ok": True}, '{"ok": true}') for _ in range(12)]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+
+            for index in range(12):
+                runtime.sync_queue.enqueue(
+                    "asset",
+                    f"stale-{index}",
+                    "front",
+                    {
+                        "incident_id": f"stale-{index}",
+                        "session_id": "old-session",
+                        "asset_type": "poster",
+                        "file_path": str(stale_path),
+                        "filename": "poster.jpg",
+                    },
+                )
+            runtime.sync_queue.enqueue(
+                "manifest",
+                "current-incident",
+                "front",
+                {
+                    "manifest_payload": {
+                        "incident_id": "current-incident",
+                        "session_id": "current-session",
+                        "node_id": "front",
+                    }
+                },
+            )
+            with runtime._lock:
+                runtime._session = SessionSpec(session_id="current-session")
+
+            runtime.sync_once()
+
+            self.assertGreaterEqual(len(http_client.requests), 1)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/incidents"))
+            self.assertEqual(http_client.requests[0][1]["incident_id"], "current-incident")
             runtime.close()
 
 

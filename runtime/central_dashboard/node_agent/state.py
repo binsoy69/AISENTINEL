@@ -255,7 +255,7 @@ class NodeRuntime:
     def sync_once(self) -> int:
         self.sync_queue.purge_asset_type("frame")
         synced = 0
-        for item in self.sync_queue.due_items():
+        for item in self._prioritized_due_items():
             try:
                 if item.item_type == "manifest":
                     disposition = SYNC_OK if self._sync_manifest(item.payload) else SYNC_RETRY
@@ -275,6 +275,22 @@ class NodeRuntime:
                 self.sync_queue.mark_retry(item, str(exc))
                 self._set_error(f"sync failed: {exc}")
         return synced
+
+    def _prioritized_due_items(self) -> list[SyncQueueItem]:
+        with self._lock:
+            active_session_id = self._session.session_id if self._session else ""
+
+        items = self.sync_queue.due_items(limit=32)
+        if not active_session_id:
+            return items[:8]
+
+        def item_priority(item: SyncQueueItem) -> tuple[int, str]:
+            return (
+                0 if _queue_item_session_id(item) == active_session_id else 1,
+                item.next_retry_at,
+            )
+
+        return sorted(items, key=item_priority)[:8]
 
     def _sync_manifest(self, payload: dict) -> bool:
         manifest = payload.get("manifest_payload")
@@ -568,6 +584,15 @@ def _is_incident_not_found(result) -> bool:
     else:
         error_text = result.text
     return "incident not found" in error_text.lower()
+
+
+def _queue_item_session_id(item: SyncQueueItem) -> str:
+    payload = item.payload
+    if item.item_type == "manifest":
+        manifest = payload.get("manifest_payload")
+        if isinstance(manifest, dict):
+            return str(manifest.get("session_id", "")).strip()
+    return str(payload.get("session_id", "")).strip()
 
 
 def _result_error_text(result) -> str:

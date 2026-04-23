@@ -34,6 +34,26 @@ def _safe_next_path(raw_value: str) -> str:
     return ""
 
 
+def _evidence_payload_from_request() -> dict:
+    payload = request.get_json(silent=True) if request.is_json else None
+    if not isinstance(payload, dict):
+        payload = request.form.to_dict()
+
+    uploaded = (
+        request.files.get("file")
+        or request.files.get("asset")
+        or request.files.get("evidence")
+    )
+    if uploaded is not None:
+        import base64
+
+        content = uploaded.read()
+        payload.setdefault("filename", uploaded.filename or "")
+        payload.setdefault("content_base64", base64.b64encode(content).decode("ascii"))
+        payload.setdefault("size_bytes", len(content))
+    return payload
+
+
 def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     app = Flask(
         __name__,
@@ -196,10 +216,21 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     @app.route("/api/v1/evidence/upload", methods=["POST"])
     @node_api_required
     def upload_evidence_api():
-        payload = request.get_json(silent=True) or {}
+        payload = _evidence_payload_from_request()
         payload["node_id"] = request.node_id
         result = manager.store_asset(payload)
         status_code = int(result.pop("status_code", 200))
+        if status_code >= 400:
+            app.logger.warning(
+                "Evidence upload rejected: node=%s incident=%s asset_type=%s "
+                "filename=%s error=%s keys=%s",
+                request.node_id,
+                payload.get("incident_id", ""),
+                payload.get("asset_type", ""),
+                payload.get("filename", ""),
+                result.get("error", ""),
+                sorted(payload.keys()),
+            )
         return jsonify(result), status_code
 
     @app.route("/api/v1/evidence/<path:relative_path>")
