@@ -167,6 +167,41 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 
+    def test_bad_asset_upload_400_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            asset_path = tmpdir / "poster.jpg"
+            asset_path.write_bytes(b"jpeg-data")
+            http_client = FakeHttpClient(
+                [
+                    HttpResult(
+                        400,
+                        {"error": "node_id does not match authenticated header"},
+                        '{"error": "node_id does not match authenticated header"}',
+                    )
+                ]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "poster",
+                    "file_path": str(asset_path),
+                    "filename": "poster.jpg",
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/evidence/upload"))
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
 
 if __name__ == "__main__":
     unittest.main()

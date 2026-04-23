@@ -303,6 +303,8 @@ class NodeRuntime:
         )
         if result.ok:
             return SYNC_OK
+        if result.status_code == 400:
+            return SYNC_DROP
         if result.status_code == 404 and _is_incident_not_found(result):
             return SYNC_DROP
         return SYNC_RETRY
