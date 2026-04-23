@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Run the front Raspberry Pi node agent in webcam deployment mode."""
+
+from _launcher_common import run_node_agent
+
+
+if __name__ == "__main__":
+    run_node_agent("node_front.ini")
+

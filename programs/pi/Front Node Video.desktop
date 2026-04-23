@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AISENTINEL Front Node Video
+Comment=Run the front node with its configured video source
+Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/run_front_node_video.sh'
+Terminal=true
+Categories=Utility;
+

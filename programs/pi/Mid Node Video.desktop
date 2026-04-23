@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AISENTINEL Mid Node Video
+Comment=Run the mid node with its configured video source
+Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/run_mid_node_video.sh'
+Terminal=true
+Categories=Utility;
+

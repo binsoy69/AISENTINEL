@@ -1280,6 +1280,69 @@ def build_evidence_frame(sequence, snapshot):
     return evidence_frame
 
 
+def _draw_clean_bbox(frame, bbox, color, thickness=3):
+    """Draw one evidence-style bbox without labels or diagnostic overlays."""
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    x1 = max(0, min(width - 1, x1))
+    y1 = max(0, min(height - 1, y1))
+    x2 = max(0, min(width - 1, x2))
+    y2 = max(0, min(height - 1, y2))
+    if x2 <= x1 or y2 <= y1:
+        return
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+
+
+def build_live_preview_frame(
+    snapshot,
+    *,
+    head_frame_events=None,
+    passing_frame_events=None,
+    frame_hand_alerts=None,
+    frame_object_alerts=None,
+):
+    """Create the clean live preview shown in dashboards.
+
+    The preview intentionally mirrors saved evidence: no skeletons, ROI, HUD, or
+    diagnostic labels. Only confirmed incident targets are boxed.
+    """
+    preview_frame = snapshot["raw_frame"].copy()
+    student_boxes = snapshot.get("student_boxes", {})
+    object_boxes = snapshot.get("object_boxes", {})
+    target_students = {}
+    target_objects = []
+
+    for _behavior, student_num in head_frame_events or []:
+        target_students[int(student_num)] = head_mod.COL_FLAGGED
+
+    for src_num, nbr_num, _direction in passing_frame_events or []:
+        target_students[int(src_num)] = head_mod.COL_FLAGGED
+        target_students[int(nbr_num)] = head_mod.COL_FLAGGED
+
+    for _line_idx, student_num in frame_hand_alerts or []:
+        target_students[int(student_num)] = hands_mod.COL_ALERT
+
+    for event in frame_object_alerts or []:
+        class_name = str(event.get("class_name", "")).strip()
+        if class_name not in obj_mod.ALERT_CLASSES:
+            continue
+        student_num = int(event["student_num"])
+        color = obj_mod.CLASS_COLORS.get(class_name, head_mod.COL_FLAGGED)
+        target_students[student_num] = color
+        for bbox in object_boxes.get((student_num, class_name), []):
+            target_objects.append((bbox, color))
+
+    for student_num, color in target_students.items():
+        bbox = student_boxes.get(student_num)
+        if bbox is not None:
+            _draw_clean_bbox(preview_frame, bbox, color)
+
+    for bbox, color in target_objects:
+        _draw_clean_bbox(preview_frame, bbox, color)
+
+    return preview_frame
+
+
 def save_evidence_sequence_frame(sequence, snapshot, frame_tag):
     """Save one evidence frame for the given alert sequence."""
     evidence_frame = build_evidence_frame(sequence, snapshot)
@@ -2939,6 +3002,13 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 },
                 "object_boxes": dict(frame_object_boxes),
             }
+            live_preview_frame = build_live_preview_frame(
+                evidence_snapshot,
+                head_frame_events=head_frame_events,
+                passing_frame_events=passing_frame_events,
+                frame_hand_alerts=frame_hand_alerts,
+                frame_object_alerts=frame_object_alerts,
+            )
             new_sequences = []
 
             for behavior, student_num in head_frame_events:
@@ -3016,7 +3086,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 or stream_publish_interval <= 0
                 or (now_perf - last_stream_publish_at) >= stream_publish_interval
             ):
-                if _publish_dashboard_frame(annotated):
+                if _publish_dashboard_frame(live_preview_frame):
                     last_stream_publish_at = time.perf_counter()
 
             frame_loop_completed_at = time.perf_counter()
@@ -3070,7 +3140,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 try:
                     frame_publish_callback(
                         raw_frame,
-                        annotated,
+                        live_preview_frame,
                         {
                             "frame_idx": frame_idx,
                             "timestamp_sec": ts_sec,

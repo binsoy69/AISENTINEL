@@ -10,13 +10,21 @@ from pathlib import Path
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = RUNTIME_ROOT.parent.parent
+CONFIG_BASE_ENV_VAR = "AISENTINEL_CONFIG_BASE"
 
 
-def _resolve_path(raw_value: str | None) -> Path:
+def _config_base_dir() -> Path:
+    override = str(os.environ.get(CONFIG_BASE_ENV_VAR, "")).strip()
+    if override:
+        return Path(override).expanduser().resolve(strict=False)
+    return REPO_ROOT
+
+
+def _resolve_path(raw_value: str | None, *, base_dir: Path | None = None) -> Path:
     value = str(raw_value or "").strip()
     path = Path(value).expanduser() if value else Path()
     if value and not path.is_absolute():
-        path = REPO_ROOT / path
+        path = (base_dir or _config_base_dir()) / path
     return path.resolve(strict=False)
 
 
@@ -60,6 +68,7 @@ def load_central_service_config(config_path: str | os.PathLike[str]) -> CentralS
     loaded = parser.read(path, encoding="utf-8")
     if not loaded:
         raise FileNotFoundError(f"Central service config not found: {path}")
+    path_base_dir = _config_base_dir()
 
     known_nodes: dict[str, KnownNodeConfig] = {}
     for section in parser.sections():
@@ -97,14 +106,16 @@ def load_central_service_config(config_path: str | os.PathLike[str]) -> CentralS
                 "service",
                 "db_path",
                 fallback="runtime/central_dashboard/data/central_service/central.sqlite3",
-            )
+            ),
+            base_dir=path_base_dir,
         ),
         evidence_root=_resolve_path(
             parser.get(
                 "service",
                 "evidence_root",
                 fallback="runtime/central_dashboard/data/central_service/evidence",
-            )
+            ),
+            base_dir=path_base_dir,
         ),
         node_offline_after_sec=max(
             2,

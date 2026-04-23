@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AISENTINEL Calibrate Front Webcam
+Comment=Create or update the front node webcam setup profile
+Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/calibrate_front_webcam.sh'
+Terminal=true
+Categories=Utility;
+

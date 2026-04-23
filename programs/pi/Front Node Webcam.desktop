@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AISENTINEL Front Node Webcam
+Comment=Run the front node with its configured webcam
+Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/run_front_node_webcam.sh'
+Terminal=true
+Categories=Utility;
+

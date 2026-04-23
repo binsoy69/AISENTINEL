@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AISENTINEL Calibrate Front Video
+Comment=Create or update the front node video setup profile
+Exec=bash -lc 'cd "$(dirname "%k")/../.." && bash programs/pi/calibrate_front_video.sh'
+Terminal=true
+Categories=Utility;
+

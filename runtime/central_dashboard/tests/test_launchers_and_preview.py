@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import tempfile
+import unittest
+import sys
+
+import numpy as np
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+RUNTIME_ROOT = REPO_ROOT / "runtime"
+FRONT_RUNTIME_ROOT = RUNTIME_ROOT / "front_node_pi"
+
+for path in (REPO_ROOT, RUNTIME_ROOT, FRONT_RUNTIME_ROOT):
+    path_text = str(path)
+    if path_text not in sys.path:
+        sys.path.insert(0, path_text)
+
+from central_dashboard.central_service.config import load_central_service_config
+from programs._launcher_common import central_dashboard_config, validate_node_video_config
+import front_node_all_behavior_pi as combined_runtime
+
+
+class LauncherAndPreviewTests(unittest.TestCase):
+    def test_video_launchers_resolve_configured_default_videos(self):
+        front_video = validate_node_video_config(
+            central_dashboard_config("node_front_video.ini")
+        )
+        mid_video = validate_node_video_config(
+            central_dashboard_config("node_mid_video.ini")
+        )
+
+        self.assertEqual(front_video.name, "Frontcam-set1-001.mp4")
+        self.assertEqual(mid_video.name, "Midcam-set1-001.mp4")
+        self.assertTrue(front_video.exists())
+        self.assertTrue(mid_video.exists())
+
+    def test_external_central_config_base_resolves_relative_data_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config_path = tmpdir / "central_service.ini"
+            config_path.write_text(
+                """
+[service]
+host = 127.0.0.1
+port = 8090
+db_path = data/central.sqlite3
+evidence_root = data/evidence
+
+[browser_auth]
+username = admin
+password = admin123
+secret_key = test-secret
+
+[node:front]
+display_name = Front Node
+camera_label = Front Camera
+api_key = front-key
+""".strip(),
+                encoding="utf-8",
+            )
+
+            old_value = os.environ.get("AISENTINEL_CONFIG_BASE")
+            os.environ["AISENTINEL_CONFIG_BASE"] = str(tmpdir)
+            try:
+                config = load_central_service_config(config_path)
+            finally:
+                if old_value is None:
+                    os.environ.pop("AISENTINEL_CONFIG_BASE", None)
+                else:
+                    os.environ["AISENTINEL_CONFIG_BASE"] = old_value
+
+        self.assertEqual(config.db_path, (tmpdir / "data" / "central.sqlite3").resolve(strict=False))
+        self.assertEqual(config.evidence_root, (tmpdir / "data" / "evidence").resolve(strict=False))
+
+    def test_live_preview_draws_only_confirmed_incident_targets(self):
+        raw_frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        snapshot = {
+            "raw_frame": raw_frame,
+            "student_boxes": {
+                1: (10, 10, 50, 60),
+                2: (70, 10, 110, 60),
+            },
+            "object_boxes": {
+                (1, "phone"): [(20, 22, 34, 42)],
+                (2, "cheat_sheet"): [(80, 22, 96, 42)],
+            },
+        }
+
+        preview = combined_runtime.build_live_preview_frame(
+            snapshot,
+            frame_object_alerts=[
+                {"student_num": 1, "class_name": "phone", "confidence": 0.9}
+            ],
+        )
+
+        self.assertTrue(np.any(preview[10, 10] != raw_frame[10, 10]))
+        self.assertTrue(np.any(preview[22, 20] != raw_frame[22, 20]))
+        self.assertTrue(np.array_equal(preview[10, 70], raw_frame[10, 70]))
+        self.assertTrue(np.array_equal(preview[22, 80], raw_frame[22, 80]))
+
+
+if __name__ == "__main__":
+    unittest.main()
+

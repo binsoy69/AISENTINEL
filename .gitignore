@@ -1,18 +1,54 @@
-screenshots
+# Runtime captures, generated media, and screenshots
+screenshots/
 *.png
 *.mp4
+
+# Python caches and test caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments and local environment files
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# PyInstaller and packaged app outputs
+build/
+dist/
+*.exe
+*.dll
+*.pyd
+
+# Runtime-created dashboard/node data
+runtime/central_dashboard/data/*
+!runtime/central_dashboard/data/.gitignore
+!runtime/central_dashboard/data/README.md
+runtime/front_node_pi/data/*
+
+# Test/prototype output folders
 tests/detection_output/*
 tests/pose_detection_output/*
 tests/evidence_obj/*
 tests/evidence_hands/*
 tests/evidence_pose/*
 tests/evidence/*
+tests/tests_on_pi/evidence*
+
+# Local experiments and generated conversion outputs
 model_conversion/*
 notebooks/*
-tests/tests_on_pi/__pycache__/*
-tests/tests_on_pi/evidence*
-runtime/front_node_pi/__pycache__/*
-runtime/front_node_pi/data/*
-tests/__pycache__/*
-__pycache__/
-*.py[cod]
