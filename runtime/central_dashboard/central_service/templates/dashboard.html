@@ -93,17 +93,23 @@
                     <p class="stat-foot" id="metric-total-foot">Current session incident count.</p>
                 </article>
 
-                <article class="stat-card">
-                    <div class="stat-card-head">
-                        <span class="stat-label">Most Recent Type</span>
-                        <span class="stat-icon stat-icon-accent" aria-hidden="true">
-                            <svg viewBox="0 0 20 20" focusable="false">
-                                <path d="M3 10c1.6-2.7 4.1-4 7-4s5.4 1.3 7 4c-1.6 2.7-4.1 4-7 4S4.6 12.7 3 10zm7-2.2A2.2 2.2 0 1 0 12.2 10 2.2 2.2 0 0 0 10 7.8z"></path>
+                <article class="stat-card noise-panel noise-panel-stat" id="noise-panel" aria-label="Front-node sound level">
+                    <div class="noise-meter-head">
+                        <span class="noise-meter-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M4 10v4h4l5 4V6l-5 4H4Z"></path>
+                                <path d="m17 9 3 3m0-3-3 3"></path>
                             </svg>
                         </span>
+                        <div class="noise-meter-copy">
+                            <p class="noise-meter-label">NOISE LEVEL</p>
+                            <span class="noise-meter-status" id="noise-status-pill">Normal</span>
+                        </div>
+                        <strong class="noise-meter-value" id="noise-db-value">--</strong>
                     </div>
-                    <strong class="stat-value stat-value-wide" id="metric-last-type">No incidents yet</strong>
-                    <p class="stat-foot" id="metric-last-time">Awaiting synced evidence.</p>
+                    <div class="noise-meter-track" role="meter" aria-label="Noise threshold meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="noise-meter-track">
+                        <span class="noise-meter-fill" id="noise-meter-fill"></span>
+                    </div>
                 </article>
 
                 <article class="stat-card">
@@ -222,34 +228,6 @@
                     </details>
                 </article>
 
-                <article class="panel noise-panel">
-                    <div class="panel-header">
-                        <div>
-                            <p class="panel-eyebrow">Classroom Noise</p>
-                            <h2>Front-Node Sound Level</h2>
-                            <p class="panel-copy">Live KY-037 telemetry from the front node heartbeat.</p>
-                        </div>
-                        <span class="status-pill status-pill-inline" id="noise-status-pill">Disabled</span>
-                    </div>
-                    <div class="session-summary-grid noise-summary-grid">
-                        <div class="summary-chip">
-                            <span class="summary-chip-label">Current Level</span>
-                            <strong id="noise-db-value">--</strong>
-                        </div>
-                        <div class="summary-chip">
-                            <span class="summary-chip-label">Alert Threshold</span>
-                            <strong id="noise-threshold-value">--</strong>
-                        </div>
-                        <div class="summary-chip">
-                            <span class="summary-chip-label">Sensor State</span>
-                            <strong id="noise-sensor-value">Disabled</strong>
-                        </div>
-                        <div class="summary-chip">
-                            <span class="summary-chip-label">Last Update</span>
-                            <strong id="noise-update-value">--</strong>
-                        </div>
-                    </div>
-                </article>
             </section>
 
             <section class="panel feeds-panel">

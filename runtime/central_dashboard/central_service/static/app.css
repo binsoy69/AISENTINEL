@@ -245,8 +245,129 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     font-family: var(--font-heading); font-size: 1rem; letter-spacing: -0.02em; overflow-wrap: anywhere;
 }
 .noise-panel {
+    --noise-fill: linear-gradient(90deg, #3f83ff 0%, #19c985 72%, #27d17b 100%);
+    min-height: 10.375rem;
+    padding: 1.45rem 1.55rem;
+    border-radius: 14px;
     display: grid;
-    gap: 0.875rem;
+    align-content: center;
+    gap: 1.55rem;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(11, 17, 31, 0.98));
+    border-color: rgba(93, 120, 165, 0.3);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+}
+.noise-meter-head {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.75rem;
+}
+.noise-meter-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #22d98a, #0fb879);
+    color: #e4fff2;
+}
+.noise-meter-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.noise-meter-copy {
+    min-width: 0;
+    display: grid;
+    gap: 0.125rem;
+}
+.noise-meter-label {
+    margin: 0;
+    color: #9aaccc;
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.13em;
+}
+.noise-meter-status {
+    color: #2ee889;
+    font-size: 0.875rem;
+    font-weight: 800;
+    line-height: 1.2;
+}
+.noise-meter-value {
+    justify-self: end;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.25rem;
+    color: #35e486;
+    font-family: var(--font-heading);
+    font-size: clamp(1.45rem, 2vw, 1.8rem);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+.noise-meter-value span {
+    font-family: var(--font-body);
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+.noise-meter-track {
+    position: relative;
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: #26334b;
+}
+.noise-meter-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0%;
+    border-radius: inherit;
+    background: var(--noise-fill);
+    transition: width 260ms ease, background 180ms ease;
+}
+.noise-panel.is-exceeded {
+    border-color: rgba(255, 101, 88, 0.42);
+}
+.noise-panel.is-exceeded .noise-meter-icon {
+    background: linear-gradient(135deg, #f1c44c, #ff6558);
+    color: #fff6ec;
+}
+.noise-panel.is-exceeded .noise-meter-status,
+.noise-panel.is-exceeded .noise-meter-value {
+    color: #ff8a7d;
+}
+.noise-panel.is-exceeded .noise-meter-fill {
+    background: linear-gradient(90deg, #f1c44c 0%, #ff6558 100%);
+}
+.noise-panel.is-muted .noise-meter-value {
+    color: #7f8dac;
+}
+.noise-panel-stat {
+    min-height: 8.4rem;
+    padding: 1rem;
+    gap: 1.05rem;
+    align-content: space-between;
+}
+.noise-panel-stat .noise-meter-head {
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 0.65rem;
+}
+.noise-panel-stat .noise-meter-icon {
+    width: 36px;
+    height: 36px;
+}
+.noise-panel-stat .noise-meter-value {
+    font-size: clamp(1.35rem, 1.7vw, 1.65rem);
+}
+.noise-panel-stat .noise-meter-track {
+    height: 9px;
 }
 .node-card-metrics, .feed-footer, .session-actions, .records-actions, .seatmap-legend {
     display: flex; flex-wrap: wrap; gap: 10px;
@@ -373,6 +494,7 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
 .records-select, .records-search { min-width: 190px; }
 .feed-view { min-width: 9.75rem; }
 .overview-grid, .feeds-panel, .workspace-panel, .history-panel, .system-panel { gap: 0.875rem; }
+.overview-grid { display: grid; }
 .panel-copy, .records-heading p, .chart-head p { max-width: 58ch; }
 
 .feeds-panel {

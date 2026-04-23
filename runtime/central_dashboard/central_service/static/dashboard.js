@@ -35,17 +35,15 @@ const els = {
     stopSessionButton: document.getElementById("stop-session-button"),
     metricTotalIncidents: document.getElementById("metric-total-incidents"),
     metricTotalFoot: document.getElementById("metric-total-foot"),
-    metricLastType: document.getElementById("metric-last-type"),
-    metricLastTime: document.getElementById("metric-last-time"),
     metricFlaggedSeats: document.getElementById("metric-flagged-seats"),
     metricSeatFoot: document.getElementById("metric-seat-foot"),
     metricOnlineNodes: document.getElementById("metric-online-nodes"),
     metricOnlineFoot: document.getElementById("metric-online-foot"),
+    noisePanel: document.getElementById("noise-panel"),
     noiseStatusPill: document.getElementById("noise-status-pill"),
     noiseDbValue: document.getElementById("noise-db-value"),
-    noiseThresholdValue: document.getElementById("noise-threshold-value"),
-    noiseSensorValue: document.getElementById("noise-sensor-value"),
-    noiseUpdateValue: document.getElementById("noise-update-value"),
+    noiseMeterTrack: document.getElementById("noise-meter-track"),
+    noiseMeterFill: document.getElementById("noise-meter-fill"),
     feedGrid: document.getElementById("feed-grid"),
     recordsContextLabel: document.getElementById("records-context-label"),
     recordsBody: document.getElementById("records-body"),
@@ -263,23 +261,32 @@ function frontNodeSound() {
     return frontNode?.extra?.sound || null;
 }
 
-function noiseStatusLabel(sound) {
-    if (!sound) return "Unavailable";
-    if (sound.over_threshold) return "Over Threshold";
-    return String(sound.status || "disabled")
-        .replaceAll("_", " ")
-        .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 function renderNoise() {
     const sound = frontNodeSound();
-    const enabled = Boolean(sound?.enabled);
-    els.noiseStatusPill.textContent = noiseStatusLabel(sound);
-    els.noiseStatusPill.className = `status-pill status-pill-inline ${sound?.over_threshold ? "is-error" : enabled ? "is-active" : "is-created"}`;
-    els.noiseDbValue.textContent = formatDbValue(sound?.current_db);
-    els.noiseThresholdValue.textContent = formatDbValue(sound?.threshold_db);
-    els.noiseSensorValue.textContent = noiseStatusLabel(sound);
-    els.noiseUpdateValue.textContent = sound?.updated_at || "--";
+    const currentDb = Number(sound?.current_db);
+    const thresholdDb = Number(sound?.threshold_db);
+    const hasReading = Number.isFinite(currentDb);
+    const hasThreshold = Number.isFinite(thresholdDb) && thresholdDb > 0;
+    const overThreshold = Boolean(sound?.over_threshold);
+    const fillPercent = hasReading && hasThreshold
+        ? Math.min(100, Math.max(0, (currentDb / thresholdDb) * 100))
+        : 0;
+
+    els.noiseStatusPill.textContent = overThreshold ? "Exceeded" : "Normal";
+    els.noiseStatusPill.className = `noise-meter-status ${overThreshold ? "is-exceeded" : "is-normal"}`;
+    els.noiseDbValue.innerHTML = hasReading
+        ? `${Math.round(currentDb)}<span>dB</span>`
+        : "--";
+    els.noisePanel.classList.toggle("is-exceeded", overThreshold);
+    els.noisePanel.classList.toggle("is-muted", !hasReading);
+    els.noiseMeterFill.style.width = `${fillPercent}%`;
+    els.noiseMeterTrack.setAttribute("aria-valuenow", String(Math.round(fillPercent)));
+    els.noiseMeterTrack.setAttribute(
+        "aria-valuetext",
+        hasReading && hasThreshold
+            ? `${formatDbValue(currentDb)} of ${formatDbValue(thresholdDb)} threshold`
+            : "No noise reading available"
+    );
     els.noiseBanner.hidden = !sound?.over_threshold;
     els.noiseBanner.textContent = sound?.over_threshold
         ? `Front-node noise alert: ${formatDbValue(sound.current_db)} exceeds ${formatDbValue(sound.threshold_db)}.`
@@ -600,14 +607,11 @@ function renderSessionSummary() {
 
 function renderMetrics() {
     const items = currentSession() ? sessionIncidents() : allIncidents();
-    const latest = latestIncident(items);
     const flags = flaggedSeats();
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
     const online = nodes.filter((node) => node.online).length;
     els.metricTotalIncidents.textContent = String(items.length);
     els.metricTotalFoot.textContent = currentSession() ? "Synced incidents tied to the active session." : "Showing incident totals across synced records.";
-    els.metricLastType.textContent = latest?.type_label || "No incidents yet";
-    els.metricLastTime.textContent = latest?.display_time ? `Latest alert at ${latest.display_time}` : "Awaiting synced evidence.";
     els.metricFlaggedSeats.textContent = String(flags.size);
     els.metricSeatFoot.textContent = flags.size ? "Seats flagged from active-session incident mappings." : "No mapped flagged seats in the active session.";
     els.metricOnlineNodes.textContent = `${online} / ${nodes.length}`;
