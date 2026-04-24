@@ -28,6 +28,13 @@ from central_dashboard.shared.dto import (
 from central_dashboard.shared.http import StdlibHttpClient
 from sound_monitor import DEFAULT_SOUND_SNAPSHOT
 
+try:
+    from PIL import Image
+
+    PIL_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional on target systems
+    PIL_AVAILABLE = False
+
 
 SYNC_OK = "ok"
 SYNC_RETRY = "retry"
@@ -373,6 +380,15 @@ class NodeRuntime:
         payload = item.payload
         file_path = Path(payload["file_path"])
         if not file_path.exists():
+            if _asset_payload_type(payload) == "gif" and _write_missing_gif_asset(payload, file_path):
+                self.logger.info("rebuilt missing GIF evidence before upload: %s", file_path)
+            elif _asset_payload_type(payload) == "gif":
+                self._set_error(f"GIF evidence not ready for upload: {file_path}")
+                return SYNC_RETRY
+            else:
+                self._set_error(f"evidence upload dropped: missing file {file_path}")
+                return SYNC_DROP
+        if not file_path.exists():
             return SYNC_DROP
         content = file_path.read_bytes()
         asset_payload = {
@@ -550,14 +566,12 @@ class NodeRuntime:
                 "asset",
                 manifest.incident_id,
                 self.config.node_id,
-                {
-                    "incident_id": manifest.incident_id,
-                    "session_id": manifest.session_id,
-                    "asset_type": asset["asset_type"],
-                    "file_path": str(asset["file_path"]),
-                    "filename": asset["filename"],
-                },
+                _asset_queue_payload(
+                    asset,
+                    manifest=manifest,
+                ),
             )
+
         with self._lock:
             self._remember_incident_locked(manifest.incident_id)
         self._sync_wake.set()
@@ -705,6 +719,82 @@ def _asset_sync_priority(asset: dict) -> int:
     if asset_type == "poster":
         return 1
     return 2
+
+
+def _asset_queue_payload(asset: dict, *, manifest: IncidentManifest) -> dict:
+    payload = {
+        "incident_id": manifest.incident_id,
+        "session_id": manifest.session_id,
+        "asset_type": asset["asset_type"],
+        "file_path": str(asset["file_path"]),
+        "filename": asset["filename"],
+    }
+    if "frame_paths" in asset:
+        payload["frame_paths"] = [str(path) for path in (asset.get("frame_paths") or [])]
+    return payload
+
+
+def _asset_payload_type(payload: dict) -> str:
+    return str(payload.get("asset_type") or "").strip().lower()
+
+
+def _write_missing_gif_asset(payload: dict, gif_path: Path) -> bool:
+    frame_paths = [
+        Path(str(path))
+        for path in (payload.get("frame_paths") or [])
+        if str(path).strip()
+    ]
+    frame_paths = [path for path in frame_paths if path.exists() and path.is_file()]
+    if not frame_paths:
+        return False
+
+    gif_path.parent.mkdir(parents=True, exist_ok=True)
+    if PIL_AVAILABLE and _write_gif_with_pillow(frame_paths, gif_path):
+        return True
+    return _write_gif_with_opencv(frame_paths, gif_path)
+
+
+def _write_gif_with_pillow(frame_paths: list[Path], gif_path: Path) -> bool:
+    try:
+        frames = []
+        for frame_path in frame_paths:
+            with Image.open(frame_path) as image:
+                frames.append(image.convert("P", palette=Image.ADAPTIVE))
+        if not frames:
+            return False
+        frames[0].save(
+            gif_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=220,
+            loop=0,
+            optimize=False,
+        )
+        return gif_path.exists()
+    except Exception:
+        return False
+
+
+def _write_gif_with_opencv(frame_paths: list[Path], gif_path: Path) -> bool:
+    try:
+        if not hasattr(cv2, "Animation") or not hasattr(cv2, "imwriteanimation"):
+            return False
+        if hasattr(cv2, "haveImageWriter") and not cv2.haveImageWriter(".gif"):
+            return False
+        frames = []
+        for frame_path in frame_paths:
+            frame = cv2.imread(str(frame_path))
+            if frame is not None:
+                frames.append(frame)
+        if not frames:
+            return False
+        animation = cv2.Animation()
+        animation.frames = frames
+        animation.durations = [220] * len(frames)
+        animation.loop_count = 0
+        return bool(cv2.imwriteanimation(str(gif_path), animation))
+    except Exception:
+        return False
 
 
 def _result_error_text(result) -> str:

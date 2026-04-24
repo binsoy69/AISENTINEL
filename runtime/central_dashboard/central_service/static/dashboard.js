@@ -203,15 +203,17 @@ function incidentEvidenceUrl(incident) {
 }
 
 function evidenceCellMarkup(incident) {
-    const evidenceUrl = incidentEvidenceUrl(incident);
-    if (evidenceUrl) {
-        const label = incident.gif_url ? "View GIF" : "View Snapshot";
-        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(label)}</button>`;
+    if (incident?.gif_url) {
+        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View GIF</button>`;
     }
     const syncStatus = String(incident?.sync_status || "").toLowerCase();
-    const expectsMedia = Array.isArray(incident?.asset_names) && incident.asset_names.length > 0;
-    if (["recording", "pending", "queued"].includes(syncStatus) || (syncStatus === "ready" && expectsMedia)) {
+    const assetNames = Array.isArray(incident?.asset_names) ? incident.asset_names : [];
+    const expectsGif = assetNames.some((name) => String(name || "").toLowerCase().endsWith(".gif"));
+    if (["recording", "pending", "queued"].includes(syncStatus) || expectsGif) {
         return `<span class="evidence-button is-disabled">Evidence processing</span>`;
+    }
+    if (incident?.poster_url) {
+        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
     }
     return `<span class="evidence-button is-disabled">No media</span>`;
 }

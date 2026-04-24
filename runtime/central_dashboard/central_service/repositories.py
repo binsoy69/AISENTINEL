@@ -237,10 +237,7 @@ class CentralRepository:
                 student_numbers_json=excluded.student_numbers_json,
                 created_at=excluded.created_at,
                 display_time=excluded.display_time,
-                review_status=CASE
-                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.review_status
-                    ELSE excluded.review_status
-                END,
+                review_status=incidents.review_status,
                 poster_path=CASE WHEN excluded.poster_path != '' THEN excluded.poster_path ELSE incidents.poster_path END,
                 gif_path=CASE WHEN excluded.gif_path != '' THEN excluded.gif_path ELSE incidents.gif_path END,
                 frame_count=CASE

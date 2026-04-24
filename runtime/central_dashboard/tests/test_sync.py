@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 import sys
 
+import cv2
+import numpy as np
+
 TEST_ROOT = Path(__file__).resolve().parents[2]
 if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
@@ -372,6 +375,56 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             items = runtime.sync_queue.due_items(limit=10)
             self.assertEqual([item.item_type for item in items], ["manifest", "asset", "asset"])
             self.assertEqual([item.payload.get("asset_type") for item in items[1:]], ["gif", "poster"])
+            runtime.close()
+
+    def test_missing_gif_asset_is_rebuilt_from_frames_before_upload(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            frame_a = tmpdir / "frame-a.jpg"
+            frame_b = tmpdir / "frame-b.jpg"
+            gif_path = tmpdir / "missing" / "evidence.gif"
+            cv2.imwrite(str(frame_a), np.zeros((32, 48, 3), dtype=np.uint8))
+            cv2.imwrite(str(frame_b), np.full((32, 48, 3), 200, dtype=np.uint8))
+            http_client = FakeHttpClient(
+                [
+                    HttpResult(200, {"ok": True}, '{"ok": true}'),
+                    HttpResult(200, {"ok": True}, '{"ok": true}'),
+                ]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "manifest",
+                "incident-1",
+                "front",
+                {
+                    "manifest_payload": {
+                        "incident_id": "incident-1",
+                        "session_id": "session-1",
+                        "node_id": "front",
+                        "sync_status": "ready",
+                    }
+                },
+            )
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "gif",
+                    "file_path": str(gif_path),
+                    "filename": "evidence.gif",
+                    "frame_paths": [str(frame_a), str(frame_b)],
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertTrue(gif_path.exists())
+            self.assertEqual(http_client.requests[-1][1]["asset_type"], "gif")
+            self.assertGreater(http_client.requests[-1][1]["size_bytes"], 0)
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 
     def test_active_session_items_are_prioritized_over_stale_backlog(self):

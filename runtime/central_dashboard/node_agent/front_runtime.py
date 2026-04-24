@@ -409,6 +409,8 @@ def _normalize_front_runtime_incident(
 ) -> tuple[IncidentManifest, list[dict]]:
     poster_relpath = _best_poster_relpath(front_manifest)
     behavior_type = str(front_manifest.get("behavior_type", "")).strip() or "object"
+    frame_relpaths = _manifest_frame_relpaths(front_manifest)
+    frame_paths = _manifest_frame_paths(evidence_root, front_manifest)
     gif_relpath = ""
     if behavior_type != "noise":
         gif_relpath = str(front_manifest.get("gif_relpath") or "").strip()
@@ -429,13 +431,23 @@ def _normalize_front_runtime_incident(
             }
         )
 
-    if gif_relpath:
+    if gif_relpath or (behavior_type != "noise" and frame_paths):
         asset_names.append("evidence.gif")
+        gif_path = (
+            _local_evidence_path(evidence_root, gif_relpath)
+            if gif_relpath
+            else _visual_gif_target_path(
+                evidence_root,
+                front_manifest,
+                frame_relpaths[0],
+            )
+        )
         assets.append(
             {
                 "asset_type": "gif",
-                "file_path": _local_evidence_path(evidence_root, gif_relpath),
+                "file_path": gif_path,
                 "filename": asset_names[-1],
+                "frame_paths": frame_paths,
             }
         )
 
@@ -518,6 +530,26 @@ def _best_poster_relpath(front_manifest: dict) -> str:
         if event_matches
         else frame_relpaths[len(frame_relpaths) // 2]
     )
+
+
+def _manifest_frame_relpaths(front_manifest: dict) -> list[str]:
+    return [
+        str(value).strip()
+        for value in (front_manifest.get("frame_relpaths") or [])
+        if str(value).strip()
+    ]
+
+
+def _manifest_frame_paths(evidence_root: Path, front_manifest: dict) -> list[str]:
+    frame_relpaths = _manifest_frame_relpaths(front_manifest)
+    frame_paths = [
+        _local_evidence_path(evidence_root, relpath) for relpath in frame_relpaths
+    ]
+    return [
+        str(path)
+        for path in frame_paths
+        if path.exists() and path.is_file()
+    ]
 
 
 def _usable_gif_relpath(evidence_root: Path, gif_relpath: str) -> str:

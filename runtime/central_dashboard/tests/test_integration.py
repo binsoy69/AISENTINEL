@@ -169,6 +169,10 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertEqual(pending_incidents[0]["sync_status"], "recording")
             self.assertEqual(pending_incidents[0]["gif_url"], "")
 
+            review_result = manager.update_review_status("incident-001", "verified")
+            self.assertTrue(review_result["ok"])
+            self.assertEqual(review_result["incident"]["review_status"], "verified")
+
             manager.upsert_incident(
                 IncidentManifest(
                     incident_id="incident-001",
@@ -206,6 +210,7 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertEqual(len(ready_incidents), 1)
             self.assertEqual(ready_incidents[0]["incident_id"], "incident-001")
             self.assertEqual(ready_incidents[0]["sync_status"], "ready")
+            self.assertEqual(ready_incidents[0]["review_status"], "verified")
             self.assertTrue(ready_incidents[0]["gif_url"])
 
             manager.upsert_incident(
