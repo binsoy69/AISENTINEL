@@ -20,7 +20,7 @@ for path in (REPO_ROOT, RUNTIME_ROOT, FRONT_RUNTIME_ROOT):
         sys.path.insert(0, path_text)
 
 from central_dashboard.central_service.config import load_central_service_config
-from programs._launcher_common import central_dashboard_config, validate_node_video_config
+from programs._launcher_common import central_dashboard_config, run_script, validate_node_video_config
 import front_node_all_behavior_pi as combined_runtime
 
 
@@ -42,6 +42,32 @@ class LauncherAndPreviewTests(unittest.TestCase):
         self.assertEqual(mid_video.name, self._configured_default_video_name("node_mid_runtime.ini"))
         self.assertTrue(front_video.exists())
         self.assertTrue(mid_video.exists())
+
+    def test_run_script_includes_launched_script_directory_for_sibling_imports(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            helper_path = tmpdir / "sibling_helper.py"
+            helper_path.write_text("MESSAGE = 'sibling import worked'\n", encoding="utf-8")
+
+            output_path = tmpdir / "output.txt"
+            script_path = tmpdir / "script_with_sibling_import.py"
+            script_path.write_text(
+                "\n".join(
+                    [
+                        "from pathlib import Path",
+                        "import sys",
+                        "from sibling_helper import MESSAGE",
+                        "Path(sys.argv[1]).write_text(MESSAGE, encoding='utf-8')",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            run_script(script_path, str(output_path))
+
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "sibling import worked")
+            self.assertNotIn(str(tmpdir.resolve()), sys.path)
 
     def test_external_central_config_base_resolves_relative_data_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:

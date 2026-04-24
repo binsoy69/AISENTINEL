@@ -100,11 +100,15 @@ def run_script(script_path: Path, *args: str) -> None:
     """Run an existing repository script as if it was launched from the CLI."""
     configure_repo_environment()
     old_argv = sys.argv[:]
+    old_sys_path = sys.path[:]
+    script_dir = str(script_path.resolve().parent)
     try:
+        sys.path.insert(0, script_dir)
         sys.argv = [str(script_path), *args]
         runpy.run_path(str(script_path), run_name="__main__")
     finally:
         sys.argv = old_argv
+        sys.path[:] = old_sys_path
 
 
 def run_central_dashboard(config_name: str = "central_service.ini") -> None:
