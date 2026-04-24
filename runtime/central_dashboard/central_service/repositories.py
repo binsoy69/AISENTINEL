@@ -326,13 +326,15 @@ class CentralRepository:
 
     def node_status_snapshot(self, known_nodes: dict, *, offline_after_sec: int) -> list[dict]:
         registered = self.list_registered_nodes()
-        deadline = datetime.now(timezone.utc) - timedelta(seconds=offline_after_sec)
+        now = datetime.now(timezone.utc)
+        deadline = now - timedelta(seconds=offline_after_sec)
+        future_deadline = now + timedelta(seconds=5)
         snapshot = []
         for node_id, node_cfg in known_nodes.items():
             row = registered.get(node_id, {})
             last_seen_at = row.get("last_seen_at") or row.get("registered_at") or ""
             seen_dt = _parse_iso(last_seen_at)
-            online = bool(seen_dt and seen_dt >= deadline)
+            online = bool(seen_dt and deadline <= seen_dt <= future_deadline)
             snapshot.append(
                 {
                     "node_id": node_id,

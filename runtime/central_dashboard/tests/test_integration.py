@@ -15,10 +15,14 @@ if str(TEST_ROOT) not in sys.path:
 
 from central_dashboard.central_service.app import create_app as create_central_app
 from central_dashboard.central_service.config import BrowserAuthConfig, CentralServiceConfig, KnownNodeConfig
+from central_dashboard.central_service.db import connect_db, init_db
+from central_dashboard.central_service.repositories import CentralRepository
+from central_dashboard.central_service.services import CentralServiceManager
 from central_dashboard.node_agent.app import create_app as create_node_app
 from central_dashboard.node_agent.config import NodeAgentConfig
 from central_dashboard.node_agent.state import NodeRuntime
-from central_dashboard.shared.dto import IncidentManifest
+from central_dashboard.shared.dto import IncidentManifest, NodeDescriptor
+from central_dashboard.shared.http import HttpResult
 
 try:
     from .test_support import InProcessHttpClient
@@ -46,6 +50,27 @@ class FakeCapture:
 
     def set(self, prop, value):
         self.index = 0
+
+
+class PartialStopHttpClient:
+    def post_json(self, url: str, payload: dict, *, headers=None, timeout=5.0) -> HttpResult:
+        action = str(payload.get("action") or "")
+        session_id = str((payload.get("session") or {}).get("session_id") or "")
+        if "front.test" in url:
+            state = "idle" if action == "stop" else "running"
+            return HttpResult(
+                200,
+                {
+                    "ok": True,
+                    "node_id": "front",
+                    "action": action,
+                    "session_id": session_id,
+                    "state": state,
+                    "message": "ok",
+                },
+                '{"ok": true}',
+            )
+        return HttpResult(503, {"error": "node unavailable"}, "node unavailable")
 
 
 def build_node_config(tmpdir: Path, *, node_id: str, display_name: str, camera_label: str, host: str, port: int) -> NodeAgentConfig:
@@ -83,6 +108,74 @@ def build_node_config(tmpdir: Path, *, node_id: str, display_name: str, camera_l
 
 
 class CentralNodeIntegrationTests(unittest.TestCase):
+    def test_stop_session_marks_session_stopped_even_when_one_node_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            connection = connect_db(tmpdir / "central" / "central.sqlite3")
+            init_db(connection)
+            repo = CentralRepository(connection)
+            config = CentralServiceConfig(
+                config_path=tmpdir / "central.ini",
+                host="127.0.0.1",
+                port=8090,
+                db_path=tmpdir / "central" / "central.sqlite3",
+                evidence_root=tmpdir / "central" / "evidence",
+                node_offline_after_sec=120,
+                proxy_timeout_sec=5.0,
+                stream_timeout_sec=5.0,
+                browser_auth=BrowserAuthConfig(
+                    username="admin",
+                    password="admin123",
+                    secret_key="test-secret",
+                    session_ttl_minutes=60,
+                ),
+                known_nodes={
+                    "front": KnownNodeConfig("front", "Front Node", "Front Camera", "front-key"),
+                    "mid": KnownNodeConfig("mid", "Mid Node", "Mid Camera", "mid-key"),
+                },
+            )
+            manager = CentralServiceManager(config, repo, http_client=PartialStopHttpClient())
+            repo.upsert_node_registration(
+                NodeDescriptor(
+                    node_id="front",
+                    display_name="Front Node",
+                    camera_label="Front Camera",
+                    base_url="http://front.test:8091",
+                    agent_base_url="http://front.test:8091",
+                )
+            )
+            repo.upsert_node_registration(
+                NodeDescriptor(
+                    node_id="mid",
+                    display_name="Mid Node",
+                    camera_label="Mid Camera",
+                    base_url="http://mid.test:8092",
+                    agent_base_url="http://mid.test:8092",
+                )
+            )
+
+            create_result = manager.create_session(
+                {
+                    "subject_code": "CS321",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-07",
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                }
+            )
+            session_id = create_result["session"]["session_id"]
+            start_result = manager.dispatch_session_command(session_id, "start")
+            self.assertEqual(start_result["session"]["status"], "degraded")
+            self.assertEqual(repo.get_active_session()["session_id"], session_id)
+
+            stop_result = manager.dispatch_session_command(session_id, "stop")
+            self.assertTrue(stop_result["ok"])
+            self.assertEqual(stop_result["session"]["status"], "stopped")
+            self.assertTrue(stop_result["session"]["stopped_at"])
+            self.assertIsNone(repo.get_active_session())
+            self.assertEqual(1, len([item for item in stop_result["results"] if item["ok"]]))
+            connection.close()
+
     def test_registration_session_control_sync_review_and_stream_proxy(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)

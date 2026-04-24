@@ -122,6 +122,40 @@ class RepositoryTests(unittest.TestCase):
             self.assertFalse(nodes[0]["online"])
             connection.close()
 
+    def test_node_status_treats_persisted_future_last_seen_as_offline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "central.sqlite3"
+            connection = connect_db(db_path)
+            init_db(connection)
+            repo = CentralRepository(connection)
+
+            repo.upsert_node_registration(
+                NodeDescriptor(
+                    node_id="front",
+                    display_name="Front Node",
+                    camera_label="Front Camera",
+                    base_url="http://front.test:8091",
+                    agent_base_url="http://front.test:8091",
+                )
+            )
+            connection.execute(
+                "UPDATE nodes SET last_seen_at=?, state=?, last_error=? WHERE node_id=?",
+                (
+                    "2999-01-01T00:00:00Z",
+                    "idle",
+                    "<html><title>500 Internal Server Error</title></html>",
+                    "front",
+                ),
+            )
+            connection.commit()
+
+            nodes = repo.node_status_snapshot(
+                {"front": type("Known", (), {"display_name": "Front Node", "camera_label": "Front Camera"})()},
+                offline_after_sec=12,
+            )
+            self.assertFalse(nodes[0]["online"])
+            connection.close()
+
     def test_bulk_stop_or_clear_removes_active_session(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "central.sqlite3"

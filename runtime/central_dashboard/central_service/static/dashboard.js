@@ -96,6 +96,11 @@ function currentSession() {
     return session && String(session.session_id || "").trim() ? session : null;
 }
 
+function liveFeedSessionActive() {
+    const status = String(currentSession()?.status || "").toLowerCase();
+    return ["running", "degraded", "starting"].includes(status);
+}
+
 function sessionsHistory() {
     return Array.isArray(state.snapshot.sessions_history) ? state.snapshot.sessions_history : [];
 }
@@ -282,6 +287,7 @@ function streamEmptyMessage(node) {
     const errorText = String(node.last_error || "").trim();
     if (errorText) return `Node online, but the detector reports: ${errorText}`;
     if (!currentSession()) return "Node online. Create and start a shared session to open the live feed.";
+    if (!liveFeedSessionActive()) return "Start the shared session to open the live feed.";
     const stateLabel = sessionStatusLabel(node.state || "unknown");
     if (!["running", "starting"].includes(String(node.state || "").toLowerCase())) {
         return `Node online, detector state: ${stateLabel}.`;
@@ -429,6 +435,13 @@ function resetActiveSessionState() {
     state.sessionFormDirty = false;
     state.sessionDefaultsApplied = false;
     resetSessionForm();
+}
+
+function clearFeedImages() {
+    for (const image of els.feedGrid.querySelectorAll("[data-feed-image]")) {
+        image.classList.add("hidden");
+        image.removeAttribute("src");
+    }
 }
 
 function currentSessionId() {
@@ -595,7 +608,7 @@ function renderFeeds() {
         card.querySelector("[data-feed-sound]").textContent = sound?.enabled
             ? `Noise: ${formatDbValue(sound.current_db)} / ${formatDbValue(sound.threshold_db)}`
             : "Noise: disabled";
-        const streamReady = node.online && streamUrl && nodeHasStreamFrame(node, mode);
+        const streamReady = liveFeedSessionActive() && node.online && streamUrl && nodeHasStreamFrame(node, mode);
         if (streamReady) {
             if (image.getAttribute("src") !== streamUrl) image.setAttribute("src", streamUrl);
             image.classList.remove("hidden");
@@ -639,7 +652,7 @@ function renderMetrics() {
     const flags = flaggedSeats();
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
     const online = nodes.filter((node) => node.online).length;
-    const streaming = nodes.filter((node) => node.online && nodeHasAnyStreamFrame(node)).length;
+    const streaming = liveFeedSessionActive() ? nodes.filter((node) => node.online && nodeHasAnyStreamFrame(node)).length : 0;
     els.metricTotalIncidents.textContent = String(items.length);
     els.metricTotalFoot.textContent = currentSession() ? "Synced incidents tied to the active session." : "Showing incident totals across synced records.";
     els.metricFlaggedSeats.textContent = String(flags.size);
@@ -907,6 +920,12 @@ async function sessionAction(action) {
     }
     const result = await fetchJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/${action}`, { method: "POST", body: JSON.stringify({}) });
     const failures = (result.results || []).filter((item) => !item.ok);
+    if (action === "stop") {
+        state.snapshot.active_session = null;
+        state.sessionHydrated = false;
+        clearFeedImages();
+        render();
+    }
     showBanner(failures.length ? `${sessionStatusLabel(action)} completed with ${failures.length} node issue(s).` : `${sessionStatusLabel(action)} command sent to both nodes.`, failures.length > 0);
     await refresh();
 }

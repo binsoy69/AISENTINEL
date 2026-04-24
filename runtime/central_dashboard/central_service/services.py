@@ -213,7 +213,7 @@ class CentralServiceManager:
         if action in {"start", "restart"}:
             status = "running" if ok_count == len(node_rows) and node_rows else "degraded" if ok_count > 0 else "error"
         else:
-            status = "stopped" if ok_count == len(node_rows) and node_rows else "degraded" if ok_count > 0 else "stopped"
+            status = "stopped"
 
         self.repository.update_session_status(session_id, status)
         return {
