@@ -116,6 +116,8 @@ class FrontRuntimeBackendTests(unittest.TestCase):
 
             heartbeat = runtime.heartbeat()
             self.assertEqual(heartbeat.extra["detector_mode"], "front_runtime")
+            self.assertTrue(heartbeat.extra["stream"]["has_annotated_frame"])
+            self.assertTrue(heartbeat.extra["stream"]["last_frame_at"])
             self.assertGreaterEqual(heartbeat.incident_count, 1)
 
             due_items = runtime.sync_queue.due_items(limit=10)

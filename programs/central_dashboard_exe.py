@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 import sys
 
@@ -54,6 +55,11 @@ def main() -> None:
     from central_dashboard.central_service.app import create_app
     from central_dashboard.central_service.config import load_central_service_config
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )
     config = load_central_service_config(config_path)
     app = create_app(config)
 
@@ -71,4 +77,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

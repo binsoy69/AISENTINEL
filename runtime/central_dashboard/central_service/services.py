@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 import base64
 import binascii
+import logging
 import posixpath
 
 from central_dashboard.shared.dto import (
@@ -27,6 +28,7 @@ class CentralServiceManager:
         self.config = config
         self.repository = repository
         self.http_client = http_client or StdlibHttpClient()
+        self.logger = logging.getLogger(__name__)
         self.config.evidence_root.mkdir(parents=True, exist_ok=True)
 
     def _dispatch_command_to_nodes(self, session_spec: SessionSpec, action: str) -> tuple[list[dict], int, list[dict]]:
@@ -64,8 +66,28 @@ class CentralServiceManager:
                 ack = CommandAck.from_dict(result.json_data)
                 if ack.ok:
                     ok_count += 1
+                    self.logger.info(
+                        "node command acknowledged: node=%s action=%s state=%s",
+                        node_id,
+                        action,
+                        ack.state,
+                    )
+                else:
+                    self.logger.warning(
+                        "node command rejected: node=%s action=%s message=%s",
+                        node_id,
+                        action,
+                        ack.message,
+                    )
                 results.append(ack.to_dict())
             else:
+                self.logger.warning(
+                    "node command failed: node=%s action=%s status=%s message=%s",
+                    node_id,
+                    action,
+                    result.status_code,
+                    result.text,
+                )
                 results.append(
                     CommandAck(
                         ok=False,
@@ -149,10 +171,27 @@ class CentralServiceManager:
             profile=descriptor.profile,
         )
         self.repository.upsert_node_registration(normalized)
+        self.logger.info(
+            "node registered: node=%s agent=%s profile=%s",
+            normalized.node_id,
+            normalized.agent_base_url,
+            normalized.profile or "-",
+        )
         return {"ok": True, "node": normalized.to_dict()}
 
     def record_heartbeat(self, heartbeat: NodeHeartbeat) -> dict:
         self.repository.update_node_heartbeat(heartbeat)
+        stream = heartbeat.extra.get("stream", {}) if isinstance(heartbeat.extra, dict) else {}
+        self.logger.info(
+            "node heartbeat: node=%s state=%s session=%s fps=%.1f backlog=%s stream=%s error=%s",
+            heartbeat.node_id,
+            heartbeat.state,
+            heartbeat.session_id or "-",
+            heartbeat.fps,
+            heartbeat.sync_backlog,
+            "ready" if stream.get("has_annotated_frame") or stream.get("has_raw_frame") else "waiting",
+            heartbeat.last_error or "-",
+        )
         return {"ok": True, "heartbeat": heartbeat.to_dict()}
 
     def create_session(self, payload: dict) -> dict:
@@ -346,9 +385,10 @@ class CentralServiceManager:
             offline_after_sec=self.config.node_offline_after_sec,
         )
         match = next((node for node in nodes if node["node_id"] == node_id), None)
-        if match is None or not match.get("agent_base_url"):
+        if match is None or not match.get("agent_base_url") or not match.get("online"):
             raise FileNotFoundError(f"Node stream not available for {node_id}")
         url = f"{str(match['agent_base_url']).rstrip('/')}/agent/v1/stream/{mode}"
+        self.logger.info("opening node stream: node=%s mode=%s url=%s", node_id, mode, url)
         return self.http_client.open_stream(
             url,
             headers=self.build_node_headers(node_id),

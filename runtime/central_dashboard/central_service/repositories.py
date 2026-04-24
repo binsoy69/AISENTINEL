@@ -33,6 +33,7 @@ class CentralRepository:
         self.connection = connection
 
     def upsert_node_registration(self, descriptor: NodeDescriptor) -> None:
+        received_at = utc_now_iso()
         self.connection.execute(
             """
             INSERT INTO nodes (
@@ -58,14 +59,15 @@ class CentralRepository:
                 descriptor.base_url,
                 descriptor.agent_base_url,
                 json.dumps(descriptor.capabilities),
-                descriptor.registered_at,
-                descriptor.registered_at,
+                received_at,
+                received_at,
                 "registered",
             ),
         )
         self.connection.commit()
 
     def update_node_heartbeat(self, heartbeat: NodeHeartbeat) -> None:
+        received_at = utc_now_iso()
         self.connection.execute(
             """
             UPDATE nodes
@@ -74,7 +76,7 @@ class CentralRepository:
             WHERE node_id=?
             """,
             (
-                heartbeat.updated_at,
+                received_at,
                 heartbeat.state,
                 heartbeat.session_id,
                 heartbeat.fps,

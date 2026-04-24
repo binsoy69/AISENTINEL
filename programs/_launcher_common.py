@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import configparser
+import logging
 import os
 from pathlib import Path
 import runpy
@@ -16,6 +17,14 @@ REPO_ROOT = PROGRAMS_DIR.parent
 RUNTIME_ROOT = REPO_ROOT / "runtime"
 CENTRAL_DASHBOARD_ROOT = RUNTIME_ROOT / "central_dashboard"
 FRONT_NODE_RUNTIME_ROOT = RUNTIME_ROOT / "front_node_pi"
+
+
+def configure_runtime_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )
 
 
 def configure_repo_environment() -> None:
@@ -100,6 +109,7 @@ def run_script(script_path: Path, *args: str) -> None:
 
 def run_central_dashboard(config_name: str = "central_service.ini") -> None:
     configure_repo_environment()
+    configure_runtime_logging()
     from central_dashboard.central_service.app import create_app
     from central_dashboard.central_service.config import load_central_service_config
 
@@ -121,6 +131,7 @@ def run_central_dashboard(config_name: str = "central_service.ini") -> None:
 
 def run_node_agent(config_name: str, *, require_video: bool = False) -> None:
     configure_repo_environment()
+    configure_runtime_logging()
     from central_dashboard.node_agent.app import create_app
     from central_dashboard.node_agent.config import load_node_agent_config
 
@@ -170,4 +181,3 @@ def run_central_dashboard_tests() -> int:
     suite = unittest.defaultTestLoader.discover(str(CENTRAL_DASHBOARD_ROOT / "tests"))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
-

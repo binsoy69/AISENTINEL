@@ -261,6 +261,34 @@ function frontNodeSound() {
     return frontNode?.extra?.sound || null;
 }
 
+function nodeStreamInfo(node) {
+    return node?.extra?.stream || {};
+}
+
+function nodeHasStreamFrame(node, mode = "annotated") {
+    const stream = nodeStreamInfo(node);
+    const flagName = mode === "raw" ? "has_raw_frame" : "has_annotated_frame";
+    const seqName = mode === "raw" ? "raw_seq" : "annotated_seq";
+    if (Object.prototype.hasOwnProperty.call(stream, flagName)) return Boolean(stream[flagName]);
+    return Number(stream[seqName] || 0) > 0;
+}
+
+function nodeHasAnyStreamFrame(node) {
+    return nodeHasStreamFrame(node, "raw") || nodeHasStreamFrame(node, "annotated");
+}
+
+function streamEmptyMessage(node) {
+    if (!node.online) return "Node offline or stream unavailable.";
+    const errorText = String(node.last_error || "").trim();
+    if (errorText) return `Node online, but the detector reports: ${errorText}`;
+    if (!currentSession()) return "Node online. Create and start a shared session to open the live feed.";
+    const stateLabel = sessionStatusLabel(node.state || "unknown");
+    if (!["running", "starting"].includes(String(node.state || "").toLowerCase())) {
+        return `Node online, detector state: ${stateLabel}.`;
+    }
+    return "Waiting for the first video frame from this node.";
+}
+
 function renderNoise() {
     const sound = frontNodeSound();
     const currentDb = Number(sound?.current_db);
@@ -567,14 +595,15 @@ function renderFeeds() {
         card.querySelector("[data-feed-sound]").textContent = sound?.enabled
             ? `Noise: ${formatDbValue(sound.current_db)} / ${formatDbValue(sound.threshold_db)}`
             : "Noise: disabled";
-        if (node.online && streamUrl) {
+        const streamReady = node.online && streamUrl && nodeHasStreamFrame(node, mode);
+        if (streamReady) {
             if (image.getAttribute("src") !== streamUrl) image.setAttribute("src", streamUrl);
             image.classList.remove("hidden");
             empty.textContent = "";
         } else {
             image.classList.add("hidden");
             image.removeAttribute("src");
-            empty.textContent = "Node offline or stream unavailable.";
+            empty.textContent = streamEmptyMessage(node);
         }
     }
     for (const card of Array.from(els.feedGrid.querySelectorAll("[data-feed-card]"))) {
@@ -610,12 +639,15 @@ function renderMetrics() {
     const flags = flaggedSeats();
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
     const online = nodes.filter((node) => node.online).length;
+    const streaming = nodes.filter((node) => node.online && nodeHasAnyStreamFrame(node)).length;
     els.metricTotalIncidents.textContent = String(items.length);
     els.metricTotalFoot.textContent = currentSession() ? "Synced incidents tied to the active session." : "Showing incident totals across synced records.";
     els.metricFlaggedSeats.textContent = String(flags.size);
     els.metricSeatFoot.textContent = flags.size ? "Seats flagged from active-session incident mappings." : "No mapped flagged seats in the active session.";
     els.metricOnlineNodes.textContent = `${online} / ${nodes.length}`;
-    els.metricOnlineFoot.textContent = online === nodes.length && nodes.length ? "All registered nodes are currently online." : "Registered node availability in the last heartbeat window.";
+    els.metricOnlineFoot.textContent = nodes.length
+        ? `${streaming} live feed${streaming === 1 ? "" : "s"} publishing frames; online status uses central-received heartbeats.`
+        : "No camera nodes are configured.";
 }
 
 function renderRecords() {

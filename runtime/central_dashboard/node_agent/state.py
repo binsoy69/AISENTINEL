@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from pathlib import Path
 import socket
 import threading
@@ -38,6 +39,7 @@ class NodeRuntime:
 
     def __init__(self, config, *, http_client=None, front_runtime_runner=None) -> None:
         self.config = config
+        self.logger = logging.getLogger(f"central_dashboard.node_agent.{config.node_id}")
         self.http_client = http_client or StdlibHttpClient()
         self.front_runtime_runner = front_runtime_runner or run_front_runtime_session
         self.sync_queue = LocalSyncQueue(config.local_db_path)
@@ -54,6 +56,7 @@ class NodeRuntime:
         self._raw_seq = 0
         self._annotated_seq = 0
         self._last_publish_monotonic = 0.0
+        self._last_frame_at = ""
 
         self._status = "idle"
         self._session: SessionSpec | None = None
@@ -69,6 +72,11 @@ class NodeRuntime:
         if self._background_started:
             return
         self._background_started = True
+        self.logger.info(
+            "starting background workers: central=%s advertised=%s",
+            self.config.central_base_url,
+            self.advertised_base_url(),
+        )
         for target, name in (
             (self._registration_loop, "node-register"),
             (self._heartbeat_loop, "node-heartbeat"),
@@ -78,6 +86,7 @@ class NodeRuntime:
             thread.start()
 
     def shutdown(self) -> None:
+        self.logger.info("shutdown requested")
         self._shutdown.set()
         self.stop_session()
 
@@ -123,6 +132,14 @@ class NodeRuntime:
             fps = self._fps
             incident_count = self._incident_count
             last_error = self._last_error
+            stream_state = {
+                "raw_seq": self._raw_seq,
+                "annotated_seq": self._annotated_seq,
+                "has_raw_frame": self._raw_jpeg is not None,
+                "has_annotated_frame": self._annotated_jpeg is not None,
+                "last_frame_at": self._last_frame_at,
+                "preview_fps": self.config.preview_fps,
+            }
         return NodeHeartbeat(
             node_id=self.config.node_id,
             state=state,
@@ -135,6 +152,7 @@ class NodeRuntime:
                 "profile": self.config.profile,
                 "detector_mode": self.config.detector_mode,
                 "sound": dict(self._sound_state),
+                "stream": stream_state,
             },
         )
 
@@ -160,7 +178,9 @@ class NodeRuntime:
             self._session_stop = threading.Event()
             self._status = "starting"
             self._last_error = ""
+            self._clear_frames_locked()
 
+        self.logger.info("session start accepted: session_id=%s", session.session_id)
         self._session_thread = threading.Thread(
             target=self._run_session,
             args=(session,),
@@ -182,12 +202,16 @@ class NodeRuntime:
             session_id = self._session.session_id if self._session else ""
             thread = self._session_thread
             self._status = "stopping" if thread and thread.is_alive() else "idle"
+        if session_id:
+            self.logger.info("session stop requested: session_id=%s", session_id)
         self._session_stop.set()
         if thread and thread.is_alive():
             thread.join(timeout=5.0)
         with self._lock:
             self._status = "idle"
             self._session = None
+            self._fps = 0.0
+            self._clear_frames_locked()
         return CommandAck(
             ok=True,
             node_id=self.config.node_id,
@@ -217,6 +241,7 @@ class NodeRuntime:
             self._shutdown.wait(self.config.sync_interval_sec)
 
     def register_once(self) -> bool:
+        was_registered = self._registration_ok
         try:
             result = self.http_client.post_json(
                 f"{self.config.central_base_url}/api/v1/nodes/register",
@@ -226,18 +251,28 @@ class NodeRuntime:
             )
             self._registration_ok = result.ok
             if not result.ok:
-                self._set_error(result.text or "registration failed")
+                message = result.text or "registration failed"
+                self._set_error(message)
+                self.logger.warning("registration failed: %s", message)
+            elif not was_registered:
+                self.logger.info(
+                    "registered with central: node_id=%s advertised=%s",
+                    self.config.node_id,
+                    self.advertised_base_url(),
+                )
             return result.ok
         except Exception as exc:  # pragma: no cover - runtime network safety
             self._registration_ok = False
             self._set_error(str(exc))
+            self.logger.warning("registration failed: %s", exc)
             return False
 
     def heartbeat_once(self) -> bool:
         try:
+            heartbeat = self.heartbeat()
             result = self.http_client.post_json(
                 f"{self.config.central_base_url}/api/v1/nodes/heartbeat",
-                self.heartbeat().to_dict(),
+                heartbeat.to_dict(),
                 headers=self._auth_headers(),
                 timeout=self.config.http_timeout_sec,
             )
@@ -245,11 +280,22 @@ class NodeRuntime:
                 with self._lock:
                     if self._last_error.startswith("heartbeat") or self._last_error.startswith("registration"):
                         self._last_error = ""
+                stream = heartbeat.extra.get("stream", {})
+                self.logger.info(
+                    "heartbeat sent: state=%s session=%s fps=%.1f backlog=%s stream=%s",
+                    heartbeat.state,
+                    heartbeat.session_id or "-",
+                    heartbeat.fps,
+                    heartbeat.sync_backlog,
+                    "ready" if stream.get("has_annotated_frame") or stream.get("has_raw_frame") else "waiting",
+                )
             else:
                 self._set_error(f"heartbeat failed: {result.text}")
+                self.logger.warning("heartbeat failed: %s", result.text)
             return result.ok
         except Exception as exc:  # pragma: no cover - runtime network safety
             self._set_error(f"heartbeat failed: {exc}")
+            self.logger.warning("heartbeat failed: %s", exc)
             return False
 
     def sync_once(self) -> int:
@@ -274,6 +320,9 @@ class NodeRuntime:
             except Exception as exc:  # pragma: no cover - runtime network safety
                 self.sync_queue.mark_retry(item, str(exc))
                 self._set_error(f"sync failed: {exc}")
+                self.logger.warning("sync failed: %s", exc)
+        if synced:
+            self.logger.info("synced %s queued item(s)", synced)
         return synced
 
     def _prioritized_due_items(self) -> list[SyncQueueItem]:
@@ -348,6 +397,7 @@ class NodeRuntime:
                 self._run_motion_session(session)
         except Exception as exc:  # pragma: no cover - runtime safety
             self._set_error(str(exc))
+            self.logger.exception("session failed: session_id=%s", session.session_id)
             with self._lock:
                 self._status = "error"
         finally:
@@ -464,6 +514,9 @@ class NodeRuntime:
                 self._fps = float(processing_fps)
         self._publish_frames(raw_frame, annotated_frame)
 
+    def publish_preview_frames(self, raw_frame, annotated_frame=None) -> None:
+        self._publish_frames(raw_frame, annotated_frame if annotated_frame is not None else raw_frame)
+
     def record_finalized_incident(
         self,
         manifest: IncidentManifest,
@@ -513,6 +566,14 @@ class NodeRuntime:
             self._annotated_jpeg = annotated_jpeg
             self._raw_seq += 1
             self._annotated_seq += 1
+            self._last_frame_at = utc_now_iso()
+
+    def _clear_frames_locked(self) -> None:
+        self._raw_jpeg = None
+        self._annotated_jpeg = None
+        self._raw_seq += 1
+        self._annotated_seq += 1
+        self._last_frame_at = ""
 
     def _encode_frame(self, frame):
         output = frame

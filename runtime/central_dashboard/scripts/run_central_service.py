@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 import sys
 
@@ -25,6 +26,11 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_central_service_config(args.config)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )
     app = create_app(config)
     app.run(host=config.host, port=config.port, threaded=True)
 

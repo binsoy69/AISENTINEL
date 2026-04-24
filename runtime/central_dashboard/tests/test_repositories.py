@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import sys
 
@@ -82,6 +83,43 @@ class RepositoryTests(unittest.TestCase):
             )
             self.assertEqual(len(nodes), 1)
             self.assertEqual(nodes[0]["fps"], 14.5)
+            connection.close()
+
+    def test_node_status_uses_central_receive_time_not_node_clock(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "central.sqlite3"
+            connection = connect_db(db_path)
+            init_db(connection)
+            repo = CentralRepository(connection)
+
+            with patch(
+                "central_dashboard.central_service.repositories.utc_now_iso",
+                return_value="1970-01-01T00:00:00Z",
+            ):
+                repo.upsert_node_registration(
+                    NodeDescriptor(
+                        node_id="front",
+                        display_name="Front Node",
+                        camera_label="Front Camera",
+                        base_url="http://front.test:8091",
+                        agent_base_url="http://front.test:8091",
+                        registered_at="2999-01-01T00:00:00Z",
+                    )
+                )
+                repo.update_node_heartbeat(
+                    NodeHeartbeat(
+                        node_id="front",
+                        state="running",
+                        updated_at="2999-01-01T00:00:00Z",
+                    )
+                )
+
+            nodes = repo.node_status_snapshot(
+                {"front": type("Known", (), {"display_name": "Front Node", "camera_label": "Front Camera"})()},
+                offline_after_sec=2,
+            )
+            self.assertEqual(nodes[0]["last_seen_at"], "1970-01-01T00:00:00Z")
+            self.assertFalse(nodes[0]["online"])
             connection.close()
 
     def test_bulk_stop_or_clear_removes_active_session(self):

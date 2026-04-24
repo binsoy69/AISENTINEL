@@ -95,6 +95,7 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
         actual_fps = capture_bundle["fps"]
         with latest_raw_frame_lock:
             latest_raw_frame["frame"] = first_frame.copy()
+        runtime.publish_preview_frames(first_frame, first_frame)
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or first_frame.shape[1])
         disp_scale = min(1.0, 1280 / width) if width > 1280 else 1.0
