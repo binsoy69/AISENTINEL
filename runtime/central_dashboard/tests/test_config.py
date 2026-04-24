@@ -49,6 +49,16 @@ class ConfigTests(unittest.TestCase):
             (ROOT.parents[1] / "tests" / "tests_on_pi" / "ky037_ads1015_config.json").resolve(strict=False),
         )
 
+    def test_dashboard_js_renders_evidence_processing_snapshot_and_gif_states(self):
+        script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function evidenceCellMarkup", script)
+        self.assertIn("Evidence processing", script)
+        self.assertIn("View Snapshot", script)
+        self.assertIn("View GIF", script)
+
 
 if __name__ == "__main__":
     unittest.main()

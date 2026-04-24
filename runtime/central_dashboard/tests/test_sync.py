@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +51,22 @@ class SyncQueueTests(unittest.TestCase):
 
             self.assertTrue(queue.has_pending_manifest("incident-1"))
             self.assertFalse(queue.has_pending_manifest("incident-2"))
+            queue.close()
+
+    def test_recording_manifest_does_not_block_ready_asset_upload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = LocalSyncQueue(Path(tmpdir) / "queue.sqlite3")
+            queue.enqueue(
+                "manifest",
+                "incident-1",
+                "front",
+                {"manifest_payload": {"sync_status": "recording"}},
+            )
+            queue.enqueue("asset", "incident-1", "front", {"filename": "poster.jpg"})
+
+            self.assertFalse(queue.has_pending_manifest("incident-1"))
+            self.assertEqual(queue.purge_recording_manifests("incident-1"), 1)
+            self.assertEqual(queue.backlog_count(), 1)
             queue.close()
 
     def test_purge_asset_type_removes_existing_frame_backlog(self):
@@ -312,6 +329,51 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 
+    def test_record_finalized_incident_prioritizes_gif_before_poster(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            poster_path = tmpdir / "poster.jpg"
+            gif_path = tmpdir / "evidence.gif"
+            poster_path.write_bytes(b"poster")
+            gif_path.write_bytes(b"gif")
+            runtime = NodeRuntime(build_config(tmpdir))
+
+            runtime.record_finalized_incident(
+                IncidentManifest(
+                    incident_id="incident-001",
+                    session_id="session-001",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="object",
+                    type_label="Using Phone",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=2,
+                    summary="Student #05 using phone detected",
+                    sync_status="ready",
+                    sync_attempts=0,
+                    asset_names=["poster.jpg", "evidence.gif"],
+                ),
+                [
+                    {
+                        "asset_type": "poster",
+                        "file_path": poster_path,
+                        "filename": "poster.jpg",
+                    },
+                    {
+                        "asset_type": "gif",
+                        "file_path": gif_path,
+                        "filename": "evidence.gif",
+                    },
+                ],
+            )
+
+            items = runtime.sync_queue.due_items(limit=10)
+            self.assertEqual([item.item_type for item in items], ["manifest", "asset", "asset"])
+            self.assertEqual([item.payload.get("asset_type") for item in items[1:]], ["gif", "poster"])
+            runtime.close()
+
     def test_active_session_items_are_prioritized_over_stale_backlog(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -360,31 +422,72 @@ class NodeRuntimeSyncTests(unittest.TestCase):
     def test_start_session_can_clear_stale_backlog(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
-            config = build_config(tmpdir, clear_sync_backlog_on_session_start=True)
+            config = replace(
+                build_config(tmpdir, clear_sync_backlog_on_session_start=True),
+                detector_mode="front_runtime",
+            )
 
             def fake_runner(runtime: NodeRuntime, session: SessionSpec) -> None:
                 runtime.mark_session_running()
 
             runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
-            runtime.sync_queue.enqueue(
-                "manifest",
-                "old-incident",
-                "front",
-                {"manifest_payload": {"incident_id": "old-incident", "session_id": "old-session"}},
+            try:
+                runtime.sync_queue.enqueue(
+                    "manifest",
+                    "old-incident",
+                    "front",
+                    {"manifest_payload": {"incident_id": "old-incident", "session_id": "old-session"}},
+                )
+
+                ack = runtime.start_session(
+                    {
+                        "subject_code": "CS321",
+                        "professor": "Dr. Reyes",
+                        "session_date": "2026-04-24",
+                        "start_time": "09:00",
+                        "end_time": "11:00",
+                    }
+                )
+                self.assertTrue(ack.ok)
+                thread = runtime._session_thread
+                if thread is not None:
+                    thread.join(timeout=2.0)
+                self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            finally:
+                runtime.close()
+
+    def test_record_detected_incident_queues_recording_manifest_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            runtime = NodeRuntime(build_config(tmpdir))
+
+            runtime.record_detected_incident(
+                IncidentManifest(
+                    incident_id="incident-001",
+                    session_id="session-001",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="head",
+                    type_label="Head Tilting",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=0,
+                    summary="Student #05 head tilting detected",
+                    sync_status="recording",
+                    sync_attempts=0,
+                    asset_names=[],
+                )
             )
 
-            ack = runtime.start_session(
-                {
-                    "subject_code": "CS321",
-                    "professor": "Dr. Reyes",
-                    "session_date": "2026-04-24",
-                    "start_time": "09:00",
-                    "end_time": "11:00",
-                }
-            )
-            self.assertTrue(ack.ok)
-            runtime._session_thread.join(timeout=2.0)  # type: ignore[union-attr]
-            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            items = runtime.sync_queue.due_items(limit=10)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0].item_type, "manifest")
+            manifest = items[0].payload["manifest_payload"]
+            self.assertEqual(manifest["sync_status"], "recording")
+            self.assertEqual(manifest["asset_names"], [])
+            self.assertEqual(runtime.heartbeat().incident_count, 1)
+            self.assertTrue(runtime._sync_wake.is_set())
             runtime.close()
 
     def test_record_finalized_incident_wakes_sync_loop(self):

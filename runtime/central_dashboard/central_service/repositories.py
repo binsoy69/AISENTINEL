@@ -237,15 +237,36 @@ class CentralRepository:
                 student_numbers_json=excluded.student_numbers_json,
                 created_at=excluded.created_at,
                 display_time=excluded.display_time,
-                review_status=excluded.review_status,
+                review_status=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.review_status
+                    ELSE excluded.review_status
+                END,
                 poster_path=CASE WHEN excluded.poster_path != '' THEN excluded.poster_path ELSE incidents.poster_path END,
                 gif_path=CASE WHEN excluded.gif_path != '' THEN excluded.gif_path ELSE incidents.gif_path END,
-                frame_count=excluded.frame_count,
-                summary=excluded.summary,
-                sync_status=excluded.sync_status,
-                sync_attempts=excluded.sync_attempts,
-                asset_names_json=excluded.asset_names_json,
-                manifest_json=excluded.manifest_json,
+                frame_count=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.frame_count
+                    ELSE excluded.frame_count
+                END,
+                summary=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.summary
+                    ELSE excluded.summary
+                END,
+                sync_status=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.sync_status
+                    ELSE excluded.sync_status
+                END,
+                sync_attempts=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.sync_attempts
+                    ELSE excluded.sync_attempts
+                END,
+                asset_names_json=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.asset_names_json
+                    ELSE excluded.asset_names_json
+                END,
+                manifest_json=CASE
+                    WHEN incidents.sync_status='ready' AND excluded.sync_status='recording' THEN incidents.manifest_json
+                    ELSE excluded.manifest_json
+                END,
                 updated_at=excluded.updated_at
             """,
             (

@@ -63,6 +63,7 @@ class NodeRuntime:
         self._session: SessionSpec | None = None
         self._fps = 0.0
         self._incident_count = 0
+        self._incident_ids: set[str] = set()
         self._last_error = ""
         self._banner_text = ""
         self._banner_expires = 0.0
@@ -324,6 +325,8 @@ class NodeRuntime:
                     disposition = self._sync_asset(item)
                 if disposition == SYNC_OK:
                     self.sync_queue.mark_done(item.item_id)
+                    if item.item_type == "manifest" and _queue_item_manifest_status(item) != "recording":
+                        self.sync_queue.purge_recording_manifests(item.incident_id)
                     synced += 1
                 elif disposition == SYNC_DROP:
                     self.sync_queue.mark_done(item.item_id)
@@ -540,7 +543,7 @@ class NodeRuntime:
             self.config.node_id,
             {"manifest_payload": manifest.to_dict()},
         )
-        for asset in assets:
+        for asset in sorted(assets, key=_asset_sync_priority):
             if asset["asset_type"] == "frame":
                 continue
             self.sync_queue.enqueue(
@@ -556,8 +559,25 @@ class NodeRuntime:
                 },
             )
         with self._lock:
-            self._incident_count += 1
+            self._remember_incident_locked(manifest.incident_id)
         self._sync_wake.set()
+
+    def record_detected_incident(self, manifest: IncidentManifest) -> None:
+        self.sync_queue.enqueue(
+            "manifest",
+            manifest.incident_id,
+            self.config.node_id,
+            {"manifest_payload": manifest.to_dict()},
+        )
+        with self._lock:
+            self._remember_incident_locked(manifest.incident_id)
+        self._sync_wake.set()
+
+    def _remember_incident_locked(self, incident_id: str) -> None:
+        if not incident_id or incident_id in self._incident_ids:
+            return
+        self._incident_ids.add(incident_id)
+        self._incident_count += 1
 
     def update_sound_telemetry(self, payload: dict) -> None:
         with self._lock:
@@ -667,6 +687,24 @@ def _queue_item_session_id(item: SyncQueueItem) -> str:
         if isinstance(manifest, dict):
             return str(manifest.get("session_id", "")).strip()
     return str(payload.get("session_id", "")).strip()
+
+
+def _queue_item_manifest_status(item: SyncQueueItem) -> str:
+    if item.item_type != "manifest":
+        return ""
+    manifest = item.payload.get("manifest_payload")
+    if not isinstance(manifest, dict):
+        return ""
+    return str(manifest.get("sync_status") or "").strip().lower()
+
+
+def _asset_sync_priority(asset: dict) -> int:
+    asset_type = str(asset.get("asset_type") or "").lower()
+    if asset_type == "gif":
+        return 0
+    if asset_type == "poster":
+        return 1
+    return 2
 
 
 def _result_error_text(result) -> str:

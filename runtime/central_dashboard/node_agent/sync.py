@@ -123,15 +123,52 @@ class LocalSyncQueue:
         return len(item_ids)
 
     def has_pending_manifest(self, incident_id: str) -> bool:
-        row = self.connection.execute(
+        rows = self.connection.execute(
             """
-            SELECT 1 FROM sync_queue
+            SELECT payload_json FROM sync_queue
             WHERE incident_id=? AND item_type='manifest'
-            LIMIT 1
             """,
             (incident_id,),
-        ).fetchone()
-        return row is not None
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                return True
+            manifest = payload.get("manifest_payload")
+            if not isinstance(manifest, dict):
+                return True
+            if str(manifest.get("sync_status") or "").lower() != "recording":
+                return True
+        return False
+
+    def purge_recording_manifests(self, incident_id: str) -> int:
+        rows = self.connection.execute(
+            """
+            SELECT item_id, payload_json FROM sync_queue
+            WHERE incident_id=? AND item_type='manifest'
+            """,
+            (incident_id,),
+        ).fetchall()
+        item_ids = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                continue
+            manifest = payload.get("manifest_payload")
+            if isinstance(manifest, dict) and str(manifest.get("sync_status") or "").lower() == "recording":
+                item_ids.append(row["item_id"])
+
+        if not item_ids:
+            return 0
+
+        self.connection.executemany(
+            "DELETE FROM sync_queue WHERE item_id=?",
+            [(item_id,) for item_id in item_ids],
+        )
+        self.connection.commit()
+        return len(item_ids)
 
     def purge_asset_type(self, asset_type: str) -> int:
         rows = self.connection.execute(

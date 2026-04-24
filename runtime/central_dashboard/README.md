@@ -160,6 +160,16 @@ should drop old unsynced items from other sessions before monitoring starts.
 This keeps new sessions at backlog 0, but it also discards any evidence that
 was not uploaded from earlier sessions.
 
+## Alert And GIF Timing
+
+The central dashboard shows an alert as soon as a node confirms a behavior
+event and starts recording evidence. The Records tab shows that row as
+`Evidence processing` until media arrives.
+
+Full GIFs still wait for the configured post-event frames and GIF encoding.
+After final evidence is ready, the node uploads `evidence.gif` before the
+poster snapshot so the Records tab can switch to `View GIF` as soon as possible.
+
 ## Calibration
 
 Webcam calibration:

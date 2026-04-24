@@ -202,6 +202,20 @@ function incidentEvidenceUrl(incident) {
     return incident?.gif_url || incident?.poster_url || "";
 }
 
+function evidenceCellMarkup(incident) {
+    const evidenceUrl = incidentEvidenceUrl(incident);
+    if (evidenceUrl) {
+        const label = incident.gif_url ? "View GIF" : "View Snapshot";
+        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(label)}</button>`;
+    }
+    const syncStatus = String(incident?.sync_status || "").toLowerCase();
+    const expectsMedia = Array.isArray(incident?.asset_names) && incident.asset_names.length > 0;
+    if (["recording", "pending", "queued"].includes(syncStatus) || (syncStatus === "ready" && expectsMedia)) {
+        return `<span class="evidence-button is-disabled">Evidence processing</span>`;
+    }
+    return `<span class="evidence-button is-disabled">No media</span>`;
+}
+
 function alertPopupLabel(incident) {
     return isNoiseIncident(incident) ? "Noise Alert" : "Cheating Detected";
 }
@@ -714,7 +728,7 @@ function renderRecords() {
             <td>${escapeHtml(seatSummary(incident))}</td>
             <td><span class="type-pill ${toneClass(incident.type_label)}">${escapeHtml(incident.type_label || incident.behavior_type || "Incident")}</span></td>
             <td>${escapeHtml(incident.camera_label || incident.node_id || "--")}</td>
-            <td>${incidentEvidenceUrl(incident) ? `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(incident.gif_url ? "View GIF" : "View Snapshot")}</button>` : `<span class="evidence-button is-disabled">No media</span>`}</td>
+            <td>${evidenceCellMarkup(incident)}</td>
             <td><select class="review-select ${reviewMeta(incident.review_status).className}" data-review-incident="${escapeHtml(incident.incident_id)}">${reviewOptions(incident.review_status)}</select></td>
         </tr>
     `).join("") : `<tr><td class="table-empty" colspan="6">${escapeHtml(selectionMissing ? "Select a subject code and session first to load stored records." : state.recordsQuery || state.recordsFilter !== "all" ? "No records match the current search or review filter." : session ? "No synced incidents are available for the selected session yet." : "No synced incidents are available for this workspace yet.")}</td></tr>`;

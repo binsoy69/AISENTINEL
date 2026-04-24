@@ -1455,7 +1455,7 @@ def _stop_evidence_writer(task_queue: Queue | None, thread: threading.Thread | N
 
 def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_type,
                             event_ts_sec, incident_finalize_callback=None,
-                            **payload):
+                            incident_detected_callback=None, **payload):
     """Save buffered pre-event frames, then queue event + post-event frames."""
     with _dashboard_lock:
         camera_label = _dashboard_state["source_label"]
@@ -1480,6 +1480,14 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
         **payload,
     }
     _ensure_sequence_storage(sequence)
+
+    if incident_detected_callback is not None:
+        try:
+            incident_detected_callback(
+                _build_sequence_incident(sequence, status="recording")
+            )
+        except Exception as exc:  # pragma: no cover - runtime safety
+            head_mod.log_info(f"Incident detected callback error: {exc}")
 
     pre_count = len(recent_frames)
     for relative_idx, snapshot in zip(range(-pre_count, 0), recent_frames):
@@ -2016,7 +2024,9 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                   student_map, baseline_yaw_map, assigned_students, student_lines,
                   source_label, port, roi_polygon=None, source_mode="video",
                   source_fps=None, frame_publish_callback=None,
-                  incident_finalize_callback=None, should_stop_callback=None):
+                  incident_finalize_callback=None,
+                  incident_detected_callback=None,
+                  should_stop_callback=None):
     """Run all behavior detectors in a single Pi-side loop."""
     video_name = Path(str(source_label)).stem
     fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
@@ -3072,6 +3082,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         "head",
                         ts_sec,
                         incident_finalize_callback=incident_finalize_callback,
+                        incident_detected_callback=incident_detected_callback,
                         student_num=student_num,
                         behavior=behavior,
                     )
@@ -3086,6 +3097,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         "passing",
                         ts_sec,
                         incident_finalize_callback=incident_finalize_callback,
+                        incident_detected_callback=incident_detected_callback,
                         student_nums=[src_num, nbr_num],
                     )
                 )
@@ -3099,6 +3111,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         "hands",
                         ts_sec,
                         incident_finalize_callback=incident_finalize_callback,
+                        incident_detected_callback=incident_detected_callback,
                         video_name=video_name,
                         line_idx=line_idx,
                         student_num=student_num,
@@ -3114,6 +3127,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         "object",
                         ts_sec,
                         incident_finalize_callback=incident_finalize_callback,
+                        incident_detected_callback=incident_detected_callback,
                         student_num=event["student_num"],
                         class_name=event["class_name"],
                         confidence=event["confidence"],

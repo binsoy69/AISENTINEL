@@ -218,6 +218,14 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             )
             runtime.record_finalized_incident(incident, assets)
 
+        def incident_detected_callback(front_manifest: dict) -> None:
+            incident = _normalize_front_runtime_detected_incident(
+                node_config=node_config,
+                session=session,
+                front_manifest=front_manifest,
+            )
+            runtime.record_detected_incident(incident)
+
         combined_mod.run_detection(
             cap,
             pose_estimator,
@@ -235,6 +243,7 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             source_fps=actual_fps,
             frame_publish_callback=frame_publish_callback,
             incident_finalize_callback=incident_finalize_callback,
+            incident_detected_callback=incident_detected_callback,
             should_stop_callback=runtime.should_stop_requested,
         )
     finally:
@@ -448,11 +457,44 @@ def _normalize_front_runtime_incident(
         gif_path="",
         frame_count=int(front_manifest.get("frame_count") or 0),
         summary=str(front_manifest.get("summary", "")).strip(),
-        sync_status="queued",
+        sync_status="ready",
         sync_attempts=0,
         asset_names=asset_names,
     )
     return manifest, assets
+
+
+def _normalize_front_runtime_detected_incident(
+    *,
+    node_config,
+    session: SessionSpec,
+    front_manifest: dict,
+) -> IncidentManifest:
+    return IncidentManifest(
+        incident_id=str(front_manifest.get("id", "")).strip(),
+        session_id=session.session_id,
+        node_id=node_config.node_id,
+        camera_label=node_config.camera_label,
+        behavior_type=str(front_manifest.get("behavior_type", "")).strip()
+        or "object",
+        type_label=str(front_manifest.get("type_label", "")).strip()
+        or "Incident",
+        student_numbers=[
+            int(value) for value in (front_manifest.get("student_numbers") or [])
+        ],
+        created_at=str(front_manifest.get("created_at") or utc_now_iso()),
+        display_time=str(front_manifest.get("display_time", "")).strip(),
+        review_status=str(front_manifest.get("review_status", "unverified")).strip()
+        or "unverified",
+        poster_path="",
+        gif_path="",
+        frame_count=int(front_manifest.get("frame_count") or 0),
+        summary=str(front_manifest.get("summary", "")).strip(),
+        sync_status=str(front_manifest.get("status") or "recording").strip()
+        or "recording",
+        sync_attempts=0,
+        asset_names=[],
+    )
 
 
 def _best_poster_relpath(front_manifest: dict) -> str:
@@ -624,7 +666,7 @@ def _build_noise_incident_evidence(
         gif_path="",
         frame_count=frame_count,
         summary=build_noise_summary(estimated_db, threshold_db),
-        sync_status="queued",
+        sync_status="ready",
         sync_attempts=0,
         asset_names=asset_names,
     )

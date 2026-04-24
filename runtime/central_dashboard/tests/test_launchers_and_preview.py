@@ -133,6 +133,34 @@ api_key = front-key
         self.assertTrue(np.array_equal(preview[10, 70], raw_frame[10, 70]))
         self.assertTrue(np.array_equal(preview[22, 80], raw_frame[22, 80]))
 
+    def test_evidence_sequence_reports_recording_incident_immediately(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            old_head_dir = combined_runtime.HEAD_EVIDENCE_DIR
+            combined_runtime.HEAD_EVIDENCE_DIR = Path(tmpdir_str) / "head_behavior"
+            try:
+                detected = []
+                sequence_queue = []
+
+                sequence = combined_runtime.queue_evidence_sequence(
+                    None,
+                    sequence_queue,
+                    [],
+                    "head",
+                    1.25,
+                    incident_detected_callback=lambda incident: detected.append(dict(incident)),
+                    student_num=5,
+                    behavior="head_tilt",
+                )
+
+                self.assertEqual(len(detected), 1)
+                self.assertEqual(detected[0]["id"], sequence["incident_id"])
+                self.assertEqual(detected[0]["status"], "recording")
+                self.assertEqual(detected[0]["student_numbers"], [5])
+                self.assertEqual(detected[0]["poster_relpath"], "")
+                self.assertEqual(detected[0]["gif_relpath"], "")
+            finally:
+                combined_runtime.HEAD_EVIDENCE_DIR = old_head_dir
+
 
 if __name__ == "__main__":
     unittest.main()
