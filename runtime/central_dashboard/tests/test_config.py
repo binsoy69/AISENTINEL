@@ -58,6 +58,21 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("Evidence processing", script)
         self.assertIn("View Snapshot", script)
         self.assertIn("View GIF", script)
+        self.assertLess(
+            script.index("if (incident?.poster_url)"),
+            script.index("Evidence processing"),
+        )
+
+    def test_central_dashboard_records_export_controls_are_removed(self):
+        script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(
+            encoding="utf-8"
+        )
+        template = (ROOT / "central_service" / "templates" / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("records-export", template)
+        self.assertNotIn("function exportRecords", script)
 
 
 if __name__ == "__main__":

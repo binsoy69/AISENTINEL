@@ -54,7 +54,6 @@ const els = {
     recordsFilter: document.getElementById("records-filter"),
     recordsSearch: document.getElementById("records-search"),
     recordsClear: document.getElementById("records-clear"),
-    recordsExport: document.getElementById("records-export"),
     typeChart: document.getElementById("type-chart"),
     timelineChart: document.getElementById("timeline-chart"),
     analyticsTypesNote: document.getElementById("analytics-types-note"),
@@ -99,10 +98,6 @@ const state = {
 
 function escapeHtml(value) {
     return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;").replaceAll("'", "&#39;");
-}
-
-function csvEscape(value) {
-    return `"${String(value ?? "").replaceAll("\"", "\"\"")}"`;
 }
 
 function currentSession() {
@@ -206,14 +201,14 @@ function evidenceCellMarkup(incident) {
     if (incident?.gif_url) {
         return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View GIF</button>`;
     }
+    if (incident?.poster_url) {
+        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
+    }
     const syncStatus = String(incident?.sync_status || "").toLowerCase();
     const assetNames = Array.isArray(incident?.asset_names) ? incident.asset_names : [];
     const expectsGif = assetNames.some((name) => String(name || "").toLowerCase().endsWith(".gif"));
     if (["recording", "pending", "queued"].includes(syncStatus) || expectsGif) {
         return `<span class="evidence-button is-disabled">Evidence processing</span>`;
-    }
-    if (incident?.poster_url) {
-        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
     }
     return `<span class="evidence-button is-disabled">No media</span>`;
 }
@@ -536,7 +531,6 @@ function renderRecordsScope() {
         els.recordsFilter.disabled = false;
         els.recordsSearch.disabled = false;
         els.recordsClear.disabled = false;
-        els.recordsExport.disabled = false;
         return;
     }
 
@@ -576,7 +570,6 @@ function renderRecordsScope() {
     els.recordsFilter.disabled = !workspaceReady;
     els.recordsSearch.disabled = !workspaceReady;
     els.recordsClear.disabled = !workspaceReady;
-    els.recordsExport.disabled = !workspaceReady;
 }
 
 function filteredRecords() {
@@ -1084,34 +1077,6 @@ async function deleteSubject(subjectCode) {
     await refresh();
 }
 
-function exportRecords() {
-    if (workspaceSelectionMissing()) {
-        showBanner("Select a subject code and session first before exporting records.", true);
-        return;
-    }
-    const items = filteredRecords();
-    if (!items.length) {
-        showBanner("There are no records to export for the current filter.", true);
-        return;
-    }
-    const rows = [["timestamp", "seat_numbers", "type", "camera", "review_status", "evidence_url"], ...items.map((incident) => [
-        incident.display_time || incident.created_at || "",
-        seatSummary(incident),
-        incident.type_label || incident.behavior_type || "Incident",
-        incident.camera_label || incident.node_id || "",
-        reviewMeta(incident.review_status).label,
-        incidentEvidenceUrl(incident),
-    ])];
-    const blob = new Blob([rows.map((row) => row.map(csvEscape).join(",")).join("\n")], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `sentinel-central-records-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.csv`;
-    document.body.append(link);
-    link.click();
-    URL.revokeObjectURL(link.href);
-    link.remove();
-}
-
 els.sessionForm.addEventListener("input", () => {
     state.sessionFormDirty = true;
     renderSessionSummary();
@@ -1148,7 +1113,6 @@ els.recordsSession.addEventListener("change", (event) => {
     renderSeatMap();
 });
 els.recordsClear.addEventListener("click", () => clearRecords().catch((error) => showBanner(error.message, true)));
-els.recordsExport.addEventListener("click", exportRecords);
 els.alertToastClose.addEventListener("click", () => dismissAlertPopup(state.activeAlertId));
 
 document.addEventListener("click", (event) => {

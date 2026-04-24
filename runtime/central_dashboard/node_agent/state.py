@@ -39,6 +39,9 @@ except ImportError:  # pragma: no cover - optional on target systems
 SYNC_OK = "ok"
 SYNC_RETRY = "retry"
 SYNC_DROP = "drop"
+GIF_UPLOAD_MIN_TIMEOUT_SEC = 20.0
+GIF_UPLOAD_MAX_TIMEOUT_SEC = 120.0
+GIF_UPLOAD_ASSUMED_BYTES_PER_SEC = 256 * 1024
 
 
 class NodeRuntime:
@@ -378,11 +381,12 @@ class NodeRuntime:
 
     def _sync_asset(self, item: SyncQueueItem) -> str:
         payload = item.payload
+        asset_type = _asset_payload_type(payload)
         file_path = Path(payload["file_path"])
         if not file_path.exists():
-            if _asset_payload_type(payload) == "gif" and _write_missing_gif_asset(payload, file_path):
+            if asset_type == "gif" and _write_missing_gif_asset(payload, file_path):
                 self.logger.info("rebuilt missing GIF evidence before upload: %s", file_path)
-            elif _asset_payload_type(payload) == "gif":
+            elif asset_type == "gif":
                 self._set_error(f"GIF evidence not ready for upload: {file_path}")
                 return SYNC_RETRY
             else:
@@ -395,20 +399,29 @@ class NodeRuntime:
             "incident_id": payload["incident_id"],
             "session_id": payload["session_id"],
             "node_id": self.config.node_id,
-            "asset_type": payload["asset_type"],
+            "asset_type": asset_type,
             "filename": payload["filename"],
             "content_base64": base64.b64encode(content).decode("ascii"),
             "content_sha256": "",
             "size_bytes": len(content),
         }
+        timeout_sec = _asset_upload_timeout_sec(
+            base_timeout_sec=self.config.http_timeout_sec,
+            asset_type=asset_type,
+            size_bytes=len(content),
+        )
         result = self.http_client.post_json(
             f"{self.config.central_base_url}/api/v1/evidence/upload",
             asset_payload,
             headers=self._auth_headers(),
-            timeout=self.config.http_timeout_sec,
+            timeout=timeout_sec,
         )
         if result.ok:
             return SYNC_OK
+        if result.status_code == 0:
+            error_text = _result_error_text(result) or "network timeout or dashboard unavailable"
+            self._set_error(f"evidence upload retrying: {error_text}")
+            return SYNC_RETRY
         if result.status_code == 400:
             error_text = _result_error_text(result) or "bad evidence upload request"
             self._set_error(f"evidence upload failed: {error_text}")
@@ -736,6 +749,22 @@ def _asset_queue_payload(asset: dict, *, manifest: IncidentManifest) -> dict:
 
 def _asset_payload_type(payload: dict) -> str:
     return str(payload.get("asset_type") or "").strip().lower()
+
+
+def _asset_upload_timeout_sec(
+    *,
+    base_timeout_sec: float,
+    asset_type: str,
+    size_bytes: int,
+) -> float:
+    timeout_sec = max(1.0, float(base_timeout_sec))
+    if asset_type != "gif":
+        return timeout_sec
+
+    size_based_timeout = GIF_UPLOAD_MIN_TIMEOUT_SEC + (
+        max(0, int(size_bytes)) / float(GIF_UPLOAD_ASSUMED_BYTES_PER_SEC)
+    )
+    return max(timeout_sec, min(GIF_UPLOAD_MAX_TIMEOUT_SEC, size_based_timeout))
 
 
 def _write_missing_gif_asset(payload: dict, gif_path: Path) -> bool:

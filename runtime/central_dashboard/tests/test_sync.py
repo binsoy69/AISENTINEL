@@ -125,7 +125,7 @@ class FakeHttpClient:
         self.requests = []
 
     def post_json(self, url: str, payload: dict, *, headers=None, timeout=5.0):
-        self.requests.append((url, payload))
+        self.requests.append((url, payload, timeout))
         if self.responses:
             return self.responses.pop(0)
         return HttpResult(200, {"ok": True}, '{"ok": true}')
@@ -425,6 +425,35 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual(http_client.requests[-1][1]["asset_type"], "gif")
             self.assertGreater(http_client.requests[-1][1]["size_bytes"], 0)
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
+    def test_gif_upload_uses_extended_timeout_and_surfaces_network_retry_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            gif_path = tmpdir / "evidence.gif"
+            gif_path.write_bytes(b"gif-data")
+            http_client = FakeHttpClient([HttpResult(0, None, "timed out")])
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "gif",
+                    "file_path": str(gif_path),
+                    "filename": "evidence.gif",
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/evidence/upload"))
+            self.assertGreater(http_client.requests[0][2], runtime.config.http_timeout_sec)
+            self.assertEqual(runtime.sync_queue.backlog_count(), 1)
+            self.assertIn("timed out", runtime.heartbeat().last_error)
             runtime.close()
 
     def test_active_session_items_are_prioritized_over_stale_backlog(self):
