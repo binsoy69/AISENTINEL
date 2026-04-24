@@ -92,6 +92,7 @@ Important fields:
 - `[agent] host`
 - `[agent] port`
 - `[agent] central_base_url`
+- `[agent] clear_sync_backlog_on_session_start`
 - `[capture] source_mode`
 - `[detector] runtime_config_path`
 
@@ -147,6 +148,17 @@ With that setup:
 
 Use `127.0.0.1` only when the central service and node agent are on the same
 machine for local testing.
+
+## Sync Backlog
+
+The node agent stores unsynced incident manifests and evidence in
+`[agent] local_db_path`. The dashboard "Backlog" number is the count of items
+still waiting in that local queue.
+
+Set `[agent] clear_sync_backlog_on_session_start = true` when each new session
+should drop old unsynced items from other sessions before monitoring starts.
+This keeps new sessions at backlog 0, but it also discards any evidence that
+was not uploaded from earlier sessions.
 
 ## Calibration
 

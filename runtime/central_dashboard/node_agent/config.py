@@ -53,6 +53,7 @@ class NodeAgentConfig:
     evidence_root: Path
     pre_event_frames: int
     post_event_frames: int
+    clear_sync_backlog_on_session_start: bool = False
 
 
 def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConfig:
@@ -95,6 +96,11 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         local_db_path=_resolve_path(
             parser.get("agent", "local_db_path", fallback="runtime/central_dashboard/data/node_front/queue.sqlite3")
         ) or (REPO_ROOT / "runtime/central_dashboard/data/node_front/queue.sqlite3"),
+        clear_sync_backlog_on_session_start=parser.getboolean(
+            "agent",
+            "clear_sync_backlog_on_session_start",
+            fallback=False,
+        ),
         source_mode=parser.get("capture", "source_mode", fallback="webcam").strip() or "webcam",
         camera_index=parser.getint("capture", "camera_index", fallback=0),
         video_path=_resolve_path(parser.get("capture", "video_path", fallback="")),

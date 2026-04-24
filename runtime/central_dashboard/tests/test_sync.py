@@ -12,7 +12,7 @@ if str(TEST_ROOT) not in sys.path:
 from central_dashboard.node_agent.sync import LocalSyncQueue
 from central_dashboard.node_agent.config import NodeAgentConfig
 from central_dashboard.node_agent.state import NodeRuntime
-from central_dashboard.shared.dto import SessionSpec
+from central_dashboard.shared.dto import IncidentManifest, SessionSpec
 from central_dashboard.shared.http import HttpResult
 
 
@@ -65,6 +65,39 @@ class SyncQueueTests(unittest.TestCase):
             self.assertEqual(item.payload["asset_type"], "gif")
             queue.close()
 
+    def test_clear_removes_all_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = LocalSyncQueue(Path(tmpdir) / "queue.sqlite3")
+            queue.enqueue("manifest", "incident-1", "front", {"manifest_payload": {}})
+            queue.enqueue("asset", "incident-1", "front", {"asset_type": "poster"})
+
+            self.assertEqual(queue.clear(), 2)
+            self.assertEqual(queue.backlog_count(), 0)
+            self.assertEqual(queue.clear(), 0)
+            queue.close()
+
+    def test_clear_except_session_removes_only_stale_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue = LocalSyncQueue(Path(tmpdir) / "queue.sqlite3")
+            queue.enqueue(
+                "manifest",
+                "current-incident",
+                "front",
+                {"manifest_payload": {"session_id": "current-session"}},
+            )
+            queue.enqueue(
+                "asset",
+                "old-incident",
+                "front",
+                {"session_id": "old-session", "asset_type": "poster"},
+            )
+
+            self.assertEqual(queue.clear_except_session("current-session"), 1)
+            self.assertEqual(queue.backlog_count(), 1)
+            item = queue.due_items()[0]
+            self.assertEqual(item.incident_id, "current-incident")
+            queue.close()
+
 
 class FakeHttpClient:
     def __init__(self, responses):
@@ -78,7 +111,11 @@ class FakeHttpClient:
         return HttpResult(200, {"ok": True}, '{"ok": true}')
 
 
-def build_config(tmpdir: Path) -> NodeAgentConfig:
+def build_config(
+    tmpdir: Path,
+    *,
+    clear_sync_backlog_on_session_start: bool = False,
+) -> NodeAgentConfig:
     return NodeAgentConfig(
         config_path=tmpdir / "node.ini",
         node_id="front",
@@ -109,6 +146,7 @@ def build_config(tmpdir: Path) -> NodeAgentConfig:
         evidence_root=tmpdir / "evidence",
         pre_event_frames=2,
         post_event_frames=2,
+        clear_sync_backlog_on_session_start=clear_sync_backlog_on_session_start,
     )
 
 
@@ -317,6 +355,65 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertGreaterEqual(len(http_client.requests), 1)
             self.assertTrue(http_client.requests[0][0].endswith("/api/v1/incidents"))
             self.assertEqual(http_client.requests[0][1]["incident_id"], "current-incident")
+            runtime.close()
+
+    def test_start_session_can_clear_stale_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config = build_config(tmpdir, clear_sync_backlog_on_session_start=True)
+
+            def fake_runner(runtime: NodeRuntime, session: SessionSpec) -> None:
+                runtime.mark_session_running()
+
+            runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
+            runtime.sync_queue.enqueue(
+                "manifest",
+                "old-incident",
+                "front",
+                {"manifest_payload": {"incident_id": "old-incident", "session_id": "old-session"}},
+            )
+
+            ack = runtime.start_session(
+                {
+                    "subject_code": "CS321",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-24",
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                }
+            )
+            self.assertTrue(ack.ok)
+            runtime._session_thread.join(timeout=2.0)  # type: ignore[union-attr]
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
+    def test_record_finalized_incident_wakes_sync_loop(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            runtime = NodeRuntime(build_config(tmpdir))
+
+            runtime.record_finalized_incident(
+                IncidentManifest(
+                    incident_id="incident-001",
+                    session_id="session-001",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="head",
+                    type_label="Head Tilting",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=1,
+                    summary="Student #05 head tilting detected",
+                    sync_status="queued",
+                    sync_attempts=0,
+                    asset_names=[],
+                ),
+                [],
+            )
+
+            self.assertEqual(runtime.sync_queue.backlog_count(), 1)
+            self.assertTrue(runtime._sync_wake.is_set())
             runtime.close()
 
 

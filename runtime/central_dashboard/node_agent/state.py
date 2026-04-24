@@ -48,6 +48,7 @@ class NodeRuntime:
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._session_stop = threading.Event()
+        self._sync_wake = threading.Event()
         self._background_started = False
         self._session_thread: threading.Thread | None = None
 
@@ -88,6 +89,7 @@ class NodeRuntime:
     def shutdown(self) -> None:
         self.logger.info("shutdown requested")
         self._shutdown.set()
+        self._sync_wake.set()
         self.stop_session()
 
     def close(self) -> None:
@@ -174,6 +176,15 @@ class NodeRuntime:
                     state=self._status,
                     message="Session is already running.",
                 )
+        if self.config.clear_sync_backlog_on_session_start:
+            purged = self.sync_queue.clear_except_session(session.session_id)
+            if purged:
+                self.logger.info(
+                    "cleared %s stale sync queue item(s) before session start: session_id=%s",
+                    purged,
+                    session.session_id,
+                )
+        with self._lock:
             self._session = session
             self._session_stop = threading.Event()
             self._status = "starting"
@@ -237,8 +248,9 @@ class NodeRuntime:
 
     def _sync_loop(self) -> None:
         while not self._shutdown.is_set():
+            self._sync_wake.clear()
             self.sync_once()
-            self._shutdown.wait(self.config.sync_interval_sec)
+            self._sync_wake.wait(self.config.sync_interval_sec)
 
     def register_once(self) -> bool:
         was_registered = self._registration_ok
@@ -545,6 +557,7 @@ class NodeRuntime:
             )
         with self._lock:
             self._incident_count += 1
+        self._sync_wake.set()
 
     def update_sound_telemetry(self, payload: dict) -> None:
         with self._lock:

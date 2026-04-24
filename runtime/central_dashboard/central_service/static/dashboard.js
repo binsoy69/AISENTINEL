@@ -1,7 +1,7 @@
 const bootstrapNode = document.getElementById("dashboard-bootstrap");
 const initialState = bootstrapNode ? JSON.parse(bootstrapNode.textContent) : {};
 
-const POLL_MS = 2000;
+const POLL_MS = 1000;
 const CLOCK_MS = 1000;
 const ALERT_DISMISS_MS = 2000;
 const EMPTY_SUBJECT_VALUE = "__unassigned_subject__";

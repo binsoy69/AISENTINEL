@@ -10,6 +10,13 @@ from pathlib import Path
 from central_dashboard.shared.dto import SyncQueueItem, make_id, utc_now_iso
 
 
+def _payload_session_id(payload: dict) -> str:
+    manifest = payload.get("manifest_payload")
+    if isinstance(manifest, dict):
+        return str(manifest.get("session_id") or "")
+    return str(payload.get("session_id") or "")
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path, check_same_thread=False)
@@ -83,6 +90,37 @@ class LocalSyncQueue:
     def mark_done(self, item_id: str) -> None:
         self.connection.execute("DELETE FROM sync_queue WHERE item_id=?", (item_id,))
         self.connection.commit()
+
+    def clear(self) -> int:
+        row = self.connection.execute("SELECT COUNT(*) AS count FROM sync_queue").fetchone()
+        count = int(row["count"])
+        if count:
+            self.connection.execute("DELETE FROM sync_queue")
+            self.connection.commit()
+        return count
+
+    def clear_except_session(self, session_id: str) -> int:
+        target_session_id = str(session_id or "")
+        rows = self.connection.execute("SELECT item_id, payload_json FROM sync_queue").fetchall()
+        item_ids = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                item_ids.append(row["item_id"])
+                continue
+            if _payload_session_id(payload) != target_session_id:
+                item_ids.append(row["item_id"])
+
+        if not item_ids:
+            return 0
+
+        self.connection.executemany(
+            "DELETE FROM sync_queue WHERE item_id=?",
+            [(item_id,) for item_id in item_ids],
+        )
+        self.connection.commit()
+        return len(item_ids)
 
     def has_pending_manifest(self, incident_id: str) -> bool:
         row = self.connection.execute(
