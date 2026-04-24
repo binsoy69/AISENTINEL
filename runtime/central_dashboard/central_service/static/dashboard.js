@@ -94,6 +94,7 @@ const state = {
     sessionFormDirty: false,
     sessionDefaultsApplied: false,
     pollInFlight: false,
+    recordsRenderSignature: "",
 };
 
 function escapeHtml(value) {
@@ -593,6 +594,29 @@ function reviewOptions(selected) {
     return Object.entries(REVIEW_META).map(([key, meta]) => `<option value="${key}" ${value === key ? "selected" : ""}>${meta.label}</option>`).join("");
 }
 
+function recordsRenderSignature(items, selectionMissing, session) {
+    return JSON.stringify({
+        session_id: session?.session_id || "",
+        selection_missing: selectionMissing,
+        filter: state.recordsFilter,
+        query: state.recordsQuery,
+        rows: items.map((incident) => ({
+            id: incident.incident_id || "",
+            display_time: incident.display_time || "",
+            created_at: incident.created_at || "",
+            seats: seatSummary(incident),
+            type_label: incident.type_label || "",
+            behavior_type: incident.behavior_type || "",
+            camera_label: incident.camera_label || "",
+            node_id: incident.node_id || "",
+            evidence_url: incidentEvidenceUrl(incident),
+            sync_status: incident.sync_status || "",
+            asset_names: Array.isArray(incident.asset_names) ? incident.asset_names : [],
+            review_status: String(incident.review_status || "unverified").replaceAll("-", "_"),
+        })),
+    });
+}
+
 function ensureFeedCard(node) {
     let card = els.feedGrid.querySelector(`[data-feed-card="${node.node_id}"]`);
     if (card) return card;
@@ -717,6 +741,9 @@ function renderRecords() {
         : session
             ? `Review synced incident evidence from ${workspaceSessionLabel(session)}.`
             : "No active session is running. Select a subject code and session before opening stored records.";
+    const nextSignature = recordsRenderSignature(items, selectionMissing, session);
+    if (state.recordsRenderSignature === nextSignature) return;
+    state.recordsRenderSignature = nextSignature;
     els.recordsBody.innerHTML = items.length ? items.map((incident) => `
         <tr>
             <td>${escapeHtml(incident.display_time || incident.created_at || "--")}</td>

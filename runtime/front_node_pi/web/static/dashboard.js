@@ -51,7 +51,6 @@ const selectors = {
     recordsTableBody: document.getElementById("records-table-body"),
     recordsStatusFilter: document.getElementById("records-status-filter"),
     recordsSearch: document.getElementById("records-search"),
-    recordsExport: document.getElementById("records-export"),
     historyList: document.getElementById("history-list"),
     systemGrid: document.getElementById("system-grid"),
     metricTotalIncidents: document.getElementById("metric-total-incidents"),
@@ -87,11 +86,6 @@ function escapeHtml(value) {
         .replaceAll(">", "&gt;")
         .replaceAll("\"", "&quot;")
         .replaceAll("'", "&#39;");
-}
-
-function csvEscape(value) {
-    const normalized = String(value ?? "");
-    return `"${normalized.replaceAll("\"", "\"\"")}"`;
 }
 
 function sectionNav() {
@@ -695,34 +689,6 @@ async function updateEvidenceReviewStatus(incidentId, reviewStatus, selectNode) 
     }
 }
 
-function exportRecords() {
-    const items = filteredSavedIncidents(state.snapshot);
-    if (!items.length) {
-        return;
-    }
-
-    const rows = [
-        ["Timestamp", "Seat No.", "Cheating Type", "Camera", "Review Status", "Evidence"],
-        ...items.map((incident) => [
-            incident.display_time || "--",
-            seatSummary(incident),
-            incident.type_label || "Incident",
-            incident.camera_label || "--",
-            reviewMeta(incident).label,
-            incidentViewerUrl(incident),
-        ]),
-    ];
-
-    const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `sentinel-records-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.csv`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
 async function poll() {
     if (state.pollInFlight) {
         return;
@@ -776,8 +742,6 @@ function bindControls() {
         state.recordsQuery = event.target.value.trim().toLowerCase();
         renderRecords(state.snapshot);
     });
-
-    selectors.recordsExport.addEventListener("click", exportRecords);
 
     document.addEventListener("click", (event) => {
         const evidenceButton = event.target.closest("[data-open-evidence]");

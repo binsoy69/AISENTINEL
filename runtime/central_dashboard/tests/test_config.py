@@ -14,6 +14,7 @@ from central_dashboard.node_agent.front_runtime import front_runtime_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FRONT_NODE_ROOT = ROOT.parent / "front_node_pi"
 
 
 class ConfigTests(unittest.TestCase):
@@ -68,6 +69,17 @@ class ConfigTests(unittest.TestCase):
             encoding="utf-8"
         )
         template = (ROOT / "central_service" / "templates" / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("records-export", template)
+        self.assertNotIn("function exportRecords", script)
+
+    def test_front_node_records_export_controls_are_removed(self):
+        script = (FRONT_NODE_ROOT / "web" / "static" / "dashboard.js").read_text(
+            encoding="utf-8"
+        )
+        template = (FRONT_NODE_ROOT / "web" / "templates" / "dashboard.html").read_text(
             encoding="utf-8"
         )
 
