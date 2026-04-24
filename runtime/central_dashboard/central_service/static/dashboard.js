@@ -284,12 +284,19 @@ function formatDbValue(value) {
     return Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)} dB` : "--";
 }
 
+function activeSessionSound(node) {
+    const sessionId = currentSessionId();
+    if (!sessionId || String(node?.session_id || "") !== sessionId) return null;
+    return node?.extra?.sound || null;
+}
+
 function frontNodeSound() {
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
-    const frontNode = nodes.find((node) => String(node.profile || "").trim() === "front")
-        || nodes.find((node) => node.extra?.sound)
+    const frontNode = nodes.find((node) => String(node.profile || "").trim() === "front" && activeSessionSound(node))
+        || nodes.find((node) => String(node.node_id || "").trim() === "front" && activeSessionSound(node))
+        || nodes.find((node) => activeSessionSound(node))
         || null;
-    return frontNode?.extra?.sound || null;
+    return activeSessionSound(frontNode);
 }
 
 function nodeStreamInfo(node) {
@@ -630,7 +637,7 @@ function renderFeeds() {
         card.querySelector("[data-feed-state]").textContent = `State: ${sessionStatusLabel(node.state || "unknown")}`;
         card.querySelector("[data-feed-fps]").textContent = `FPS: ${Number(node.fps || 0).toFixed(1)}`;
         card.querySelector("[data-feed-backlog]").textContent = `Backlog: ${Number(node.sync_backlog || 0)}`;
-        const sound = node.extra?.sound || null;
+        const sound = activeSessionSound(node);
         card.querySelector("[data-feed-sound]").textContent = sound?.enabled
             ? `Noise: ${formatDbValue(sound.current_db)} / ${formatDbValue(sound.threshold_db)}`
             : "Noise: disabled";
@@ -674,15 +681,18 @@ function renderSessionSummary() {
 }
 
 function renderMetrics() {
-    const items = currentSession() ? sessionIncidents() : allIncidents();
-    const flags = flaggedSeats();
+    const session = currentSession();
+    const items = session ? sessionIncidents() : [];
+    const flags = session ? flaggedSeats() : new Set();
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
     const online = nodes.filter((node) => node.online).length;
     const streaming = liveFeedSessionActive() ? nodes.filter((node) => node.online && nodeHasAnyStreamFrame(node)).length : 0;
     els.metricTotalIncidents.textContent = String(items.length);
-    els.metricTotalFoot.textContent = currentSession() ? "Synced incidents tied to the active session." : "Showing incident totals across synced records.";
+    els.metricTotalFoot.textContent = session ? "Synced incidents tied to the active session." : "No active session. Incident count is reset.";
     els.metricFlaggedSeats.textContent = String(flags.size);
-    els.metricSeatFoot.textContent = flags.size ? "Seats flagged from active-session incident mappings." : "No mapped flagged seats in the active session.";
+    els.metricSeatFoot.textContent = session
+        ? (flags.size ? "Seats flagged from active-session incident mappings." : "No mapped flagged seats in the active session.")
+        : "No active session. Seat flags are reset.";
     els.metricOnlineNodes.textContent = `${online} / ${nodes.length}`;
     els.metricOnlineFoot.textContent = nodes.length
         ? `${streaming} live feed${streaming === 1 ? "" : "s"} publishing frames; online status uses central-received heartbeats.`
