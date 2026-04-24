@@ -16,7 +16,7 @@ from typing import Callable
 
 I2C_INSTALL_COMMAND = "sudo apt install python3-smbus i2c-tools"
 DEFAULT_I2C_BUS = 1
-DEFAULT_I2C_ADDRESS = 0x48
+DEFAULT_I2C_ADDRESS = 0x4B
 DEFAULT_CHANNEL = 0
 DEFAULT_FULL_SCALE = 4.096
 DEFAULT_DATA_RATE = 1600
@@ -271,14 +271,18 @@ def open_ads1015(settings):
     """Open the I2C bus and configure the ADS1015 for continuous reads."""
     SMBus = load_smbus()
     bus = SMBus(settings.bus)
-    config_word = build_config_word(
-        settings.channel,
-        settings.full_scale,
-        settings.data_rate,
-    )
-    write_config(bus, settings.address, config_word)
-    time.sleep(max(0.01, 2.0 / settings.data_rate))
-    return bus
+    try:
+        config_word = build_config_word(
+            settings.channel,
+            settings.full_scale,
+            settings.data_rate,
+        )
+        write_config(bus, settings.address, config_word)
+        time.sleep(max(0.01, 2.0 / settings.data_rate))
+        return bus
+    except Exception:
+        close_bus(bus)
+        raise
 
 
 def close_bus(bus) -> None:
@@ -369,7 +373,11 @@ def print_i2c_error(settings, exc: OSError) -> None:
     print(f"[ERROR] Could not communicate with ADS1015 at 0x{settings.address:02X}: {exc}")
     print(
         "Check I2C wiring, enable I2C on the Raspberry Pi, and verify the "
-        "address with `i2cdetect -y 1`."
+        f"address with `i2cdetect -y {settings.bus}`."
+    )
+    print(
+        "ADS1015 addresses are usually 0x48, 0x49, 0x4A, or 0x4B depending "
+        "on the ADDR pin."
     )
 
 
@@ -536,4 +544,3 @@ class SoundMonitorService:
     def _update_snapshot_locked(self, **updates) -> None:
         self._snapshot.update(updates)
         self._snapshot["updated_at"] = utc_now_iso()
-

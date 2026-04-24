@@ -52,14 +52,16 @@ def print_capture_result(label: str, result: dict[str, float], settings: argpars
 
 def capture_reference(settings: argparse.Namespace, label: str) -> None:
     """Capture one calibration window and save it as quiet or loud reference."""
-    bus = open_ads1015(settings)
+    bus = None
     try:
+        bus = open_ads1015(settings)
         result = sample_window(bus, settings)
     except OSError as exc:
         print_i2c_error(settings, exc)
         sys.exit(1)
     finally:
-        close_bus(bus)
+        if bus is not None:
+            close_bus(bus)
 
     if label == "quiet":
         settings.ref_quiet_rms_mv = result["rms_mv"]
@@ -130,7 +132,7 @@ def parse_args() -> argparse.Namespace:
         "--address",
         type=lambda value: int(value, 0),
         default=None,
-        help="ADS1015 I2C address in decimal or hex, for example 0x48",
+        help="ADS1015 I2C address in decimal or hex, for example 0x4B",
     )
     parser.add_argument(
         "--channel",

@@ -45,9 +45,10 @@ def print_result(result: dict[str, float], settings: argparse.Namespace) -> None
 
 def monitor_ads1015(settings: argparse.Namespace) -> None:
     """Configure the ADS1015 and continuously report estimated dB windows."""
-    bus = open_ads1015(settings)
+    bus = None
 
     try:
+        bus = open_ads1015(settings)
         while True:
             result = sample_window(bus, settings)
             print_result(result, settings)
@@ -57,7 +58,8 @@ def monitor_ads1015(settings: argparse.Namespace) -> None:
         print_i2c_error(settings, exc)
         sys.exit(1)
     finally:
-        close_bus(bus)
+        if bus is not None:
+            close_bus(bus)
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +82,7 @@ def parse_args() -> argparse.Namespace:
         "--address",
         type=lambda value: int(value, 0),
         default=None,
-        help="ADS1015 I2C address in decimal or hex, for example 0x48",
+        help="ADS1015 I2C address in decimal or hex, for example 0x4B",
     )
     parser.add_argument(
         "--channel",

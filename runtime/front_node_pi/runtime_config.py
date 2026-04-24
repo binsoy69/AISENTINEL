@@ -647,7 +647,7 @@ def load_runtime_config(
                         parser,
                         ["sound_sensor"],
                         "i2c_address",
-                        "0x48",
+                        "0x4B",
                     )
                 ),
                 0,

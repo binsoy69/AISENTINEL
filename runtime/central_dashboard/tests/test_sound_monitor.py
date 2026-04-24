@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import redirect_stdout
+import io
 import json
 import tempfile
 import time
@@ -13,6 +15,7 @@ FRONT_RUNTIME_DIR = TEST_ROOT / "front_node_pi"
 if str(FRONT_RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(FRONT_RUNTIME_DIR))
 
+import sound_monitor
 from sound_monitor import SoundMonitorService, ThresholdCrossingGate, build_settings_from_sound_config
 
 
@@ -40,7 +43,7 @@ class SoundMonitorTests(unittest.TestCase):
                     alert_threshold_db=58.0,
                     incident_cooldown_sec=12.0,
                     i2c_bus=1,
-                    i2c_address=0x48,
+                    i2c_address=0x4B,
                     adc_channel=0,
                     full_scale=4.096,
                     data_rate=1600,
@@ -49,11 +52,55 @@ class SoundMonitorTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(settings.address, 0x48)
+            self.assertEqual(settings.address, 0x4B)
             self.assertEqual(settings.channel, 0)
             self.assertEqual(settings.alert_threshold_db, 58.0)
             self.assertEqual(settings.ref_quiet_rms_mv, 14.12)
             self.assertEqual(settings.ref_loud_rms_mv, 29.84)
+
+    def test_open_ads1015_closes_bus_when_initial_config_write_fails(self):
+        class FakeBus:
+            def __init__(self):
+                self.closed = False
+
+            def write_i2c_block_data(self, _address, _register, _data):
+                raise OSError(121, "Remote I/O error")
+
+            def close(self):
+                self.closed = True
+
+        fake_bus = FakeBus()
+        original_load_smbus = sound_monitor.load_smbus
+        sound_monitor.load_smbus = lambda: lambda _bus_number: fake_bus
+        try:
+            with self.assertRaises(OSError):
+                sound_monitor.open_ads1015(
+                    SimpleNamespace(
+                        bus=1,
+                        address=0x4B,
+                        channel=0,
+                        full_scale=4.096,
+                        data_rate=1600,
+                    )
+                )
+        finally:
+            sound_monitor.load_smbus = original_load_smbus
+
+        self.assertTrue(fake_bus.closed)
+
+    def test_print_i2c_error_uses_configured_bus_and_lists_common_addresses(self):
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            sound_monitor.print_i2c_error(
+                SimpleNamespace(bus=3, address=0x49),
+                OSError(121, "Remote I/O error"),
+            )
+
+        text = output.getvalue()
+        self.assertIn("0x49", text)
+        self.assertIn("i2cdetect -y 3", text)
+        self.assertIn("0x48, 0x49, 0x4A, or 0x4B", text)
 
     def test_threshold_crossing_gate_requires_reset_and_cooldown(self):
         gate = ThresholdCrossingGate()
@@ -154,7 +201,7 @@ class SoundMonitorTests(unittest.TestCase):
                     alert_threshold_db=55.0,
                     incident_cooldown_sec=10.0,
                     i2c_bus=1,
-                    i2c_address=0x48,
+                    i2c_address=0x4B,
                     adc_channel=0,
                     full_scale=4.096,
                     data_rate=1600,
