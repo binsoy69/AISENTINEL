@@ -43,7 +43,7 @@ class SoundMonitorTests(unittest.TestCase):
                     alert_threshold_db=58.0,
                     incident_cooldown_sec=12.0,
                     i2c_bus=1,
-                    i2c_address=0x4B,
+                    i2c_address=0x48,
                     adc_channel=0,
                     full_scale=4.096,
                     data_rate=1600,
@@ -52,7 +52,7 @@ class SoundMonitorTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(settings.address, 0x4B)
+            self.assertEqual(settings.address, 0x48)
             self.assertEqual(settings.channel, 0)
             self.assertEqual(settings.alert_threshold_db, 58.0)
             self.assertEqual(settings.ref_quiet_rms_mv, 14.12)
@@ -77,7 +77,7 @@ class SoundMonitorTests(unittest.TestCase):
                 sound_monitor.open_ads1015(
                     SimpleNamespace(
                         bus=1,
-                        address=0x4B,
+                        address=0x48,
                         channel=0,
                         full_scale=4.096,
                         data_rate=1600,
@@ -201,7 +201,7 @@ class SoundMonitorTests(unittest.TestCase):
                     alert_threshold_db=55.0,
                     incident_cooldown_sec=10.0,
                     i2c_bus=1,
-                    i2c_address=0x4B,
+                    i2c_address=0x48,
                     adc_channel=0,
                     full_scale=4.096,
                     data_rate=1600,

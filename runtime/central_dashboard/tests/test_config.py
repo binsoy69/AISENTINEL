@@ -42,7 +42,7 @@ class ConfigTests(unittest.TestCase):
             str(ROOT / "node_front_runtime.ini")
         )
         self.assertTrue(config.sound_sensor.enabled)
-        self.assertEqual(config.sound_sensor.i2c_address, 0x4B)
+        self.assertEqual(config.sound_sensor.i2c_address, 0x48)
         self.assertEqual(config.sound_sensor.alert_threshold_db, 55.0)
         self.assertEqual(
             config.sound_sensor.calibration_config,

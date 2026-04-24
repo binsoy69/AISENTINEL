@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
         "--address",
         type=lambda value: int(value, 0),
         default=None,
-        help="ADS1015 I2C address in decimal or hex, for example 0x4B",
+        help="ADS1015 I2C address in decimal or hex, for example 0x48",
     )
     parser.add_argument(
         "--channel",
