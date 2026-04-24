@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import sys
 
+import cv2
 import numpy as np
 
 TEST_ROOT = Path(__file__).resolve().parents[2]
@@ -287,13 +288,16 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 ["poster", "gif"],
             )
 
-    def test_normalize_front_runtime_incident_falls_back_to_event_frame_for_poster(self):
+    def test_normalize_front_runtime_incident_builds_gif_from_frames_when_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             evidence_root = tmpdir / "evidence"
-            event_frame = evidence_root / "objects" / "events" / "incident-001" / "frames" / "f11_event.jpg"
-            event_frame.parent.mkdir(parents=True, exist_ok=True)
-            event_frame.write_bytes(b"x")
+            frame_dir = evidence_root / "objects" / "events" / "incident-001" / "frames"
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            pre_frame = frame_dir / "f10_pre01.jpg"
+            event_frame = frame_dir / "f11_event.jpg"
+            cv2.imwrite(str(pre_frame), np.zeros((32, 48, 3), dtype=np.uint8))
+            cv2.imwrite(str(event_frame), np.full((32, 48, 3), 180, dtype=np.uint8))
 
             incident, assets = _normalize_front_runtime_incident(
                 node_config=SimpleNamespace(node_id="front", camera_label="Front Camera"),
@@ -309,15 +313,55 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                     "summary": "Student #08 cheat sheet detected",
                     "frame_count": 1,
                     "manifest_relpath": "objects/events/incident-001/manifest.json",
-                    "frame_relpaths": ["objects/events/incident-001/frames/f11_event.jpg"],
+                    "frame_relpaths": [
+                        "objects/events/incident-001/frames/f10_pre01.jpg",
+                        "objects/events/incident-001/frames/f11_event.jpg",
+                    ],
+                },
+            )
+
+            self.assertEqual(incident.asset_names, ["poster.jpg", "evidence.gif"])
+            self.assertEqual(len(assets), 2)
+            self.assertEqual(assets[0]["asset_type"], "poster")
+            self.assertEqual(assets[0]["filename"], "poster.jpg")
+            self.assertEqual(assets[0]["file_path"], event_frame)
+            self.assertEqual(assets[1]["asset_type"], "gif")
+            self.assertEqual(assets[1]["filename"], "evidence.gif")
+            self.assertEqual(
+                assets[1]["file_path"],
+                evidence_root / "objects" / "events" / "incident-001" / "evidence.gif",
+            )
+            self.assertTrue(assets[1]["file_path"].is_file())
+
+    def test_normalize_front_runtime_noise_incident_stays_snapshot_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            evidence_root = tmpdir / "evidence"
+            poster_path = evidence_root / "noise" / "events" / "noise-001" / "poster.jpg"
+            gif_path = evidence_root / "noise" / "events" / "noise-001" / "evidence.gif"
+            poster_path.parent.mkdir(parents=True, exist_ok=True)
+            poster_path.write_bytes(b"noise-jpeg")
+            gif_path.write_bytes(b"should-not-sync")
+
+            incident, assets = _normalize_front_runtime_incident(
+                node_config=SimpleNamespace(node_id="front", camera_label="Front Camera"),
+                session=SimpleNamespace(session_id="session-001"),
+                evidence_root=evidence_root,
+                front_manifest={
+                    "id": "noise-001",
+                    "behavior_type": "noise",
+                    "type_label": "Noise Threshold Exceeded",
+                    "created_at": "2026-04-08T10:00:00Z",
+                    "display_time": "10:00 AM",
+                    "summary": "Estimated noise 60.0 dB exceeded 55.0 dB threshold.",
+                    "manifest_relpath": "noise/events/noise-001/manifest.json",
+                    "poster_relpath": "noise/events/noise-001/poster.jpg",
+                    "gif_relpath": "noise/events/noise-001/evidence.gif",
                 },
             )
 
             self.assertEqual(incident.asset_names, ["poster.jpg"])
-            self.assertEqual(len(assets), 1)
-            self.assertEqual(assets[0]["asset_type"], "poster")
-            self.assertEqual(assets[0]["filename"], "poster.jpg")
-            self.assertEqual(assets[0]["file_path"], event_frame)
+            self.assertEqual([asset["asset_type"] for asset in assets], ["poster"])
 
     def test_resolve_calibration_path_prefers_saved_default_and_auto_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:

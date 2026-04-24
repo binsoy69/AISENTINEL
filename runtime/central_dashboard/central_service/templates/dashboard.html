@@ -405,6 +405,39 @@
         </section>
     </main>
 
+    <div class="alert-toast hidden" id="alert-toast" aria-live="assertive" aria-atomic="true">
+        <div class="alert-toast-accent"></div>
+        <div class="alert-toast-inner">
+            <div class="alert-toast-head">
+                <div class="alert-toast-icon" aria-hidden="true">!</div>
+                <p class="alert-toast-label" id="alert-toast-label">Cheating Detected</p>
+                <button class="alert-toast-close" id="alert-toast-close" type="button" aria-label="Dismiss alert">&times;</button>
+            </div>
+            <dl class="alert-toast-details">
+                <div>
+                    <dt>Seat No:</dt>
+                    <dd id="alert-toast-seat">--</dd>
+                </div>
+                <div>
+                    <dt>Type:</dt>
+                    <dd id="alert-toast-type">--</dd>
+                </div>
+                <div>
+                    <dt>Camera:</dt>
+                    <dd id="alert-toast-camera">--</dd>
+                </div>
+                <div>
+                    <dt>Time:</dt>
+                    <dd id="alert-toast-time">--</dd>
+                </div>
+            </dl>
+            <button class="ghost-button ghost-button-tight alert-toast-action" id="alert-toast-evidence" type="button" data-open-evidence hidden>Open Evidence</button>
+        </div>
+        <div class="alert-toast-progress">
+            <span class="alert-toast-progress-fill" id="alert-toast-progress-fill"></span>
+        </div>
+    </div>
+
     <div class="evidence-viewer hidden" id="evidence-viewer">
         <div class="evidence-viewer-backdrop" data-close-viewer></div>
         <div class="evidence-viewer-card" role="dialog" aria-modal="true" aria-labelledby="evidence-viewer-title">

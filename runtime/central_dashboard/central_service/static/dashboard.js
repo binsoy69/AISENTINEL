@@ -3,6 +3,7 @@ const initialState = bootstrapNode ? JSON.parse(bootstrapNode.textContent) : {};
 
 const POLL_MS = 2000;
 const CLOCK_MS = 1000;
+const ALERT_DISMISS_MS = 2000;
 const EMPTY_SUBJECT_VALUE = "__unassigned_subject__";
 const CHART_COLORS = ["#3f83ff", "#f1c44c", "#ff6558", "#21badf", "#7a63ff", "#28d17c"];
 const SEAT_LAYOUT = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
@@ -67,6 +68,15 @@ const els = {
     evidenceViewerMeta: document.getElementById("evidence-viewer-meta"),
     evidenceViewerTitle: document.getElementById("evidence-viewer-title"),
     evidenceViewerOpen: document.getElementById("evidence-viewer-open"),
+    alertToast: document.getElementById("alert-toast"),
+    alertToastLabel: document.getElementById("alert-toast-label"),
+    alertToastSeat: document.getElementById("alert-toast-seat"),
+    alertToastType: document.getElementById("alert-toast-type"),
+    alertToastCamera: document.getElementById("alert-toast-camera"),
+    alertToastTime: document.getElementById("alert-toast-time"),
+    alertToastClose: document.getElementById("alert-toast-close"),
+    alertToastEvidence: document.getElementById("alert-toast-evidence"),
+    alertToastProgressFill: document.getElementById("alert-toast-progress-fill"),
 };
 
 const state = {
@@ -77,6 +87,10 @@ const state = {
     recordsFilter: "all",
     recordsQuery: "",
     knownIncidentIds: new Set((Array.isArray(initialState.incidents) ? initialState.incidents : []).map((incident) => String(incident.incident_id || "")).filter(Boolean)),
+    activeAlertId: null,
+    dismissedIncidentIds: new Set(),
+    alertTimer: 0,
+    alertHideTimer: 0,
     sessionHydrated: false,
     sessionFormDirty: false,
     sessionDefaultsApplied: false,
@@ -178,6 +192,18 @@ function incidentAlertMessage(incident) {
         return `ALERT: Students #${seats.join(", #")} - ${typeLabel}`;
     }
     return `ALERT: ${typeLabel}`;
+}
+
+function isNoiseIncident(incident) {
+    return String(incident?.behavior_type || "").toLowerCase() === "noise";
+}
+
+function incidentEvidenceUrl(incident) {
+    return incident?.gif_url || incident?.poster_url || "";
+}
+
+function alertPopupLabel(incident) {
+    return isNoiseIncident(incident) ? "Noise Alert" : "Cheating Detected";
 }
 
 function incidentsInCurrentWorkspace(incidents) {
@@ -678,7 +704,7 @@ function renderRecords() {
             <td>${escapeHtml(seatSummary(incident))}</td>
             <td><span class="type-pill ${toneClass(incident.type_label)}">${escapeHtml(incident.type_label || incident.behavior_type || "Incident")}</span></td>
             <td>${escapeHtml(incident.camera_label || incident.node_id || "--")}</td>
-            <td>${incident.gif_url || incident.poster_url ? `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(incident.gif_url ? "View GIF" : "View Snapshot")}</button>` : `<span class="evidence-button is-disabled">No media</span>`}</td>
+            <td>${incidentEvidenceUrl(incident) ? `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">${escapeHtml(incident.gif_url ? "View GIF" : "View Snapshot")}</button>` : `<span class="evidence-button is-disabled">No media</span>`}</td>
             <td><select class="review-select ${reviewMeta(incident.review_status).className}" data-review-incident="${escapeHtml(incident.incident_id)}">${reviewOptions(incident.review_status)}</select></td>
         </tr>
     `).join("") : `<tr><td class="table-empty" colspan="6">${escapeHtml(selectionMissing ? "Select a subject code and session first to load stored records." : state.recordsQuery || state.recordsFilter !== "all" ? "No records match the current search or review filter." : session ? "No synced incidents are available for the selected session yet." : "No synced incidents are available for this workspace yet.")}</td></tr>`;
@@ -819,7 +845,7 @@ function findIncidentById(incidentId) {
 
 function openViewer(incidentId) {
     const incident = findIncidentById(incidentId);
-    const evidenceUrl = incident?.gif_url || incident?.poster_url || "";
+    const evidenceUrl = incidentEvidenceUrl(incident);
     if (!incident || !evidenceUrl) return;
     els.evidenceViewerImage.src = evidenceUrl;
     els.evidenceViewerTitle.textContent = incident.type_label || "Incident evidence";
@@ -833,6 +859,59 @@ function closeViewer() {
     els.evidenceViewerImage.removeAttribute("src");
     els.evidenceViewerOpen.href = "#";
     els.evidenceViewerMeta.textContent = "";
+}
+
+function hideAlertToast() {
+    window.clearTimeout(state.alertHideTimer);
+    els.alertToast.classList.remove("is-visible");
+    els.alertToastProgressFill.classList.remove("is-animating");
+    state.alertHideTimer = window.setTimeout(() => {
+        if (!els.alertToast.classList.contains("is-visible")) {
+            els.alertToast.classList.add("hidden");
+        }
+    }, 220);
+}
+
+function restartAlertProgress() {
+    els.alertToastProgressFill.classList.remove("is-animating");
+    els.alertToastProgressFill.style.animationDuration = `${ALERT_DISMISS_MS}ms`;
+    void els.alertToastProgressFill.offsetWidth;
+    els.alertToastProgressFill.classList.add("is-animating");
+}
+
+function dismissAlertPopup(incidentId) {
+    if (incidentId) state.dismissedIncidentIds.add(String(incidentId));
+    window.clearTimeout(state.alertTimer);
+    state.activeAlertId = null;
+    hideAlertToast();
+}
+
+function showAlertPopup(incident) {
+    const incidentId = String(incident?.incident_id || "");
+    if (!incident || !incidentId || state.dismissedIncidentIds.has(incidentId)) return;
+    if (state.activeAlertId === incidentId) return;
+
+    window.clearTimeout(state.alertTimer);
+    window.clearTimeout(state.alertHideTimer);
+    state.activeAlertId = incidentId;
+
+    const evidenceUrl = incidentEvidenceUrl(incident);
+    els.alertToastLabel.textContent = alertPopupLabel(incident);
+    els.alertToastSeat.textContent = seatSummary(incident);
+    els.alertToastType.textContent = incident.type_label || incident.behavior_type || "--";
+    els.alertToastCamera.textContent = incident.camera_label || incident.node_id || "--";
+    els.alertToastTime.textContent = incident.display_time || "--";
+    els.alertToastEvidence.hidden = !evidenceUrl;
+    els.alertToastEvidence.dataset.openEvidence = evidenceUrl ? incidentId : "";
+    els.alertToast.classList.remove("hidden");
+    restartAlertProgress();
+    requestAnimationFrame(() => {
+        els.alertToast.classList.add("is-visible");
+    });
+
+    state.alertTimer = window.setTimeout(() => {
+        dismissAlertPopup(incidentId);
+    }, ALERT_DISMISS_MS);
 }
 
 function setActiveSection(section) {
@@ -878,7 +957,7 @@ async function refresh() {
         render();
         const visibleNewIncidents = incidentsInCurrentWorkspace(newIncidents);
         if (visibleNewIncidents.length) {
-            showBanner(incidentAlertMessage(latestIncident(visibleNewIncidents)), true);
+            showAlertPopup(latestIncident(visibleNewIncidents));
         }
     } finally {
         state.pollInFlight = false;
@@ -995,7 +1074,7 @@ function exportRecords() {
         incident.type_label || incident.behavior_type || "Incident",
         incident.camera_label || incident.node_id || "",
         reviewMeta(incident.review_status).label,
-        incident.gif_url || incident.poster_url || "",
+        incidentEvidenceUrl(incident),
     ])];
     const blob = new Blob([rows.map((row) => row.map(csvEscape).join(",")).join("\n")], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
@@ -1044,6 +1123,7 @@ els.recordsSession.addEventListener("change", (event) => {
 });
 els.recordsClear.addEventListener("click", () => clearRecords().catch((error) => showBanner(error.message, true)));
 els.recordsExport.addEventListener("click", exportRecords);
+els.alertToastClose.addEventListener("click", () => dismissAlertPopup(state.activeAlertId));
 
 document.addEventListener("click", (event) => {
     const sectionButton = event.target.closest("[data-section]");
@@ -1055,7 +1135,11 @@ document.addEventListener("click", (event) => {
     const deleteSubjectButton = event.target.closest("[data-delete-subject]");
     if (deleteSubjectButton) return deleteSubject(deleteSubjectButton.dataset.deleteSubject).catch((error) => showBanner(error.message, true));
     const evidenceButton = event.target.closest("[data-open-evidence]");
-    if (evidenceButton) return openViewer(evidenceButton.dataset.openEvidence);
+    if (evidenceButton) {
+        openViewer(evidenceButton.dataset.openEvidence);
+        if (evidenceButton.closest("#alert-toast")) dismissAlertPopup(evidenceButton.dataset.openEvidence);
+        return;
+    }
     if (event.target.closest("[data-close-viewer]")) closeViewer();
 });
 
