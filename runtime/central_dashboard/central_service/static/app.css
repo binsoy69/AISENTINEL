@@ -491,6 +491,7 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     letter-spacing: 0.14em;
 }
 .records-actions { justify-content: flex-end; gap: var(--space-sm); }
+.records-actions > .primary-button { display: none !important; }
 .records-select, .records-search { min-width: 190px; }
 .feed-view { min-width: 9.75rem; }
 .overview-grid, .feeds-panel, .workspace-panel, .history-panel, .system-panel { gap: 0.875rem; }

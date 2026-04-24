@@ -970,7 +970,14 @@ function setActiveWorkspaceTab(tab) {
     document.querySelectorAll(".workspace-tabpanel").forEach((panel) => panel.classList.toggle("is-active", panel.id === `workspace-${tab}`));
 }
 
+function removeLegacyRecordsPrimaryActions() {
+    for (const button of document.querySelectorAll(".records-actions button.primary-button")) {
+        if (button.textContent.trim().toLowerCase() === "export") button.remove();
+    }
+}
+
 function render() {
+    removeLegacyRecordsPrimaryActions();
     hydrateSessionForm();
     syncSessionAccordionState();
     renderSessionSummary();
@@ -983,6 +990,7 @@ function render() {
     renderSeatMap();
     renderHistory();
     renderSystem();
+    removeLegacyRecordsPrimaryActions();
 }
 
 async function fetchJson(url, options = {}) {

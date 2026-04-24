@@ -728,6 +728,13 @@ function render(snapshot) {
     renderHistory(snapshot);
     renderSystem(snapshot);
     showPopup(snapshot.popup_incident);
+    removeLegacyRecordsPrimaryActions();
+}
+
+function removeLegacyRecordsPrimaryActions() {
+    for (const button of document.querySelectorAll(".records-actions button.primary-button")) {
+        if (button.textContent.trim().toLowerCase() === "export") button.remove();
+    }
 }
 
 function bindControls() {
