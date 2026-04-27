@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+import threading
+import time
 import tempfile
 import unittest
 import sys
@@ -63,6 +65,8 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 post_event_frames=2,
             )
 
+            runner_ready = threading.Event()
+
             def fake_runner(runtime: NodeRuntime, session) -> None:
                 raw = np.zeros((72, 128, 3), dtype=np.uint8)
                 annotated = np.full((72, 128, 3), 200, dtype=np.uint8)
@@ -101,6 +105,9 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                         }
                     ],
                 )
+                runner_ready.set()
+                while not runtime.should_stop_requested():
+                    time.sleep(0.01)
 
             runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
             ack = runtime.start_session(
@@ -113,7 +120,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 }
             )
             self.assertTrue(ack.ok)
-            runtime._session_thread.join(timeout=2.0)  # type: ignore[union-attr]
+            self.assertTrue(runner_ready.wait(timeout=2.0))
 
             heartbeat = runtime.heartbeat()
             self.assertEqual(heartbeat.extra["detector_mode"], "front_runtime")
@@ -170,6 +177,8 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 post_event_frames=2,
             )
 
+            runner_ready = threading.Event()
+
             def fake_runner(runtime: NodeRuntime, session) -> None:
                 poster_path = tmpdir / "evidence" / session.session_id / "noise-001" / "poster.jpg"
                 poster_path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,6 +220,9 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                         }
                     ],
                 )
+                runner_ready.set()
+                while not runtime.should_stop_requested():
+                    time.sleep(0.01)
 
             runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
             ack = runtime.start_session(
@@ -223,7 +235,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 }
             )
             self.assertTrue(ack.ok)
-            runtime._session_thread.join(timeout=2.0)  # type: ignore[union-attr]
+            self.assertTrue(runner_ready.wait(timeout=2.0))
 
             heartbeat = runtime.heartbeat()
             self.assertTrue(heartbeat.extra["sound"]["enabled"])

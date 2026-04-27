@@ -144,6 +144,7 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                     "end_time": "11:00",
                 }
             )["session"]["session_id"]
+            repo.update_session_status(session_id, "running")
 
             manager.upsert_incident(
                 IncidentManifest(
@@ -237,6 +238,114 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertEqual(retry_incidents[0]["sync_status"], "ready")
             self.assertEqual(retry_incidents[0]["frame_count"], 4)
             self.assertTrue(retry_incidents[0]["gif_url"])
+            connection.close()
+
+    def test_central_rejects_stale_node_uploads_outside_running_session(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            connection = connect_db(tmpdir / "central" / "central.sqlite3")
+            init_db(connection)
+            repo = CentralRepository(connection)
+            config = CentralServiceConfig(
+                config_path=tmpdir / "central.ini",
+                host="127.0.0.1",
+                port=8090,
+                db_path=tmpdir / "central" / "central.sqlite3",
+                evidence_root=tmpdir / "central" / "evidence",
+                node_offline_after_sec=120,
+                proxy_timeout_sec=5.0,
+                stream_timeout_sec=5.0,
+                browser_auth=BrowserAuthConfig(
+                    username="admin",
+                    password="admin123",
+                    secret_key="test-secret",
+                    session_ttl_minutes=60,
+                ),
+                known_nodes={
+                    "front": KnownNodeConfig("front", "Front Node", "Front Camera", "front-key"),
+                },
+            )
+            manager = CentralServiceManager(config, repo)
+
+            stale_manifest_result = manager.upsert_incident(
+                IncidentManifest(
+                    incident_id="stale-incident",
+                    session_id="old-session",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="object",
+                    type_label="Using Phone",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=1,
+                    summary="Stale incident",
+                    sync_status="ready",
+                    sync_attempts=0,
+                    asset_names=[],
+                ).to_dict()
+            )
+            self.assertEqual(stale_manifest_result["status_code"], 409)
+            self.assertEqual(repo.list_incidents(), [])
+
+            stale_asset_result = manager.store_asset(
+                {
+                    "incident_id": "stale-incident",
+                    "session_id": "old-session",
+                    "node_id": "front",
+                    "asset_type": "poster",
+                    "filename": "poster.jpg",
+                    "content_base64": base64.b64encode(b"stale").decode("ascii"),
+                    "content_sha256": "",
+                    "size_bytes": 5,
+                }
+            )
+            self.assertEqual(stale_asset_result["status_code"], 409)
+            self.assertFalse(any(config.evidence_root.rglob("*")))
+
+            session_id = manager.create_session(
+                {
+                    "subject_code": "CS321",
+                    "professor": "Dr. Reyes",
+                    "session_date": "2026-04-24",
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                }
+            )["session"]["session_id"]
+            repo.update_session_status(session_id, "running")
+
+            valid_manifest_result = manager.upsert_incident(
+                IncidentManifest(
+                    incident_id="valid-incident",
+                    session_id=session_id,
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="object",
+                    type_label="Using Phone",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=1,
+                    summary="Valid incident",
+                    sync_status="ready",
+                    sync_attempts=0,
+                    asset_names=["poster.jpg"],
+                ).to_dict()
+            )
+            self.assertTrue(valid_manifest_result["ok"])
+            valid_asset_result = manager.store_asset(
+                {
+                    "incident_id": "valid-incident",
+                    "session_id": session_id,
+                    "node_id": "front",
+                    "asset_type": "poster",
+                    "filename": "poster.jpg",
+                    "content_base64": base64.b64encode(b"poster").decode("ascii"),
+                    "content_sha256": "",
+                    "size_bytes": 6,
+                }
+            )
+            self.assertTrue(valid_asset_result["ok"])
             connection.close()
 
     def test_stop_session_marks_session_stopped_even_when_one_node_fails(self):
@@ -416,9 +525,6 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertTrue(all(item["ok"] for item in start_response.get_json()["results"]))
 
             time.sleep(0.35)
-            stop_response = central_client.post(f"/api/v1/sessions/{session_id}/stop", json={})
-            self.assertEqual(stop_response.status_code, 200)
-
             for _ in range(4):
                 front_runtime.sync_once()
                 mid_runtime.sync_once()
@@ -525,6 +631,9 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertIn("sessions_history", payload)
             self.assertEqual(payload["sessions_history"][0]["session_id"], session_id)
             self.assertGreaterEqual(payload["sessions_history"][0]["incident_count"], 2)
+
+            stop_response = central_client.post(f"/api/v1/sessions/{session_id}/stop", json={})
+            self.assertEqual(stop_response.status_code, 200)
 
             first_incident = payload["incidents"][0]
             review_response = central_client.post(

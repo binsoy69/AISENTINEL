@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - optional on target systems
 SYNC_OK = "ok"
 SYNC_RETRY = "retry"
 SYNC_DROP = "drop"
+ACTIVE_SYNC_STATES = {"starting", "running"}
 GIF_UPLOAD_MIN_TIMEOUT_SEC = 20.0
 GIF_UPLOAD_MAX_TIMEOUT_SEC = 120.0
 GIF_UPLOAD_ASSUMED_BYTES_PER_SEC = 256 * 1024
@@ -53,7 +54,9 @@ class NodeRuntime:
         self.http_client = http_client or StdlibHttpClient()
         self.front_runtime_runner = front_runtime_runner or run_front_runtime_session
         self.sync_queue = LocalSyncQueue(config.local_db_path)
+        self._closed = False
         self.config.evidence_root.mkdir(parents=True, exist_ok=True)
+        self._clear_sync_backlog("node runtime startup")
 
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
@@ -104,6 +107,9 @@ class NodeRuntime:
         self.stop_session()
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self.shutdown()
         self.sync_queue.close()
 
@@ -187,14 +193,9 @@ class NodeRuntime:
                     state=self._status,
                     message="Session is already running.",
                 )
-        if self.config.clear_sync_backlog_on_session_start:
-            purged = self.sync_queue.clear_except_session(session.session_id)
-            if purged:
-                self.logger.info(
-                    "cleared %s stale sync queue item(s) before session start: session_id=%s",
-                    purged,
-                    session.session_id,
-                )
+        self._clear_sync_backlog(
+            f"session start accepted for {session.session_id}"
+        )
         with self._lock:
             self._session = session
             self._session_stop = threading.Event()
@@ -234,6 +235,8 @@ class NodeRuntime:
             self._session = None
             self._fps = 0.0
             self._clear_frames_locked()
+        self._clear_sync_backlog("session stopped")
+        self._sync_wake.clear()
         return CommandAck(
             ok=True,
             node_id=self.config.node_id,
@@ -322,12 +325,18 @@ class NodeRuntime:
             return False
 
     def sync_once(self) -> int:
+        active_session_id = self._active_sync_session_id()
+        if not active_session_id:
+            self._clear_sync_backlog("node has no active sync session")
+            return 0
+
+        self.sync_queue.clear_except_session(active_session_id)
         self.sync_queue.purge_asset_type("frame")
         synced = 0
         for item in self._prioritized_due_items():
             try:
                 if item.item_type == "manifest":
-                    disposition = SYNC_OK if self._sync_manifest(item.payload) else SYNC_RETRY
+                    disposition = self._sync_manifest(item.payload)
                 else:
                     if self.sync_queue.has_pending_manifest(item.incident_id):
                         self.sync_queue.mark_retry(item, "waiting for incident manifest sync")
@@ -351,8 +360,7 @@ class NodeRuntime:
         return synced
 
     def _prioritized_due_items(self) -> list[SyncQueueItem]:
-        with self._lock:
-            active_session_id = self._session.session_id if self._session else ""
+        active_session_id = self._active_sync_session_id()
 
         items = self.sync_queue.due_items(limit=32)
         if not active_session_id:
@@ -366,7 +374,7 @@ class NodeRuntime:
 
         return sorted(items, key=item_priority)[:8]
 
-    def _sync_manifest(self, payload: dict) -> bool:
+    def _sync_manifest(self, payload: dict) -> str:
         manifest = payload.get("manifest_payload")
         if not isinstance(manifest, dict):
             manifest_path = Path(payload["manifest_path"])
@@ -377,7 +385,14 @@ class NodeRuntime:
             headers=self._auth_headers(),
             timeout=self.config.http_timeout_sec,
         )
-        return result.ok
+        if result.ok:
+            return SYNC_OK
+        if result.status_code == 409 and _is_stale_session_rejection(result):
+            self._set_error(f"manifest upload dropped: {_result_error_text(result)}")
+            return SYNC_DROP
+        if result.status_code:
+            self._set_error(f"manifest upload failed ({result.status_code}): {_result_error_text(result)}")
+        return SYNC_RETRY
 
     def _sync_asset(self, item: SyncQueueItem) -> str:
         payload = item.payload
@@ -429,6 +444,9 @@ class NodeRuntime:
         if result.status_code == 404 and _is_incident_not_found(result):
             self._set_error(f"evidence upload dropped: {_result_error_text(result)}")
             return SYNC_DROP
+        if result.status_code == 409 and _is_stale_session_rejection(result):
+            self._set_error(f"evidence upload dropped: {_result_error_text(result)}")
+            return SYNC_DROP
         if result.status_code:
             self._set_error(f"evidence upload failed ({result.status_code}): {_result_error_text(result)}")
         return SYNC_RETRY
@@ -449,6 +467,8 @@ class NodeRuntime:
                 if self._status != "error":
                     self._status = "idle"
                 self._session_thread = None
+            self._clear_sync_backlog("session thread completed")
+            self._sync_wake.clear()
 
     def _run_motion_session(self, session: SessionSpec) -> None:
         builder = EvidenceBuilder(self.config)
@@ -566,6 +586,13 @@ class NodeRuntime:
         manifest: IncidentManifest,
         assets: list[dict],
     ) -> None:
+        if not self._incident_matches_active_session(manifest):
+            self.logger.info(
+                "ignored finalized incident outside active session: incident=%s session=%s",
+                manifest.incident_id,
+                manifest.session_id,
+            )
+            return
         self.sync_queue.enqueue(
             "manifest",
             manifest.incident_id,
@@ -590,6 +617,13 @@ class NodeRuntime:
         self._sync_wake.set()
 
     def record_detected_incident(self, manifest: IncidentManifest) -> None:
+        if not self._incident_matches_active_session(manifest):
+            self.logger.info(
+                "ignored detected incident outside active session: incident=%s session=%s",
+                manifest.incident_id,
+                manifest.session_id,
+            )
+            return
         self.sync_queue.enqueue(
             "manifest",
             manifest.incident_id,
@@ -697,6 +731,26 @@ class NodeRuntime:
         with self._lock:
             self._last_error = str(message)
 
+    def _active_sync_session_id(self) -> str:
+        with self._lock:
+            if self._session and self._status in ACTIVE_SYNC_STATES:
+                return self._session.session_id
+        return ""
+
+    def _incident_matches_active_session(self, manifest: IncidentManifest) -> bool:
+        active_session_id = self._active_sync_session_id()
+        return bool(active_session_id and manifest.session_id == active_session_id)
+
+    def _clear_sync_backlog(self, reason: str) -> int:
+        purged = self.sync_queue.clear()
+        if purged:
+            self.logger.info(
+                "cleared %s sync queue item(s): %s",
+                purged,
+                reason,
+            )
+        return purged
+
 
 def _is_incident_not_found(result) -> bool:
     payload = result.json_data
@@ -705,6 +759,15 @@ def _is_incident_not_found(result) -> bool:
     else:
         error_text = result.text
     return "incident not found" in error_text.lower()
+
+
+def _is_stale_session_rejection(result) -> bool:
+    error_text = _result_error_text(result).lower()
+    return (
+        "stale" in error_text
+        or "active running session" in error_text
+        or "not accepting node uploads" in error_text
+    )
 
 
 def _queue_item_session_id(item: SyncQueueItem) -> str:

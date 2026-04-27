@@ -309,6 +309,9 @@ class CentralServiceManager:
 
     def upsert_incident(self, payload: dict) -> dict:
         manifest = IncidentManifest.from_dict(payload)
+        stale_result = self._stale_upload_result(manifest.session_id, "incident")
+        if stale_result is not None:
+            return stale_result
         self.repository.upsert_incident(manifest)
         return {"ok": True, "incident": self._public_incident(manifest.incident_id)}
 
@@ -322,11 +325,14 @@ class CentralServiceManager:
             return {"ok": False, "error": "Missing required evidence fields.", "status_code": 400}
 
         incident = self.repository.get_incident(asset.incident_id)
+        if not asset.session_id and incident is not None:
+            asset.session_id = str(incident.get("session_id", "")).strip()
+        stale_result = self._stale_upload_result(asset.session_id, "evidence")
+        if stale_result is not None:
+            return stale_result
         if incident is None:
             return {"ok": False, "error": "Incident not found.", "status_code": 404}
 
-        if not asset.session_id:
-            asset.session_id = str(incident.get("session_id", "")).strip()
         asset.asset_type = _normalize_asset_type(asset.asset_type, asset.filename)
         asset.filename = _normalize_asset_filename(asset.asset_type, asset.filename)
 
@@ -401,6 +407,22 @@ class CentralServiceManager:
         if candidate != root and root not in candidate.parents:
             raise ValueError("Evidence path is outside the configured evidence root.")
         return candidate
+
+    def _stale_upload_result(self, session_id: str, upload_type: str) -> dict | None:
+        target_session_id = str(session_id or "").strip()
+        active_session = self.repository.get_active_session()
+        active_status = str(active_session.get("status", "") if active_session else "").strip().lower()
+        active_session_id = str(active_session.get("session_id", "") if active_session else "").strip()
+        if active_status in {"running", "degraded"} and active_session_id == target_session_id:
+            return None
+        return {
+            "ok": False,
+            "error": (
+                f"Stale {upload_type} upload rejected: session "
+                f"{target_session_id or '-'} is not the active running session."
+            ),
+            "status_code": 409,
+        }
 
     def _public_incident(self, incident_id: str) -> dict:
         incident = self.repository.get_incident(incident_id)

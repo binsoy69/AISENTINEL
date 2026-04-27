@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import threading
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -170,7 +172,50 @@ def build_config(
     )
 
 
+def activate_runtime_session(runtime: NodeRuntime, session_id: str = "session-1") -> None:
+    with runtime._lock:
+        runtime._session = SessionSpec(session_id=session_id)
+        runtime._status = "running"
+
+
 class NodeRuntimeSyncTests(unittest.TestCase):
+    def test_runtime_startup_clears_existing_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            queue = LocalSyncQueue(tmpdir / "queue.sqlite3")
+            queue.enqueue(
+                "manifest",
+                "old-incident",
+                "front",
+                {"manifest_payload": {"incident_id": "old-incident", "session_id": "old-session"}},
+            )
+            self.assertEqual(queue.backlog_count(), 1)
+            queue.close()
+
+            runtime = NodeRuntime(build_config(tmpdir))
+
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
+    def test_sync_without_active_session_clears_backlog_without_uploading(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            http_client = FakeHttpClient([HttpResult(200, {"ok": True}, '{"ok": true}')])
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            runtime.sync_queue.enqueue(
+                "manifest",
+                "old-incident",
+                "front",
+                {"manifest_payload": {"incident_id": "old-incident", "session_id": "old-session"}},
+            )
+
+            synced = runtime.sync_once()
+
+            self.assertEqual(synced, 0)
+            self.assertEqual(http_client.requests, [])
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            runtime.close()
+
     def test_asset_waits_when_manifest_is_still_pending(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -178,11 +223,12 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             asset_path.write_bytes(b"jpeg-data")
             http_client = FakeHttpClient([HttpResult(503, {"error": "down"}, "down")])
             runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
             runtime.sync_queue.enqueue(
                 "manifest",
                 "incident-1",
                 "front",
-                {"manifest_payload": {"incident_id": "incident-1", "node_id": "front"}},
+                {"manifest_payload": {"incident_id": "incident-1", "session_id": "session-1", "node_id": "front"}},
             )
             runtime.sync_queue.enqueue(
                 "asset",
@@ -219,6 +265,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
                 ]
             )
             runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
             runtime.sync_queue.enqueue(
                 "asset",
                 "incident-1",
@@ -259,6 +306,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
                 ]
             )
             runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
             runtime.sync_queue.enqueue(
                 "asset",
                 "incident-1",
@@ -300,6 +348,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             gif_path.write_bytes(b"gif-data")
             http_client = FakeHttpClient([HttpResult(200, {"ok": True}, '{"ok": true}')])
             runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
             runtime.sync_queue.enqueue(
                 "asset",
                 "incident-1",
@@ -340,6 +389,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             poster_path.write_bytes(b"poster")
             gif_path.write_bytes(b"gif")
             runtime = NodeRuntime(build_config(tmpdir))
+            activate_runtime_session(runtime, "session-001")
 
             runtime.record_finalized_incident(
                 IncidentManifest(
@@ -377,6 +427,36 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual([item.payload.get("asset_type") for item in items[1:]], ["gif", "poster"])
             runtime.close()
 
+    def test_late_incident_for_non_current_session_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            runtime = NodeRuntime(build_config(tmpdir))
+            activate_runtime_session(runtime, "session-current")
+
+            runtime.record_finalized_incident(
+                IncidentManifest(
+                    incident_id="incident-stale",
+                    session_id="session-old",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="object",
+                    type_label="Using Phone",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=2,
+                    summary="Stale session incident",
+                    sync_status="ready",
+                    sync_attempts=0,
+                    asset_names=[],
+                ),
+                [],
+            )
+
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            self.assertEqual(runtime.heartbeat().incident_count, 0)
+            runtime.close()
+
     def test_missing_gif_asset_is_rebuilt_from_frames_before_upload(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -392,6 +472,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
                 ]
             )
             runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
             runtime.sync_queue.enqueue(
                 "manifest",
                 "incident-1",
@@ -434,6 +515,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             gif_path.write_bytes(b"gif-data")
             http_client = FakeHttpClient([HttpResult(0, None, "timed out")])
             runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
             runtime.sync_queue.enqueue(
                 "asset",
                 "incident-1",
@@ -493,12 +575,14 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             )
             with runtime._lock:
                 runtime._session = SessionSpec(session_id="current-session")
+                runtime._status = "running"
 
             runtime.sync_once()
 
-            self.assertGreaterEqual(len(http_client.requests), 1)
+            self.assertEqual(len(http_client.requests), 1)
             self.assertTrue(http_client.requests[0][0].endswith("/api/v1/incidents"))
             self.assertEqual(http_client.requests[0][1]["incident_id"], "current-incident")
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 
     def test_start_session_can_clear_stale_backlog(self):
@@ -542,6 +626,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             runtime = NodeRuntime(build_config(tmpdir))
+            activate_runtime_session(runtime, "session-001")
 
             runtime.record_detected_incident(
                 IncidentManifest(
@@ -576,6 +661,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             runtime = NodeRuntime(build_config(tmpdir))
+            activate_runtime_session(runtime, "session-001")
 
             runtime.record_finalized_incident(
                 IncidentManifest(
@@ -599,6 +685,126 @@ class NodeRuntimeSyncTests(unittest.TestCase):
 
             self.assertEqual(runtime.sync_queue.backlog_count(), 1)
             self.assertTrue(runtime._sync_wake.is_set())
+            runtime.close()
+
+    def test_stop_session_clears_items_finalized_during_shutdown(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            runner_ready = threading.Event()
+
+            def fake_runner(runtime: NodeRuntime, session: SessionSpec) -> None:
+                runtime.mark_session_running()
+                runner_ready.set()
+                while not runtime.should_stop_requested():
+                    time.sleep(0.01)
+                runtime.record_finalized_incident(
+                    IncidentManifest(
+                        incident_id="incident-late",
+                        session_id=session.session_id,
+                        node_id="front",
+                        camera_label="Front Camera",
+                        behavior_type="head",
+                        type_label="Head Tilting",
+                        student_numbers=[5],
+                        created_at="2026-04-24T01:00:00Z",
+                        display_time="09:00 AM",
+                        frame_count=1,
+                        summary="Late shutdown incident",
+                        sync_status="queued",
+                        sync_attempts=0,
+                        asset_names=[],
+                    ),
+                    [],
+                )
+
+            config = replace(build_config(tmpdir), detector_mode="front_runtime")
+            runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
+            try:
+                ack = runtime.start_session(
+                    {
+                        "session_id": "session-001",
+                        "subject_code": "CS321",
+                        "professor": "Dr. Reyes",
+                    }
+                )
+                self.assertTrue(ack.ok)
+                self.assertTrue(runner_ready.wait(timeout=2.0))
+
+                stop_ack = runtime.stop_session()
+
+                self.assertTrue(stop_ack.ok)
+                self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            finally:
+                runtime.close()
+
+    def test_stale_manifest_conflict_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            http_client = FakeHttpClient(
+                [
+                    HttpResult(
+                        409,
+                        {"error": "Stale incident upload rejected: session session-1 is not the active running session."},
+                        '{"error": "stale"}',
+                    )
+                ]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
+            runtime.sync_queue.enqueue(
+                "manifest",
+                "incident-1",
+                "front",
+                {
+                    "manifest_payload": {
+                        "incident_id": "incident-1",
+                        "session_id": "session-1",
+                        "node_id": "front",
+                    }
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            self.assertIn("dropped", runtime.heartbeat().last_error)
+            runtime.close()
+
+    def test_stale_asset_conflict_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            asset_path = tmpdir / "poster.jpg"
+            asset_path.write_bytes(b"jpeg-data")
+            http_client = FakeHttpClient(
+                [
+                    HttpResult(
+                        409,
+                        {"error": "Stale evidence upload rejected: session session-1 is not the active running session."},
+                        '{"error": "stale"}',
+                    )
+                ]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime)
+            runtime.sync_queue.enqueue(
+                "asset",
+                "incident-1",
+                "front",
+                {
+                    "incident_id": "incident-1",
+                    "session_id": "session-1",
+                    "asset_type": "poster",
+                    "file_path": str(asset_path),
+                    "filename": "poster.jpg",
+                },
+            )
+
+            runtime.sync_once()
+
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            self.assertIn("dropped", runtime.heartbeat().last_error)
             runtime.close()
 
 

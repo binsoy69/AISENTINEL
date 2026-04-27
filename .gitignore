@@ -52,3 +52,7 @@ tests/tests_on_pi/evidence*
 # Local experiments and generated conversion outputs
 model_conversion/*
 notebooks/*
+
+
+*.pdf
+programs/generate_*

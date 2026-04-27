@@ -17,6 +17,7 @@ from central_dashboard.central_service.config import BrowserAuthConfig, CentralS
 from central_dashboard.central_service.proxy import relay_stream_chunks
 from central_dashboard.node_agent.app import create_app as create_node_app
 from central_dashboard.node_agent.config import NodeAgentConfig
+from central_dashboard.shared.dto import SessionSpec
 
 
 class AuthTests(unittest.TestCase):
@@ -59,6 +60,15 @@ class AuthTests(unittest.TestCase):
             app = create_central_app(config)
             client = app.test_client()
             headers = {"X-Node-Id": "front", "X-Api-Key": "front-key"}
+            repository = app.extensions["central_repository"]
+            repository.create_session(
+                SessionSpec(
+                    session_id="session-1",
+                    subject_code="CS321",
+                    professor="Dr. Reyes",
+                )
+            )
+            repository.update_session_status("session-1", "running")
 
             manifest_response = client.post(
                 "/api/v1/incidents",
