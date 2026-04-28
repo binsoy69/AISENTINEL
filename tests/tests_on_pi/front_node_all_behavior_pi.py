@@ -1938,7 +1938,7 @@ Examples:
   python3 front_node_all_behavior_pi.py
   python3 front_node_all_behavior_pi.py --port 9090
   python3 front_node_all_behavior_pi.py --object-confidence 0.4
-  python3 front_node_all_behavior_pi.py --pose-model /path/to/yolov8s_pose.hef
+  python3 front_node_all_behavior_pi.py --pose-model /path/to/yolo_pose_model.hef
         """,
     )
     parser.add_argument(
@@ -1992,8 +1992,8 @@ Examples:
     print("=" * 78)
     print("  AISENTINEL - All Behavior Detection")
     print("  Pose model      : shared YOLOv8 pose HEF")
-    print("  Hand model      : sentinel-yolo11n-min.hef")
-    print("  Object model    : sentinel-yolov11n_new.hef")
+    print("  Hand model      : hand_model.hef")
+    print("  Object model    : cheat-sheet_phone_model.hef")
     print("  Detects         : head tilt | shoulder turn | passing papers")
     print("                    hands under table | phone | cheat_sheet")
     print("  Calibration flow: ROI -> assignment -> table-edge lines")

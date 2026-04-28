@@ -27,6 +27,8 @@ import socket
 import cv2
 import numpy as np
 
+from front_node_pi_model_paths import OBJECT_MODEL_PATH
+
 # ──────────────────────────────────────────────────────────────
 # Try to import Flask for web preview
 # ──────────────────────────────────────────────────────────────
@@ -75,6 +77,8 @@ COCO_LABELS = [
     "hair drier", "toothbrush",
 ]
 
+FRONT_NODE_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
+
 np.random.seed(42)
 COLORS = np.random.randint(0, 255, size=(len(COCO_LABELS), 3), dtype=np.uint8)
 
@@ -112,12 +116,20 @@ def nms(boxes, scores, iou_threshold=0.45):
     return np.array(keep)
 
 
-def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640, conf_threshold=0.5):
+def labels_for_model(model_path):
+    if os.path.basename(str(model_path)) == OBJECT_MODEL_PATH.name:
+        return FRONT_NODE_OBJECT_LABELS
+    return COCO_LABELS
+
+
+def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640, conf_threshold=0.5,
+                           labels=None):
     """
     Decode Hailo NMS-postprocessed YOLOv8 output.
     Output is a list of 80 arrays (one per class), each row: [y1, x1, y2, x2, score]
     Coordinates are normalized [0, 1].
     """
+    label_names = labels or COCO_LABELS
     if isinstance(raw_output, dict):
         output = list(raw_output.values())[0]
     else:
@@ -154,7 +166,7 @@ def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640, conf_thresh
             y2_px = int(np.clip(y2 * img_h, 0, img_h))
             if x2_px - x1_px < 2 or y2_px - y1_px < 2:
                 continue
-            label = COCO_LABELS[cls_id] if cls_id < len(COCO_LABELS) else f"class_{cls_id}"
+            label = label_names[cls_id] if cls_id < len(label_names) else f"class_{cls_id}"
             detections.append({
                 "label": label, "confidence": score,
                 "box": [x1_px, y1_px, x2_px, y2_px], "class_id": int(cls_id),
@@ -165,8 +177,9 @@ def postprocess_yolov8_nms(raw_output, img_w, img_h, input_size=640, conf_thresh
 
 
 def postprocess_yolov8_raw(raw_output, img_w, img_h, input_size=640,
-                           conf_threshold=0.5, iou_threshold=0.45):
+                           conf_threshold=0.5, iou_threshold=0.45, labels=None):
     """Decode raw (non-NMS) YOLOv8 output tensor."""
+    label_names = labels or COCO_LABELS
     if isinstance(raw_output, dict):
         arrays = list(raw_output.values())
         if len(arrays) == 1:
@@ -221,7 +234,7 @@ def postprocess_yolov8_raw(raw_output, img_w, img_h, input_size=640,
         cls_mask = class_ids == cls_id
         cls_boxes, cls_scores = boxes_xyxy[cls_mask], confidences[cls_mask]
         for idx in nms(cls_boxes, cls_scores, iou_threshold):
-            label = COCO_LABELS[cls_id] if cls_id < len(COCO_LABELS) else f"class_{cls_id}"
+            label = label_names[cls_id] if cls_id < len(label_names) else f"class_{cls_id}"
             detections.append({
                 "label": label, "confidence": float(cls_scores[idx]),
                 "box": cls_boxes[idx].astype(int).tolist(), "class_id": int(cls_id),
@@ -263,12 +276,13 @@ def draw_detections(frame, detections, fps=0):
 class HailoDetector:
     """Wraps HailoRT Python API for YOLOv8 inference on the Hailo NPU."""
 
-    def __init__(self, hef_path, conf_threshold=0.5, iou_threshold=0.45):
+    def __init__(self, hef_path, conf_threshold=0.5, iou_threshold=0.45, labels=None):
         if not HAILO_AVAILABLE:
             raise RuntimeError("hailo_platform is not installed.")
 
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
+        self.labels = labels or COCO_LABELS
 
         print(f"[INFO] Loading HEF model: {hef_path}")
         self.hef = HEF(hef_path)
@@ -323,6 +337,7 @@ class HailoDetector:
                 results, img_w, img_h,
                 input_size=self.input_w,
                 conf_threshold=self.conf_threshold,
+                labels=self.labels,
             )
         else:
             return postprocess_yolov8_raw(
@@ -330,6 +345,7 @@ class HailoDetector:
                 input_size=self.input_w,
                 conf_threshold=self.conf_threshold,
                 iou_threshold=self.iou_threshold,
+                labels=self.labels,
             )
 
 
@@ -506,8 +522,8 @@ def main():
     global _latest_frame
 
     parser = argparse.ArgumentParser(description="YOLO Detection - RPi 5 + Hailo + USB Cam")
-    parser.add_argument("--model", default="yolov8s.hef",
-                        help="Path to .hef model file (default: yolov8s.hef)")
+    parser.add_argument("--model", default=str(OBJECT_MODEL_PATH),
+                        help=f"Path to .hef model file (default: {OBJECT_MODEL_PATH})")
     parser.add_argument("--camera", type=int, default=None,
                         help="Camera index (default: auto-detect)")
     parser.add_argument("--width", type=int, default=640,
@@ -536,7 +552,7 @@ def main():
             print("        wget -O yolov8n.hef https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/"
                   "ModelZoo/Compiled/v2.14.0/hailo8/yolov8n.hef")
             sys.exit(1)
-        detector = HailoDetector(args.model, args.threshold, args.iou)
+        detector = HailoDetector(args.model, args.threshold, args.iou, labels_for_model(args.model))
 
     # ── Open USB camera ──────────────────────────────────────
     if args.camera is not None:

@@ -25,6 +25,8 @@ import time
 import argparse
 from datetime import datetime
 
+from front_node_pi_model_paths import OBJECT_MODEL_PATH
+
 # Check prerequisites before importing heavy libraries
 HAILO_MODULE = None  # Will be set after successful import
 
@@ -227,6 +229,14 @@ COCO_LABELS = [
     "toothbrush"
 ]
 
+FRONT_NODE_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
+
+
+def labels_for_model(model_path):
+    if os.path.basename(str(model_path)) == OBJECT_MODEL_PATH.name:
+        return FRONT_NODE_OBJECT_LABELS
+    return COCO_LABELS
+
 
 class HailoDetector:
     """
@@ -426,6 +436,9 @@ def draw_detections(frame, detections):
 
 def find_default_hef():
     """Try to find a default HEF model file"""
+    if OBJECT_MODEL_PATH.exists():
+        return str(OBJECT_MODEL_PATH)
+
     search_paths = [
         "/usr/share/hailo-models",
         "/usr/local/share/hailo-models",
@@ -549,7 +562,7 @@ def main():
     
     # Initialize detector
     try:
-        detector = HailoDetector(hef_path, args.confidence)
+        detector = HailoDetector(hef_path, args.confidence, labels_for_model(hef_path))
     except Exception as e:
         print(f"\n[ERROR] Failed to initialize detector: {e}")
         print("\nMake sure:")

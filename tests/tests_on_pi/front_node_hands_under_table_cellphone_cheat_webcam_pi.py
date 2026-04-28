@@ -16,9 +16,9 @@ This script keeps the same calibration flow as the video-based test:
   9. Console alerts + evidence screenshots saved to ./evidence_combined/
 
 It reuses the same models and logic:
-  - yolov8s_pose.hef for person detection / tracking
-  - sentinel-yolo11n-min.hef for hand detection
-  - sentinel-yolov11n_new.hef for phone / cheat_sheet detection
+  - yolo_pose_model.hef for person detection / tracking
+  - hand_model.hef for hand detection
+  - cheat-sheet_phone_model.hef for phone / cheat_sheet detection
 """
 
 import sys
@@ -1111,8 +1111,8 @@ Examples:
     print("=" * 72)
     print("  AISENTINEL - Combined Pi Detection (Webcam)")
     print("  Person detection : pose model (IoU tracked)")
-    print("  Hand detection   : sentinel-yolo11n-min.hef (hand class)")
-    print("  Object detection : sentinel-yolov11n_new.hef (phone + cheat_sheet)")
+    print("  Hand detection   : hand_model.hef (hand class)")
+    print("  Object detection : cheat-sheet_phone_model.hef (phone + cheat_sheet)")
     print("  Calibration flow : ROI -> assignment -> desk polygons -> table-edge lines")
     print("  Source           : live webcam")
     print("=" * 72)

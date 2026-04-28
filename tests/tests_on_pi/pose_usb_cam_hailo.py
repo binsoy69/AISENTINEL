@@ -15,10 +15,10 @@ Usage:
     python3 pose_usb_cam_hailo.py --cpu --port 8080
 
     # Hailo accelerated mode (requires .hef model)
-    python3 pose_usb_cam_hailo.py --model yolov8s_pose.hef --port 8080
+    python3 pose_usb_cam_hailo.py --model models/yolo_pose_model.hef --port 8080
 
     # With behavioral analysis logging
-    python3 pose_usb_cam_hailo.py --model yolov8s_pose.hef --log behaviors.log --save-frames
+    python3 pose_usb_cam_hailo.py --model models/yolo_pose_model.hef --log behaviors.log --save-frames
 
 Requirements:
     - Raspberry Pi 5 with Trixie OS
@@ -38,6 +38,8 @@ from datetime import datetime
 
 import cv2
 import numpy as np
+
+from front_node_pi_model_paths import POSE_MODEL_PATH
 
 # ──────────────────────────────────────────────────────────────
 # Try to import Flask for web preview
@@ -969,7 +971,7 @@ Examples:
   python3 pose_usb_cam_hailo.py --simple --cpu --port 8080
 
   # Simple mode on Hailo (skeleton + keypoints only)
-  python3 pose_usb_cam_hailo.py --simple --model ~/AISENTINEL/models/yolov8s_pose.hef --port 8080
+  python3 pose_usb_cam_hailo.py --simple --model ~/AISENTINEL/models/yolo_pose_model.hef --port 8080
 
   # CPU mode (immediate testing, auto-downloads model)
   python3 pose_usb_cam_hailo.py --cpu --port 8080
@@ -984,8 +986,8 @@ Examples:
 
     # Model configuration
     parser.add_argument("--model", "--hef", dest="model",
-                       default="yolov8s_pose.hef",
-                       help="Path to .hef model file (default: yolov8s_pose.hef)")
+                       default=str(POSE_MODEL_PATH),
+                       help=f"Path to .hef model file (default: {POSE_MODEL_PATH})")
     parser.add_argument("--cpu-model", default="yolo11n-pose.pt",
                        help="Ultralytics pose model for CPU/simple mode (default: yolo11n-pose.pt)")
 

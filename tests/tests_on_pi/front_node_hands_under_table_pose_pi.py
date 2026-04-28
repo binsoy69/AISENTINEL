@@ -76,7 +76,8 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
-POSE_MODEL_PATH = REPO_ROOT / "models" / "yolov8s_pose.hef"
+from front_node_pi_model_paths import POSE_MODEL_PATH
+
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_hands"
 
 # ── COCO 17-Keypoint Indices ────────────────────────────────
@@ -1671,7 +1672,7 @@ Examples:
     model_path = Path(args.model)
     if not model_path.exists():
         print(f"{TC.RED}[ERROR] Pose HEF model not found: {model_path}{TC.RESET}")
-        print("Use a YOLO pose model compiled for Hailo (e.g. yolov8s_pose.hef).")
+        print("Use a YOLO pose model compiled for Hailo (e.g. yolo_pose_model.hef).")
         sys.exit(1)
 
     # ── Select video via file dialog ────────────────────────

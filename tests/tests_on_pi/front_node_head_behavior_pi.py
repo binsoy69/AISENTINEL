@@ -18,7 +18,7 @@ Workflow:
   4. Console alerts + evidence screenshots saved to ./evidence/
 
 Inference runs on the Hailo-8 NPU using HailoRT Python API with
-yolov8s_pose.hef (no Ultralytics / no GStreamer dependency at runtime).
+yolo_pose_model.hef (no Ultralytics / no GStreamer dependency at runtime).
 
 A simple IoU tracker maintains person identity across frames so that
 the student assignments from the first frame persist throughout the video.
@@ -53,7 +53,8 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
-POSE_MODEL_PATH = REPO_ROOT / "models" / "yolov8s_pose.hef"
+from front_node_pi_model_paths import POSE_MODEL_PATH
+
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_head"
 
 # ── COCO 17-Keypoint Indices ────────────────────────────────
@@ -1316,7 +1317,7 @@ def main():
         epilog="""
 Examples:
   python3 front_node_head_behavior_pi.py
-  python3 front_node_head_behavior_pi.py --model /path/to/yolov8s_pose.hef
+  python3 front_node_head_behavior_pi.py --model /path/to/yolo_pose_model.hef
   python3 front_node_head_behavior_pi.py --port 9090
         """,
     )

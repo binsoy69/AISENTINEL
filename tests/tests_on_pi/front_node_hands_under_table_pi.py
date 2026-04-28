@@ -9,8 +9,8 @@ table-edge line and then stay missing for a sustained period, suggesting
 hands are hidden under the table.
 
 Inference runs on the Hailo-8 NPU using two models:
-  - Pose model (yolov8s_pose.hef) for person detection & tracking
-  - Shared sentinel detection model (sentinel-yolo11n-min.hef); this
+  - Pose model (yolo_pose_model.hef) for person detection & tracking
+  - Hand detection model (hand_model.hef); this
     script uses only its 'hand' class
 
 Algorithm:
@@ -72,12 +72,12 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
-POSE_MODEL_PATH = REPO_ROOT / "models" / "yolov8s_pose.hef"
-HAND_MODEL_PATH = REPO_ROOT / "models" / "sentinel-yolo11n-min.hef"
+from front_node_pi_model_paths import HAND_MODEL_PATH, POSE_MODEL_PATH
+
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_hands"
 
 # ── Detection classes ────────────────────────────────────────
-# Shared sentinel model order for models/sentinel-yolo11n-min.hef:
+# Hand model order for models/hand_model.hef:
 #   {0: 'calculator', 1: 'cellphone', 2: 'cheat_sheet',
 #    3: 'hand', 4: 'paper', 5: 'student'}
 HAND_MODEL_CLASS_NAMES = {
@@ -1740,8 +1740,8 @@ def main():
         epilog="""
 Examples:
   python3 front_node_hands_under_table_pi.py
-  python3 front_node_hands_under_table_pi.py --pose-model /path/to/pose.hef
-  python3 front_node_hands_under_table_pi.py --hand-model /path/to/sentinel-yolo11n-min.hef
+  python3 front_node_hands_under_table_pi.py --pose-model /path/to/yolo_pose_model.hef
+  python3 front_node_hands_under_table_pi.py --hand-model /path/to/hand_model.hef
   python3 front_node_hands_under_table_pi.py --port 9090
         """,
     )

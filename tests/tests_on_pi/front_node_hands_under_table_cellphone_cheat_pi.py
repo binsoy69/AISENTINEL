@@ -7,9 +7,9 @@ front_node_hands_under_table_pi.py while also running the object-cheating model
 from front_node_cellphone_cheat_pi.py.
 
 Models used:
-  - yolov8s_pose.hef for person detection / tracking
-  - sentinel-yolo11n-min.hef for hand detection
-  - sentinel-yolov11n_new.hef for phone / cheat_sheet detection
+  - yolo_pose_model.hef for person detection / tracking
+  - hand_model.hef for hand detection
+  - cheat-sheet_phone_model.hef for phone / cheat_sheet detection
 
 Workflow:
   1. File dialog opens to select a video
@@ -909,8 +909,8 @@ Examples:
     print("=" * 72)
     print("  AISENTINEL - Combined Pi Detection")
     print("  Person detection : pose model (IoU tracked)")
-    print("  Hand detection   : sentinel-yolo11n-min.hef (hand class)")
-    print("  Object detection : sentinel-yolov11n_new.hef (phone + cheat_sheet)")
+    print("  Hand detection   : hand_model.hef (hand class)")
+    print("  Object detection : cheat-sheet_phone_model.hef (phone + cheat_sheet)")
     print("  Calibration flow : ROI -> assignment -> desk polygons -> table-edge lines")
     print("=" * 72)
     print()

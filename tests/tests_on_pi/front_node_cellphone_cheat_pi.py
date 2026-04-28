@@ -4,7 +4,7 @@ Cellphone / Cheat Sheet Detection - Raspberry Pi + Hailo AI HAT
 ================================================================
 Pi counterpart of front_node_cellphone_cheat_pc.py.
 
-Runs the sentinel-yolov11n_new.hef object detection model on the Hailo-8 NPU,
+Runs the cheat-sheet_phone_model.hef object detection model on the Hailo-8 NPU,
 detecting phone and cheat_sheet objects associated with tracked students.
 The model also contains a hand class, but this script ignores it.
 
@@ -15,7 +15,7 @@ Workflow:
   4. Console alerts + evidence screenshots saved to ./evidence_obj/
 
 Inference runs on the Hailo-8 NPU using HailoRT Python API with
-sentinel-yolov11n_new.hef (no Ultralytics / no GStreamer dependency at runtime).
+cheat-sheet_phone_model.hef (no Ultralytics / no GStreamer dependency at runtime).
 
 A simple IoU tracker maintains student identity across frames so that
 the student assignments from the first frame persist throughout the video.
@@ -52,8 +52,9 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
-POSE_MODEL_PATH = REPO_ROOT / "models" / "yolov8s_pose.hef"
-OBJ_MODEL_PATH = REPO_ROOT / "models" / "yolov11n-sentinel-new" / "sentinel-yolov11n_new.hef"
+from front_node_pi_model_paths import OBJECT_MODEL_PATH, POSE_MODEL_PATH
+
+OBJ_MODEL_PATH = OBJECT_MODEL_PATH
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_obj"
 
 # ── Class mapping (from exported sentinel_new.onnx metadata) ─

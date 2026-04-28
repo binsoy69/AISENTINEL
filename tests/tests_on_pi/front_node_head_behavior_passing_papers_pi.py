@@ -833,7 +833,7 @@ def main():
 Examples:
   python3 front_node_head_behavior_passing_papers_pi.py
   python3 front_node_head_behavior_passing_papers_pi.py --port 9090
-  python3 front_node_head_behavior_passing_papers_pi.py --model /path/to/yolov8s_pose.hef
+  python3 front_node_head_behavior_passing_papers_pi.py --model /path/to/yolo_pose_model.hef
         """,
     )
     parser.add_argument(
