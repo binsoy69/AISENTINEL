@@ -50,7 +50,7 @@ class ConfigTests(unittest.TestCase):
             (ROOT.parents[1] / "tests" / "tests_on_pi" / "ky037_ads1015_config.json").resolve(strict=False),
         )
 
-    def test_dashboard_js_renders_evidence_processing_snapshot_and_gif_states(self):
+    def test_dashboard_js_renders_evidence_processing_snapshot_state(self):
         script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(
             encoding="utf-8"
         )
@@ -58,11 +58,17 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("function evidenceCellMarkup", script)
         self.assertIn("Evidence processing", script)
         self.assertIn("View Snapshot", script)
-        self.assertIn("View GIF", script)
+        self.assertNotIn("View GIF", script)
         self.assertLess(
             script.index("if (incident?.poster_url)"),
             script.index("Evidence processing"),
         )
+
+    def test_front_and_mid_runtime_configs_load_spam_suppression(self):
+        for filename in ("node_front_runtime.ini", "node_mid_runtime.ini"):
+            config = front_runtime_config.load_runtime_config(str(ROOT / filename))
+            self.assertEqual(config.spam_suppression.duplicate_suppression_sec, 60.0)
+            self.assertEqual(config.spam_suppression.clear_required_sec, 3.0)
 
     def test_central_dashboard_records_export_controls_are_removed(self):
         script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(

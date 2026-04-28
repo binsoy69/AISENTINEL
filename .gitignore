@@ -48,6 +48,7 @@ tests/evidence_hands/*
 tests/evidence_pose/*
 tests/evidence/*
 tests/tests_on_pi/evidence*
+tests/tests_on_pc/evidence*
 
 # Local experiments and generated conversion outputs
 model_conversion/*
@@ -56,3 +57,4 @@ notebooks/*
 
 *.pdf
 programs/generate_*
+

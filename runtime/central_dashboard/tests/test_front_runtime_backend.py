@@ -27,9 +27,48 @@ from central_dashboard.shared.dto import IncidentManifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FRONT_NODE_ROOT = ROOT.parent / "front_node_pi"
+if str(FRONT_NODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(FRONT_NODE_ROOT))
+
+import front_node_all_behavior_pi as combined_runtime  # type: ignore
 
 
 class FrontRuntimeBackendTests(unittest.TestCase):
+    def test_head_tilt_and_shoulder_turn_share_public_head_tilt_label(self):
+        self.assertEqual(
+            combined_runtime._sequence_type_label(
+                {"behavior_type": "head", "behavior": "head_tilt"}
+            ),
+            "Head Tilt",
+        )
+        self.assertEqual(
+            combined_runtime._sequence_type_label(
+                {"behavior_type": "head", "behavior": "shoulder_turn"}
+            ),
+            "Head Tilt",
+        )
+
+    def test_incident_suppressor_blocks_repeated_head_signals_until_clear_and_window(self):
+        suppressor = combined_runtime.IncidentSuppressor(
+            duplicate_suppression_sec=60.0,
+            clear_required_sec=3.0,
+        )
+        key = combined_runtime._head_suppression_key(5)
+
+        suppressor.begin_frame()
+        self.assertTrue(suppressor.allow(key, 10.0))
+        suppressor.end_frame(10.0)
+
+        suppressor.begin_frame()
+        self.assertFalse(suppressor.allow(key, 12.0))
+        suppressor.end_frame(12.0)
+
+        suppressor.begin_frame()
+        suppressor.end_frame(70.0)
+        suppressor.begin_frame()
+        self.assertTrue(suppressor.allow(key, 71.0))
+
     def test_front_runtime_runner_publishes_frames_and_queues_sync_items(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -87,12 +126,12 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                         node_id=config.node_id,
                         camera_label=config.camera_label,
                         behavior_type="head",
-                        type_label="Head Tilting",
+                        type_label="Head Tilt",
                         student_numbers=[5],
                         created_at="2026-04-08T10:00:00Z",
                         display_time="10:00 AM",
                         frame_count=1,
-                        summary="Student #05 head tilting detected",
+                        summary="Student #05 head tilt detected",
                         sync_status="queued",
                         sync_attempts=0,
                         asset_names=["frames/poster.jpg"],
@@ -134,7 +173,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             asset_item = next(item for item in due_items if item.item_type == "asset")
             self.assertEqual(
                 manifest_item.payload["manifest_payload"]["type_label"],
-                "Head Tilting",
+                "Head Tilt",
             )
             self.assertEqual(asset_item.payload["filename"], "frames/poster.jpg")
 
@@ -261,8 +300,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             evidence_root = tmpdir / "evidence"
             frame_a = evidence_root / "head_behavior" / "events" / "incident-001" / "frames" / "f00_pre.jpg"
             frame_b = evidence_root / "head_behavior" / "events" / "incident-001" / "frames" / "f01_event.jpg"
-            gif_path = evidence_root / "head_behavior" / "events" / "incident-001" / "evidence.gif"
-            for path in (frame_a, frame_b, gif_path):
+            for path in (frame_a, frame_b):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"x")
 
@@ -273,11 +311,11 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 front_manifest={
                     "id": "incident-001",
                     "behavior_type": "head",
-                    "type_label": "Head Tilting",
+                    "type_label": "Head Tilt",
                     "student_numbers": [5],
                     "created_at": "2026-04-08T10:00:00Z",
                     "display_time": "10:00 AM",
-                    "summary": "Student #05 head tilting detected",
+                    "summary": "Student #05 head tilt detected",
                     "frame_count": 2,
                     "manifest_relpath": "head_behavior/events/incident-001/manifest.json",
                     "poster_relpath": "head_behavior/events/incident-001/frames/f01_event.jpg",
@@ -293,14 +331,14 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertEqual(incident.student_numbers, [5])
             self.assertEqual(
                 [asset["filename"] for asset in assets],
-                ["poster.jpg", "evidence.gif"],
+                ["poster.jpg"],
             )
             self.assertEqual(
                 [asset["asset_type"] for asset in assets],
-                ["poster", "gif"],
+                ["poster"],
             )
 
-    def test_normalize_front_runtime_incident_builds_gif_from_frames_when_missing(self):
+    def test_normalize_front_runtime_incident_uses_event_frame_as_snapshot_only(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             evidence_root = tmpdir / "evidence"
@@ -332,18 +370,12 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(incident.asset_names, ["poster.jpg", "evidence.gif"])
-            self.assertEqual(len(assets), 2)
+            self.assertEqual(incident.asset_names, ["poster.jpg"])
+            self.assertEqual(incident.frame_count, 1)
+            self.assertEqual(len(assets), 1)
             self.assertEqual(assets[0]["asset_type"], "poster")
             self.assertEqual(assets[0]["filename"], "poster.jpg")
             self.assertEqual(assets[0]["file_path"], event_frame)
-            self.assertEqual(assets[1]["asset_type"], "gif")
-            self.assertEqual(assets[1]["filename"], "evidence.gif")
-            self.assertEqual(
-                assets[1]["file_path"],
-                evidence_root / "objects" / "events" / "incident-001" / "evidence.gif",
-            )
-            self.assertTrue(assets[1]["file_path"].is_file())
 
     def test_normalize_front_runtime_noise_incident_stays_snapshot_only(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:

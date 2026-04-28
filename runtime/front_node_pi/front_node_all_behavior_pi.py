@@ -68,6 +68,8 @@ OBJECT_EVIDENCE_DIR = EVIDENCE_DIR / "objects"
 NOISE_EVIDENCE_DIR = EVIDENCE_DIR / "noise"
 EVIDENCE_PRE_EVENT_FRAMES = 10
 EVIDENCE_POST_EVENT_FRAMES = 10
+DUPLICATE_SUPPRESSION_SEC = 60.0
+SUPPRESSION_CLEAR_REQUIRED_SEC = 3.0
 
 # ── Shared globals for Flask streaming ───────────────────────
 _latest_frame = None
@@ -92,12 +94,6 @@ try:
     FLASK_AVAILABLE = True
 except ImportError:
     FLASK_AVAILABLE = False
-
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
 
 try:
     from werkzeug.security import check_password_hash
@@ -240,6 +236,64 @@ def _merge_session_details(raw_details: dict | None) -> dict:
 def _slugify(raw_text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", raw_text.strip().lower())
     return slug.strip("-") or "incident"
+
+
+class IncidentSuppressor:
+    """Suppress repeated same-student/same-behavior incidents in one session."""
+
+    def __init__(self, duplicate_suppression_sec: float,
+                 clear_required_sec: float) -> None:
+        self.duplicate_suppression_sec = max(0.0, float(duplicate_suppression_sec))
+        self.clear_required_sec = max(0.0, float(clear_required_sec))
+        self._states = {}
+        self._frame_keys = set()
+
+    def begin_frame(self) -> None:
+        self._frame_keys = set()
+
+    def allow(self, key: str, now: float) -> bool:
+        key = str(key)
+        self._frame_keys.add(key)
+        state = self._states.setdefault(
+            key,
+            {"last_seen": -999.0, "last_emitted": -999.0, "active": False},
+        )
+        was_clear = (now - state["last_seen"]) >= self.clear_required_sec
+        state["last_seen"] = now
+
+        if state["active"] and not was_clear:
+            return False
+        if (now - state["last_emitted"]) < self.duplicate_suppression_sec:
+            state["active"] = True
+            return False
+
+        state["last_emitted"] = now
+        state["active"] = True
+        return True
+
+    def end_frame(self, now: float) -> None:
+        for key, state in self._states.items():
+            if key in self._frame_keys:
+                continue
+            if (now - state["last_seen"]) >= self.clear_required_sec:
+                state["active"] = False
+
+
+def _head_suppression_key(student_num: int) -> str:
+    return f"head_tilt:{int(student_num)}"
+
+
+def _hands_suppression_key(student_num: int) -> str:
+    return f"hands_missing:{int(student_num)}"
+
+
+def _object_suppression_key(student_num: int, class_name: str) -> str:
+    return f"object:{int(student_num)}:{str(class_name).strip()}"
+
+
+def _passing_suppression_key(student_a: int, student_b: int) -> str:
+    low, high = sorted((int(student_a), int(student_b)))
+    return f"passing:{low}:{high}"
 
 
 def _normalize_evidence_review_status(raw_status: str | None) -> str:
@@ -1094,11 +1148,7 @@ def _evidence_group_dir(behavior_type: str) -> Path:
 
 def _sequence_type_label(sequence) -> str:
     if sequence["behavior_type"] == "head":
-        mapping = {
-            "head_tilt": "Head Tilting",
-            "shoulder_turn": "Shoulder Turn",
-        }
-        return mapping.get(sequence["behavior"], "Head Behavior")
+        return "Head Tilt"
     if sequence["behavior_type"] == "passing":
         return "Passing Paper"
     if sequence["behavior_type"] == "hands":
@@ -1160,10 +1210,9 @@ def _ensure_sequence_storage(sequence) -> None:
         return
 
     event_dir = _evidence_group_dir(sequence["behavior_type"]) / sequence["incident_id"]
-    frames_dir = event_dir / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
+    event_dir.mkdir(parents=True, exist_ok=True)
     sequence["event_dir"] = event_dir
-    sequence["frames_dir"] = frames_dir
+    sequence["frames_dir"] = event_dir
     sequence["frame_paths"] = []
     sequence["poster_relpath"] = ""
     sequence["gif_relpath"] = ""
@@ -1172,76 +1221,15 @@ def _ensure_sequence_storage(sequence) -> None:
 
 def _save_grouped_evidence_frame(sequence, frame, frame_tag: str) -> None:
     _ensure_sequence_storage(sequence)
-    frame_path = sequence["frames_dir"] / f"{frame_tag}.jpg"
+    frame_path = sequence["event_dir"] / "poster.jpg"
     cv2.imwrite(str(frame_path), frame)
-    sequence["frame_paths"].append(frame_path)
-    if frame_tag.endswith("event") or not sequence.get("poster_relpath"):
-        sequence["poster_relpath"] = _relative_evidence_path(frame_path)
-
-
-def _write_sequence_gif(sequence) -> str:
-    if not sequence.get("frame_paths"):
-        return ""
-
-    gif_path = sequence["event_dir"] / "evidence.gif"
-
-    if PIL_AVAILABLE:
-        try:
-            frames = []
-            for frame_path in sequence["frame_paths"]:
-                with Image.open(frame_path) as image:
-                    frames.append(image.convert("P", palette=Image.ADAPTIVE))
-
-            if frames:
-                frames[0].save(
-                    gif_path,
-                    save_all=True,
-                    append_images=frames[1:],
-                    duration=220,
-                    loop=0,
-                    optimize=False,
-                )
-                return _relative_evidence_path(gif_path)
-        except Exception as exc:  # pragma: no cover - depends on image codecs
-            head_mod.log_info(f"Pillow GIF writer failed; trying OpenCV fallback: {exc}")
-
-    if not hasattr(cv2, "Animation") or not hasattr(cv2, "imwriteanimation"):
-        head_mod.log_info(
-            "GIF evidence unavailable: install Pillow or OpenCV with GIF animation support."
-        )
-        return ""
-
-    try:
-        if hasattr(cv2, "haveImageWriter") and not cv2.haveImageWriter(".gif"):
-            head_mod.log_info(
-                "GIF evidence unavailable: OpenCV does not report GIF writer support."
-            )
-            return ""
-
-        cv_frames = []
-        for frame_path in sequence["frame_paths"]:
-            frame = cv2.imread(str(frame_path))
-            if frame is not None:
-                cv_frames.append(frame)
-
-        if not cv_frames:
-            head_mod.log_info("GIF evidence unavailable: no readable evidence frames.")
-            return ""
-
-        animation = cv2.Animation()
-        animation.frames = cv_frames
-        animation.durations = [220] * len(cv_frames)
-        animation.loop_count = 0
-        if cv2.imwriteanimation(str(gif_path), animation):
-            return _relative_evidence_path(gif_path)
-        head_mod.log_info("GIF evidence unavailable: OpenCV GIF writer returned false.")
-    except Exception as exc:  # pragma: no cover - depends on image codecs
-        head_mod.log_info(f"GIF evidence unavailable: OpenCV fallback failed: {exc}")
-    return ""
+    sequence["frame_paths"] = [frame_path]
+    sequence["poster_relpath"] = _relative_evidence_path(frame_path)
+    sequence["gif_relpath"] = ""
 
 
 def _finalize_evidence_sequence(sequence) -> None:
-    sequence["gif_relpath"] = _write_sequence_gif(sequence)
+    sequence["gif_relpath"] = ""
     manifest_path = sequence["event_dir"] / "manifest.json"
     manifest_relpath = _relative_evidence_path(manifest_path)
     sequence["manifest_relpath"] = manifest_relpath
@@ -1265,7 +1253,7 @@ def _finalize_evidence_sequence(sequence) -> None:
         sequence["incident_id"],
         status="ready",
         poster_relpath=manifest.get("poster_relpath", ""),
-        gif_relpath=manifest.get("gif_relpath", ""),
+        gif_relpath="",
         manifest_relpath=manifest_relpath,
         frame_count=manifest["frame_count"],
     )
@@ -1456,7 +1444,7 @@ def _stop_evidence_writer(task_queue: Queue | None, thread: threading.Thread | N
 def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_type,
                             event_ts_sec, incident_finalize_callback=None,
                             incident_detected_callback=None, **payload):
-    """Save buffered pre-event frames, then queue event + post-event frames."""
+    """Create a single-snapshot evidence sequence for the current alert."""
     with _dashboard_lock:
         camera_label = _dashboard_state["source_label"]
         session_details = dict(_dashboard_state["session_details"])
@@ -1489,23 +1477,12 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
         except Exception as exc:  # pragma: no cover - runtime safety
             head_mod.log_info(f"Incident detected callback error: {exc}")
 
-    pre_count = len(recent_frames)
-    for relative_idx, snapshot in zip(range(-pre_count, 0), recent_frames):
-        _queue_evidence_frame(
-            task_queue,
-            sequence,
-            snapshot,
-            _evidence_frame_tag(relative_idx),
-        )
-
     sequence_queue.append(sequence)
     return sequence
 
 
 def flush_evidence_sequences(task_queue, sequence_queue, snapshot):
-    """Save the event frame and post-event frames for every active burst."""
-    active_sequences = []
-
+    """Save one event snapshot and finalize every queued alert."""
     for seq in sequence_queue:
         _queue_evidence_frame(
             task_queue,
@@ -1513,14 +1490,10 @@ def flush_evidence_sequences(task_queue, sequence_queue, snapshot):
             snapshot,
             _evidence_frame_tag(seq["next_relative_idx"]),
         )
-
         seq["next_relative_idx"] += 1
-        if seq["next_relative_idx"] <= EVIDENCE_POST_EVENT_FRAMES:
-            active_sequences.append(seq)
-        else:
-            _queue_evidence_finalize(task_queue, seq)
+        _queue_evidence_finalize(task_queue, seq)
 
-    return active_sequences
+    return []
 
 
 def create_flask_app():
@@ -2061,6 +2034,10 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     pair_states = {}
     object_cooldowns = defaultdict(lambda: -999.0)
     object_stats = defaultdict(int)
+    incident_suppressor = IncidentSuppressor(
+        DUPLICATE_SUPPRESSION_SEC,
+        SUPPRESSION_CLEAR_REQUIRED_SEC,
+    )
     evidence_sequences = []
     recent_evidence_frames = deque(maxlen=EVIDENCE_PRE_EVENT_FRAMES)
 
@@ -2102,8 +2079,11 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     )
     print(
         f"  Evidence       : {EVIDENCE_DIR} | "
-        f"{EVIDENCE_PRE_EVENT_FRAMES} pre + alert + "
-        f"{EVIDENCE_POST_EVENT_FRAMES} post frames"
+        "single alert snapshot"
+    )
+    print(
+        f"  Suppression    : {DUPLICATE_SUPPRESSION_SEC:.1f}s duplicate window | "
+        f"{SUPPRESSION_CLEAR_REQUIRED_SEC:.1f}s clear required"
     )
     print(f"  Web stream     : http://{get_local_ip()}:{port}")
     print("=" * 78)
@@ -2160,6 +2140,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 ts_sec = frame_idx / fps if fps > 0 else 0.0
             else:
                 ts_sec = time.perf_counter() - source_start
+            incident_suppressor.begin_frame()
             raw_frame = frame.copy()
 
             t0 = time.perf_counter()
@@ -2248,8 +2229,13 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     if (
                         elapsed >= head_mod.SUSTAINED_SEC
                         and head_state.can_flag("head_tilt", ts_sec)
+                        and incident_suppressor.allow(
+                            _head_suppression_key(head_state.student_num),
+                            ts_sec,
+                        )
                     ):
                         head_state.head_tilt_flagged_at = ts_sec
+                        head_state.shoulder_turn_flagged_at = ts_sec
                         head_stats["head_tilt"] += 1
                         head_mod.log_alert(
                             "HEAD TILT",
@@ -2313,21 +2299,26 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     if (
                         elapsed >= head_mod.SUSTAINED_SEC
                         and head_state.can_flag("shoulder_turn", ts_sec)
+                        and incident_suppressor.allow(
+                            _head_suppression_key(head_state.student_num),
+                            ts_sec,
+                        )
                     ):
+                        head_state.head_tilt_flagged_at = ts_sec
                         head_state.shoulder_turn_flagged_at = ts_sec
-                        head_stats["shoulder_turn"] += 1
+                        head_stats["head_tilt"] += 1
                         head_mod.log_alert(
-                            "SHOULDER TURN",
+                            "HEAD TILT",
                             head_state.student_num,
                             ts_sec,
                             (
-                                f"direction={turn_dir}, angle={shoulder_angle:.1f}deg, "
+                                f"shoulder_turn direction={turn_dir}, angle={shoulder_angle:.1f}deg, "
                                 f"sustained {elapsed:.1f}s"
                             ),
                             head_mod.TC.CYAN,
                         )
                         head_frame_events.append(
-                            ("shoulder_turn", head_state.student_num)
+                            ("head_tilt", head_state.student_num)
                         )
 
                     if elapsed >= 1.0:
@@ -2452,9 +2443,9 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         elapsed >= hands_mod.HANDS_MISSING_SUSTAIN_SEC
                         and state.can_flag(ts_sec)
                     ):
-                        state.last_flagged_at = ts_sec
                         student_num = student_map.get(tid, tid)
                         if visible_hands == 1:
+                            state.last_flagged_at = ts_sec
                             state.total_warnings += 1
                             hand_warning_total += 1
                             hands_mod.log_warning(
@@ -2464,7 +2455,11 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                                 f"line-disappear, only 1 hand visible for {elapsed:.1f}s",
                             )
                             frame_hand_warnings.append((i, student_num))
-                        else:
+                        elif incident_suppressor.allow(
+                            _hands_suppression_key(student_num),
+                            ts_sec,
+                        ):
+                            state.last_flagged_at = ts_sec
                             state.total_alerts += 1
                             hand_alert_total += 1
                             hands_mod.log_alert(
@@ -2691,6 +2686,13 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                         if (
                             interaction_dur >= pass_mod.MIN_INTERACTION_SEC
                             and ps.can_flag(ts_sec)
+                            and incident_suppressor.allow(
+                                _passing_suppression_key(
+                                    state_a.student_num,
+                                    state_b.student_num,
+                                ),
+                                ts_sec,
+                            )
                         ):
                             ps.last_flagged_at = ts_sec
                             state_a.total_alerts += 1
@@ -2773,6 +2775,10 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 if (
                     ts_sec - object_cooldowns[cooldown_key]
                     >= obj_mod.EVENT_COOLDOWN_SEC
+                    and incident_suppressor.allow(
+                        _object_suppression_key(student_num, cls_name),
+                        ts_sec,
+                    )
                 ):
                     object_alert_total += 1
                     object_alert_conf_total += conf
@@ -3140,6 +3146,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 evidence_snapshot,
             )
             recent_evidence_frames.append(evidence_snapshot)
+            incident_suppressor.end_frame(ts_sec)
 
             for sequence in new_sequences:
                 record_dashboard_incident(

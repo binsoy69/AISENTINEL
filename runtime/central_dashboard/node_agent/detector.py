@@ -13,14 +13,6 @@ import cv2
 from central_dashboard.shared.dto import IncidentManifest, make_id, utc_now_iso
 
 
-try:
-    from PIL import Image
-
-    PIL_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional on target systems
-    PIL_AVAILABLE = False
-
-
 def display_clock_now() -> str:
     return datetime.now().strftime("%I:%M %p").lstrip("0")
 
@@ -105,53 +97,24 @@ class EvidenceBuilder:
             summary=event["summary"],
             created_at=utc_now_iso(),
             display_time=display_clock_now(),
-            remaining_post_frames=self.config.post_event_frames,
+            remaining_post_frames=0,
         )
-        sequence.frames.extend(list(self.pre_frames))
         sequence.frames.append(frame.copy())
         return sequence
 
     def advance_sequence(self, sequence: PendingEvidence, frame) -> bool:
-        sequence.frames.append(frame.copy())
-        sequence.remaining_post_frames -= 1
-        return sequence.remaining_post_frames <= 0
+        return True
 
     def finalize_sequence(self, sequence: PendingEvidence) -> tuple[IncidentManifest, list[dict]]:
         incident_dir = self.config.evidence_root / sequence.session_id / sequence.incident_id
-        frames_dir = incident_dir / "frames"
-        frames_dir.mkdir(parents=True, exist_ok=True)
+        incident_dir.mkdir(parents=True, exist_ok=True)
 
         asset_records = []
-        frame_names = []
-        for index, frame in enumerate(sequence.frames):
-            name = f"frame_{index:03d}.jpg"
-            path = frames_dir / name
-            cv2.imwrite(str(path), frame)
-            frame_names.append(name)
-            asset_records.append({"asset_type": "frame", "file_path": path, "filename": name})
-
         poster_name = "poster.jpg"
         poster_path = incident_dir / poster_name
-        poster_source = sequence.frames[min(len(sequence.frames) - 1, max(0, self.config.pre_event_frames))]
+        poster_source = sequence.frames[0]
         cv2.imwrite(str(poster_path), poster_source)
         asset_records.append({"asset_type": "poster", "file_path": poster_path, "filename": poster_name})
-
-        gif_name = ""
-        if PIL_AVAILABLE and sequence.frames:
-            gif_name = "evidence.gif"
-            gif_path = incident_dir / gif_name
-            pil_frames = []
-            for frame in sequence.frames:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_frames.append(Image.fromarray(rgb))
-            pil_frames[0].save(
-                gif_path,
-                save_all=True,
-                append_images=pil_frames[1:],
-                duration=180,
-                loop=0,
-            )
-            asset_records.append({"asset_type": "gif", "file_path": gif_path, "filename": gif_name})
 
         manifest = IncidentManifest(
             incident_id=sequence.incident_id,
@@ -166,11 +129,11 @@ class EvidenceBuilder:
             review_status="unverified",
             poster_path="",
             gif_path="",
-            frame_count=len(sequence.frames),
+            frame_count=1,
             summary=sequence.summary,
             sync_status="queued",
             sync_attempts=0,
-            asset_names=[poster_name] + ([gif_name] if gif_name else []) + frame_names,
+            asset_names=[poster_name],
         )
         manifest_path = incident_dir / "manifest.json"
         manifest_path.write_text(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -13,11 +14,13 @@ from front_node_pc_common import (
     CV_WINDOW_PORT_HINT,
     OBJECT_MODEL_CANDIDATES,
     POSE_MODEL_CANDIDATES,
+    REPO_ROOT,
     SCRIPT_DIR,
     UltralyticsObjectDetector,
     UltralyticsPoseEstimator,
     close_cv_window,
     enable_cv_window_stream,
+    is_readable_checkpoint,
     load_pi_module,
     resolve_model_path,
 )
@@ -26,12 +29,185 @@ from front_node_pc_common import (
 obj_mod = load_pi_module("front_node_cellphone_cheat_pi")
 obj_mod.EVIDENCE_DIR = SCRIPT_DIR / "evidence_obj"
 
+VIDEO_SUFFIXES = (".mp4", ".avi", ".mkv", ".mov", ".wmv", ".webm")
+MODEL_SUFFIXES = (".pt",)
+FILE_DIALOG_REQUEST = "__AISENTINEL_FILE_DIALOG__"
+
+
+def _display_path(value):
+    path = Path(value)
+    try:
+        resolved = path.resolve()
+        return str(resolved.relative_to(REPO_ROOT))
+    except (OSError, ValueError):
+        return str(value)
+
+
+def _rglob_files(root, suffixes):
+    if not root.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in suffixes
+        ],
+        key=lambda path: str(path).lower(),
+    )
+
+
+def _dedupe_paths(paths):
+    seen = set()
+    unique = []
+    for value in paths:
+        path = Path(value)
+        key = str(path.resolve()).lower() if path.exists() else str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _readable_model_paths(paths):
+    readable = []
+    for path in _dedupe_paths(paths):
+        if path.is_file() and is_readable_checkpoint(path):
+            readable.append(path)
+    return readable
+
+
+def _discover_videos():
+    found = []
+    for root in (REPO_ROOT / "test-videos", SCRIPT_DIR, REPO_ROOT / "tests", REPO_ROOT):
+        found.extend(_rglob_files(root, VIDEO_SUFFIXES))
+    return _dedupe_paths(found)
+
+
+def _discover_pose_models():
+    discovered = list(POSE_MODEL_CANDIDATES)
+    discovered.extend(
+        path
+        for path in _rglob_files(REPO_ROOT, MODEL_SUFFIXES)
+        if "pose" in str(path).lower()
+    )
+    return _readable_model_paths(discovered)
+
+
+def _discover_object_models():
+    discovered = list(OBJECT_MODEL_CANDIDATES)
+    discovered.extend(
+        path
+        for path in _rglob_files(REPO_ROOT, MODEL_SUFFIXES)
+        if "pose" not in str(path).lower()
+    )
+    return _readable_model_paths(discovered)
+
+
+def _input_choice(prompt):
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return "q"
+
+
+def _prompt_numbered_path(title, options, manual_prompt, allow_dialog=False):
+    options = list(options)
+
+    print()
+    print(f"{obj_mod.TC.BOLD}{title}{obj_mod.TC.RESET}")
+    if options:
+        for idx, option in enumerate(options, start=1):
+            default_marker = " [default]" if idx == 1 else ""
+            print(f"  {idx}. {_display_path(option)}{default_marker}")
+    else:
+        print("  No repository matches found.")
+
+    print("  M. Enter path manually")
+    if allow_dialog:
+        print("  F. Open file dialog")
+    print("  Q. Quit")
+
+    default_hint = " [1]" if options else ""
+    valid_choices = (
+        "a listed number, M, F, or Q"
+        if allow_dialog
+        else "a listed number, M, or Q"
+    )
+    while True:
+        choice = _input_choice(f"Select option{default_hint}: ")
+        if not choice and options:
+            return str(options[0])
+
+        lowered = choice.lower()
+        if lowered in ("q", "quit", "exit"):
+            return None
+        if allow_dialog and lowered in ("f", "file", "dialog"):
+            return FILE_DIALOG_REQUEST
+        if lowered in ("m", "manual", "path", "p"):
+            value = _input_choice(f"{manual_prompt}: ").strip().strip('"').strip("'")
+            if value:
+                return value
+            print("  Please enter a path.")
+            continue
+
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(options):
+                return str(options[index - 1])
+
+        print(f"  Choose {valid_choices}.")
+
+
+def _prompt_existing_file(title, options, manual_prompt, allow_dialog=False):
+    while True:
+        selected = _prompt_numbered_path(title, options, manual_prompt, allow_dialog)
+        if selected is None or selected == FILE_DIALOG_REQUEST:
+            return selected
+        if os.path.isfile(selected):
+            return selected
+        print(f"{obj_mod.TC.RED}[ERROR] File not found: {selected}{obj_mod.TC.RESET}")
+
 
 def _select_video(video_arg):
     if video_arg:
         return video_arg
-    obj_mod.log_info("Opening file dialog...")
-    return obj_mod.select_video_dialog()
+    selected = _prompt_existing_file(
+        "Choose video",
+        _discover_videos(),
+        "Enter video file path",
+        allow_dialog=True,
+    )
+    if selected == FILE_DIALOG_REQUEST:
+        obj_mod.log_info("Opening file dialog...")
+        return obj_mod.select_video_dialog()
+    return selected
+
+
+def _select_pose_model(model_arg):
+    if model_arg:
+        return model_arg
+
+    options = _discover_pose_models()
+    if not any(Path(option).name == "yolo11n-pose.pt" for option in options):
+        options.append("yolo11n-pose.pt")
+
+    return _prompt_numbered_path(
+        "Choose pose model",
+        options,
+        "Enter pose model path or Ultralytics model name",
+    )
+
+
+def _select_object_model(model_arg):
+    if model_arg:
+        return model_arg
+    return _prompt_existing_file(
+        "Choose phone / cheat-sheet object model",
+        _discover_object_models(),
+        "Enter object model .pt path",
+    )
 
 
 def main():
@@ -77,13 +253,23 @@ Examples:
         print(f"{obj_mod.TC.RED}[ERROR] File not found: {video_path}{obj_mod.TC.RESET}")
         sys.exit(1)
 
+    pose_model_arg = _select_pose_model(args.pose_model)
+    if not pose_model_arg:
+        obj_mod.log_info("No pose model selected. Exiting.")
+        sys.exit(0)
+
+    object_model_arg = _select_object_model(args.object_model)
+    if not object_model_arg:
+        obj_mod.log_info("No object model selected. Exiting.")
+        sys.exit(0)
+
     pose_model = resolve_model_path(
-        args.pose_model,
+        pose_model_arg,
         POSE_MODEL_CANDIDATES,
         fallback_name="yolo11n-pose.pt",
     )
     try:
-        object_model = resolve_model_path(args.object_model, OBJECT_MODEL_CANDIDATES)
+        object_model = resolve_model_path(object_model_arg, OBJECT_MODEL_CANDIDATES)
     except FileNotFoundError as exc:
         print(f"{obj_mod.TC.RED}[ERROR] {exc}{obj_mod.TC.RESET}")
         sys.exit(1)

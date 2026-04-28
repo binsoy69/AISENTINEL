@@ -170,7 +170,7 @@ function statusLabel(snapshot) {
 }
 
 function incidentViewerUrl(incident) {
-    return incident.gif_url || incident.poster_url || "";
+    return incident.poster_url || incident.gif_url || "";
 }
 
 function incidentMetaIcon(kind) {
@@ -198,10 +198,10 @@ function incidentMetaItemsHtml(incident) {
 }
 
 function incidentOpenLabel(incident) {
-    if (incident.gif_url) {
-        return "View GIF";
-    }
     if (incident.poster_url) {
+        return "View Snapshot";
+    }
+    if (incident.gif_url) {
         return "View Snapshot";
     }
     return "No Media";

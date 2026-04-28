@@ -381,7 +381,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 
-    def test_record_finalized_incident_prioritizes_gif_before_poster(self):
+    def test_record_finalized_incident_prioritizes_poster_before_legacy_gif(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             poster_path = tmpdir / "poster.jpg"
@@ -424,7 +424,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
 
             items = runtime.sync_queue.due_items(limit=10)
             self.assertEqual([item.item_type for item in items], ["manifest", "asset", "asset"])
-            self.assertEqual([item.payload.get("asset_type") for item in items[1:]], ["gif", "poster"])
+            self.assertEqual([item.payload.get("asset_type") for item in items[1:]], ["poster", "gif"])
             runtime.close()
 
     def test_late_incident_for_non_current_session_is_ignored(self):
@@ -457,7 +457,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
             self.assertEqual(runtime.heartbeat().incident_count, 0)
             runtime.close()
 
-    def test_missing_gif_asset_is_rebuilt_from_frames_before_upload(self):
+    def test_missing_gif_asset_is_dropped_without_rebuild(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             frame_a = tmpdir / "frame-a.jpg"
@@ -502,13 +502,13 @@ class NodeRuntimeSyncTests(unittest.TestCase):
 
             runtime.sync_once()
 
-            self.assertTrue(gif_path.exists())
-            self.assertEqual(http_client.requests[-1][1]["asset_type"], "gif")
-            self.assertGreater(http_client.requests[-1][1]["size_bytes"], 0)
+            self.assertFalse(gif_path.exists())
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/incidents"))
             self.assertEqual(runtime.sync_queue.backlog_count(), 0)
             runtime.close()
 
-    def test_gif_upload_uses_extended_timeout_and_surfaces_network_retry_error(self):
+    def test_gif_upload_uses_base_timeout_and_surfaces_network_retry_error(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             gif_path = tmpdir / "evidence.gif"
@@ -533,7 +533,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
 
             self.assertEqual(len(http_client.requests), 1)
             self.assertTrue(http_client.requests[0][0].endswith("/api/v1/evidence/upload"))
-            self.assertGreater(http_client.requests[0][2], runtime.config.http_timeout_sec)
+            self.assertEqual(http_client.requests[0][2], runtime.config.http_timeout_sec)
             self.assertEqual(runtime.sync_queue.backlog_count(), 1)
             self.assertIn("timed out", runtime.heartbeat().last_error)
             runtime.close()
@@ -635,12 +635,12 @@ class NodeRuntimeSyncTests(unittest.TestCase):
                     node_id="front",
                     camera_label="Front Camera",
                     behavior_type="head",
-                    type_label="Head Tilting",
+                    type_label="Head Tilt",
                     student_numbers=[5],
                     created_at="2026-04-24T01:00:00Z",
                     display_time="09:00 AM",
                     frame_count=0,
-                    summary="Student #05 head tilting detected",
+                    summary="Student #05 head tilt detected",
                     sync_status="recording",
                     sync_attempts=0,
                     asset_names=[],
@@ -670,12 +670,12 @@ class NodeRuntimeSyncTests(unittest.TestCase):
                     node_id="front",
                     camera_label="Front Camera",
                     behavior_type="head",
-                    type_label="Head Tilting",
+                    type_label="Head Tilt",
                     student_numbers=[5],
                     created_at="2026-04-24T01:00:00Z",
                     display_time="09:00 AM",
                     frame_count=1,
-                    summary="Student #05 head tilting detected",
+                    summary="Student #05 head tilt detected",
                     sync_status="queued",
                     sync_attempts=0,
                     asset_names=[],
@@ -704,7 +704,7 @@ class NodeRuntimeSyncTests(unittest.TestCase):
                         node_id="front",
                         camera_label="Front Camera",
                         behavior_type="head",
-                        type_label="Head Tilting",
+                        type_label="Head Tilt",
                         student_numbers=[5],
                         created_at="2026-04-24T01:00:00Z",
                         display_time="09:00 AM",

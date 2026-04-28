@@ -112,6 +112,12 @@ def apply_behavior_config(
 
     modules.combined_mod.EVIDENCE_PRE_EVENT_FRAMES = config.evidence.pre_event_frames
     modules.combined_mod.EVIDENCE_POST_EVENT_FRAMES = config.evidence.post_event_frames
+    modules.combined_mod.DUPLICATE_SUPPRESSION_SEC = (
+        config.spam_suppression.duplicate_suppression_sec
+    )
+    modules.combined_mod.SUPPRESSION_CLEAR_REQUIRED_SEC = (
+        config.spam_suppression.clear_required_sec
+    )
 
     modules.head_mod.HEAD_TILT_ANGLE_DEG = config.head_behavior.head_tilt_angle_deg
     modules.head_mod.HEAD_TURN_RATIO = config.head_behavior.head_turn_ratio

@@ -109,7 +109,7 @@ def build_node_config(tmpdir: Path, *, node_id: str, display_name: str, camera_l
 
 
 class CentralNodeIntegrationTests(unittest.TestCase):
-    def test_pending_incident_updates_to_ready_with_gif_without_duplicate_row(self):
+    def test_pending_incident_updates_to_ready_with_snapshot_without_duplicate_row(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             connection = connect_db(tmpdir / "central" / "central.sqlite3")
@@ -185,11 +185,11 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                     student_numbers=[5],
                     created_at="2026-04-24T01:00:00Z",
                     display_time="09:00 AM",
-                    frame_count=4,
+                    frame_count=1,
                     summary="Student #05 using phone detected",
                     sync_status="ready",
                     sync_attempts=0,
-                    asset_names=["poster.jpg", "evidence.gif"],
+                    asset_names=["poster.jpg"],
                 ).to_dict()
             )
             asset_result = manager.store_asset(
@@ -197,11 +197,11 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                     "incident_id": "incident-001",
                     "session_id": session_id,
                     "node_id": "front",
-                    "asset_type": "gif",
-                    "filename": "evidence.gif",
-                    "content_base64": base64.b64encode(b"gif-data").decode("ascii"),
+                    "asset_type": "poster",
+                    "filename": "poster.jpg",
+                    "content_base64": base64.b64encode(b"poster-data").decode("ascii"),
                     "content_sha256": "",
-                    "size_bytes": 8,
+                    "size_bytes": 11,
                 }
             )
             self.assertTrue(asset_result["ok"])
@@ -212,7 +212,8 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertEqual(ready_incidents[0]["incident_id"], "incident-001")
             self.assertEqual(ready_incidents[0]["sync_status"], "ready")
             self.assertEqual(ready_incidents[0]["review_status"], "verified")
-            self.assertTrue(ready_incidents[0]["gif_url"])
+            self.assertTrue(ready_incidents[0]["poster_url"])
+            self.assertEqual(ready_incidents[0]["gif_url"], "")
 
             manager.upsert_incident(
                 IncidentManifest(
@@ -236,8 +237,9 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             retry_incidents = retry_snapshot["incidents"]
             self.assertEqual(len(retry_incidents), 1)
             self.assertEqual(retry_incidents[0]["sync_status"], "ready")
-            self.assertEqual(retry_incidents[0]["frame_count"], 4)
-            self.assertTrue(retry_incidents[0]["gif_url"])
+            self.assertEqual(retry_incidents[0]["frame_count"], 1)
+            self.assertTrue(retry_incidents[0]["poster_url"])
+            self.assertEqual(retry_incidents[0]["gif_url"], "")
             connection.close()
 
     def test_central_rejects_stale_node_uploads_outside_running_session(self):
@@ -570,10 +572,8 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                 ],
             )
             cheat_poster_path = tmpdir / "front" / "cheat-001" / "poster.jpg"
-            cheat_gif_path = tmpdir / "front" / "cheat-001" / "evidence.gif"
             cheat_poster_path.parent.mkdir(parents=True, exist_ok=True)
             cheat_poster_path.write_bytes(b"cheat-jpeg")
-            cheat_gif_path.write_bytes(b"cheat-gif")
             front_runtime.record_finalized_incident(
                 IncidentManifest(
                     incident_id="cheat-001",
@@ -585,22 +585,17 @@ class CentralNodeIntegrationTests(unittest.TestCase):
                     student_numbers=[5],
                     created_at="2026-04-22T12:00:01Z",
                     display_time="12:00 PM",
-                    frame_count=2,
+                    frame_count=1,
                     summary="Student #05 phone detected",
                     sync_status="queued",
                     sync_attempts=0,
-                    asset_names=["poster.jpg", "evidence.gif"],
+                    asset_names=["poster.jpg"],
                 ),
                 [
                     {
                         "asset_type": "poster",
                         "file_path": cheat_poster_path,
                         "filename": "poster.jpg",
-                    },
-                    {
-                        "asset_type": "gif",
-                        "file_path": cheat_gif_path,
-                        "filename": "evidence.gif",
                     },
                 ],
             )
@@ -623,11 +618,11 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             noise_poster_response.close()
             cheat_incident = next(item for item in payload["incidents"] if item["incident_id"] == "cheat-001")
             self.assertTrue(cheat_incident["poster_url"])
-            self.assertTrue(cheat_incident["gif_url"])
-            cheat_gif_response = central_client.get(cheat_incident["gif_url"])
-            self.assertEqual(cheat_gif_response.status_code, 200)
-            self.assertEqual(cheat_gif_response.data, b"cheat-gif")
-            cheat_gif_response.close()
+            self.assertEqual(cheat_incident["gif_url"], "")
+            cheat_poster_response = central_client.get(cheat_incident["poster_url"])
+            self.assertEqual(cheat_poster_response.status_code, 200)
+            self.assertEqual(cheat_poster_response.data, b"cheat-jpeg")
+            cheat_poster_response.close()
             self.assertIn("sessions_history", payload)
             self.assertEqual(payload["sessions_history"][0]["session_id"], session_id)
             self.assertGreaterEqual(payload["sessions_history"][0]["incident_count"], 2)

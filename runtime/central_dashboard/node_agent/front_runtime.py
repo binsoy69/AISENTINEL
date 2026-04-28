@@ -12,14 +12,6 @@ import cv2
 
 from central_dashboard.shared.dto import IncidentManifest, SessionSpec, make_id, utc_now_iso
 
-try:
-    from PIL import Image
-
-    PIL_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional on target systems
-    PIL_AVAILABLE = False
-
-
 FRONT_NODE_RUNTIME_DIR = Path(__file__).resolve().parents[2] / "front_node_pi"
 if str(FRONT_NODE_RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(FRONT_NODE_RUNTIME_DIR))
@@ -409,15 +401,6 @@ def _normalize_front_runtime_incident(
 ) -> tuple[IncidentManifest, list[dict]]:
     poster_relpath = _best_poster_relpath(front_manifest)
     behavior_type = str(front_manifest.get("behavior_type", "")).strip() or "object"
-    frame_relpaths = _manifest_frame_relpaths(front_manifest)
-    frame_paths = _manifest_frame_paths(evidence_root, front_manifest)
-    gif_relpath = ""
-    if behavior_type != "noise":
-        gif_relpath = str(front_manifest.get("gif_relpath") or "").strip()
-        gif_relpath = _usable_gif_relpath(
-            evidence_root,
-            gif_relpath,
-        ) or _write_visual_gif_from_manifest(evidence_root, front_manifest)
     assets = []
     asset_names = []
 
@@ -428,26 +411,6 @@ def _normalize_front_runtime_incident(
                 "asset_type": "poster",
                 "file_path": _local_evidence_path(evidence_root, poster_relpath),
                 "filename": asset_names[-1],
-            }
-        )
-
-    if gif_relpath or (behavior_type != "noise" and frame_paths):
-        asset_names.append("evidence.gif")
-        gif_path = (
-            _local_evidence_path(evidence_root, gif_relpath)
-            if gif_relpath
-            else _visual_gif_target_path(
-                evidence_root,
-                front_manifest,
-                frame_relpaths[0],
-            )
-        )
-        assets.append(
-            {
-                "asset_type": "gif",
-                "file_path": gif_path,
-                "filename": asset_names[-1],
-                "frame_paths": frame_paths,
             }
         )
 
@@ -467,7 +430,7 @@ def _normalize_front_runtime_incident(
         or "unverified",
         poster_path="",
         gif_path="",
-        frame_count=int(front_manifest.get("frame_count") or 0),
+        frame_count=1 if poster_relpath else 0,
         summary=str(front_manifest.get("summary", "")).strip(),
         sync_status="ready",
         sync_attempts=0,
@@ -530,128 +493,6 @@ def _best_poster_relpath(front_manifest: dict) -> str:
         if event_matches
         else frame_relpaths[len(frame_relpaths) // 2]
     )
-
-
-def _manifest_frame_relpaths(front_manifest: dict) -> list[str]:
-    return [
-        str(value).strip()
-        for value in (front_manifest.get("frame_relpaths") or [])
-        if str(value).strip()
-    ]
-
-
-def _manifest_frame_paths(evidence_root: Path, front_manifest: dict) -> list[str]:
-    frame_relpaths = _manifest_frame_relpaths(front_manifest)
-    frame_paths = [
-        _local_evidence_path(evidence_root, relpath) for relpath in frame_relpaths
-    ]
-    return [
-        str(path)
-        for path in frame_paths
-        if path.exists() and path.is_file()
-    ]
-
-
-def _usable_gif_relpath(evidence_root: Path, gif_relpath: str) -> str:
-    if not gif_relpath:
-        return ""
-    gif_path = _local_evidence_path(evidence_root, gif_relpath)
-    return gif_relpath if gif_path.exists() and gif_path.is_file() else ""
-
-
-def _write_visual_gif_from_manifest(evidence_root: Path, front_manifest: dict) -> str:
-    frame_relpaths = [
-        str(value).strip()
-        for value in (front_manifest.get("frame_relpaths") or [])
-        if str(value).strip()
-    ]
-    if not frame_relpaths:
-        poster_relpath = _best_poster_relpath(front_manifest)
-        frame_relpaths = [poster_relpath] if poster_relpath else []
-    if not frame_relpaths:
-        return ""
-
-    frame_paths = [
-        _local_evidence_path(evidence_root, relpath) for relpath in frame_relpaths
-    ]
-    frame_paths = [path for path in frame_paths if path.exists() and path.is_file()]
-    if not frame_paths:
-        return ""
-
-    gif_path = _visual_gif_target_path(evidence_root, front_manifest, frame_relpaths[0])
-    gif_path.parent.mkdir(parents=True, exist_ok=True)
-    if _write_gif_with_pillow(frame_paths, gif_path) or _write_gif_with_opencv(
-        frame_paths,
-        gif_path,
-    ):
-        return _relative_front_evidence_path(evidence_root, gif_path)
-    return ""
-
-
-def _visual_gif_target_path(
-    evidence_root: Path,
-    front_manifest: dict,
-    first_frame_relpath: str,
-) -> Path:
-    manifest_relpath = str(front_manifest.get("manifest_relpath") or "").strip()
-    if manifest_relpath:
-        return _local_evidence_path(evidence_root, manifest_relpath).parent / "evidence.gif"
-
-    first_frame_path = _local_evidence_path(evidence_root, first_frame_relpath)
-    if first_frame_path.parent.name == "frames":
-        return first_frame_path.parent.parent / "evidence.gif"
-    return first_frame_path.parent / "evidence.gif"
-
-
-def _write_gif_with_pillow(frame_paths: list[Path], gif_path: Path) -> bool:
-    if not PIL_AVAILABLE:
-        return False
-    try:
-        frames = []
-        for frame_path in frame_paths:
-            with Image.open(frame_path) as image:
-                frames.append(image.convert("P", palette=Image.ADAPTIVE))
-        if not frames:
-            return False
-        frames[0].save(
-            gif_path,
-            save_all=True,
-            append_images=frames[1:],
-            duration=220,
-            loop=0,
-            optimize=False,
-        )
-        return gif_path.exists()
-    except Exception:  # pragma: no cover - depends on image codecs
-        return False
-
-
-def _write_gif_with_opencv(frame_paths: list[Path], gif_path: Path) -> bool:
-    if not hasattr(cv2, "Animation") or not hasattr(cv2, "imwriteanimation"):
-        return False
-    try:
-        if hasattr(cv2, "haveImageWriter") and not cv2.haveImageWriter(".gif"):
-            return False
-        frames = []
-        for frame_path in frame_paths:
-            frame = cv2.imread(str(frame_path))
-            if frame is not None:
-                frames.append(frame)
-        if not frames:
-            return False
-        animation = cv2.Animation()
-        animation.frames = frames
-        animation.durations = [220] * len(frames)
-        animation.loop_count = 0
-        return bool(cv2.imwriteanimation(str(gif_path), animation))
-    except Exception:  # pragma: no cover - depends on image codecs
-        return False
-
-
-def _relative_front_evidence_path(evidence_root: Path, path: Path) -> str:
-    return path.resolve(strict=False).relative_to(
-        evidence_root.resolve(strict=False)
-    ).as_posix()
 
 
 def _build_noise_incident_evidence(

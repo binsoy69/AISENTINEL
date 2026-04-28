@@ -95,6 +95,12 @@ class EvidenceConfig:
 
 
 @dataclass(frozen=True)
+class SpamSuppressionConfig:
+    duplicate_suppression_sec: float
+    clear_required_sec: float
+
+
+@dataclass(frozen=True)
 class SoundSensorConfig:
     enabled: bool
     calibration_config: Path | None
@@ -139,6 +145,7 @@ class FrontNodeRuntimeConfig:
     hands_under_table: HandsUnderTableConfig
     object_detection: ObjectDetectionConfig
     evidence: EvidenceConfig
+    spam_suppression: SpamSuppressionConfig
     sound_sensor: SoundSensorConfig
     web_dashboard: WebDashboardConfig
 
@@ -602,6 +609,28 @@ def load_runtime_config(
                 "post_event_frames",
                 10,
                 getter_name="getint",
+            ),
+        ),
+        spam_suppression=SpamSuppressionConfig(
+            duplicate_suppression_sec=max(
+                0.0,
+                _get_value(
+                    parser,
+                    ["spam_suppression"],
+                    "duplicate_suppression_sec",
+                    60.0,
+                    getter_name="getfloat",
+                ),
+            ),
+            clear_required_sec=max(
+                0.0,
+                _get_value(
+                    parser,
+                    ["spam_suppression"],
+                    "clear_required_sec",
+                    3.0,
+                    getter_name="getfloat",
+                ),
             ),
         ),
         sound_sensor=SoundSensorConfig(

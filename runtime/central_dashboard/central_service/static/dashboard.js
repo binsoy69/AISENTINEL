@@ -195,20 +195,18 @@ function isNoiseIncident(incident) {
 }
 
 function incidentEvidenceUrl(incident) {
-    return incident?.gif_url || incident?.poster_url || "";
+    return incident?.poster_url || incident?.gif_url || "";
 }
 
 function evidenceCellMarkup(incident) {
-    if (incident?.gif_url) {
-        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View GIF</button>`;
-    }
     if (incident?.poster_url) {
         return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
     }
+    if (incident?.gif_url) {
+        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
+    }
     const syncStatus = String(incident?.sync_status || "").toLowerCase();
-    const assetNames = Array.isArray(incident?.asset_names) ? incident.asset_names : [];
-    const expectsGif = assetNames.some((name) => String(name || "").toLowerCase().endsWith(".gif"));
-    if (["recording", "pending", "queued"].includes(syncStatus) || expectsGif) {
+    if (["recording", "pending", "queued"].includes(syncStatus)) {
         return `<span class="evidence-button is-disabled">Evidence processing</span>`;
     }
     return `<span class="evidence-button is-disabled">No media</span>`;

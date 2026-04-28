@@ -28,21 +28,11 @@ from central_dashboard.shared.dto import (
 from central_dashboard.shared.http import StdlibHttpClient
 from sound_monitor import DEFAULT_SOUND_SNAPSHOT
 
-try:
-    from PIL import Image
-
-    PIL_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional on target systems
-    PIL_AVAILABLE = False
-
 
 SYNC_OK = "ok"
 SYNC_RETRY = "retry"
 SYNC_DROP = "drop"
 ACTIVE_SYNC_STATES = {"starting", "running"}
-GIF_UPLOAD_MIN_TIMEOUT_SEC = 20.0
-GIF_UPLOAD_MAX_TIMEOUT_SEC = 120.0
-GIF_UPLOAD_ASSUMED_BYTES_PER_SEC = 256 * 1024
 
 
 class NodeRuntime:
@@ -399,14 +389,8 @@ class NodeRuntime:
         asset_type = _asset_payload_type(payload)
         file_path = Path(payload["file_path"])
         if not file_path.exists():
-            if asset_type == "gif" and _write_missing_gif_asset(payload, file_path):
-                self.logger.info("rebuilt missing GIF evidence before upload: %s", file_path)
-            elif asset_type == "gif":
-                self._set_error(f"GIF evidence not ready for upload: {file_path}")
-                return SYNC_RETRY
-            else:
-                self._set_error(f"evidence upload dropped: missing file {file_path}")
-                return SYNC_DROP
+            self._set_error(f"evidence upload dropped: missing file {file_path}")
+            return SYNC_DROP
         if not file_path.exists():
             return SYNC_DROP
         content = file_path.read_bytes()
@@ -790,10 +774,8 @@ def _queue_item_manifest_status(item: SyncQueueItem) -> str:
 
 def _asset_sync_priority(asset: dict) -> int:
     asset_type = str(asset.get("asset_type") or "").lower()
-    if asset_type == "gif":
-        return 0
     if asset_type == "poster":
-        return 1
+        return 0
     return 2
 
 
@@ -821,72 +803,7 @@ def _asset_upload_timeout_sec(
     size_bytes: int,
 ) -> float:
     timeout_sec = max(1.0, float(base_timeout_sec))
-    if asset_type != "gif":
-        return timeout_sec
-
-    size_based_timeout = GIF_UPLOAD_MIN_TIMEOUT_SEC + (
-        max(0, int(size_bytes)) / float(GIF_UPLOAD_ASSUMED_BYTES_PER_SEC)
-    )
-    return max(timeout_sec, min(GIF_UPLOAD_MAX_TIMEOUT_SEC, size_based_timeout))
-
-
-def _write_missing_gif_asset(payload: dict, gif_path: Path) -> bool:
-    frame_paths = [
-        Path(str(path))
-        for path in (payload.get("frame_paths") or [])
-        if str(path).strip()
-    ]
-    frame_paths = [path for path in frame_paths if path.exists() and path.is_file()]
-    if not frame_paths:
-        return False
-
-    gif_path.parent.mkdir(parents=True, exist_ok=True)
-    if PIL_AVAILABLE and _write_gif_with_pillow(frame_paths, gif_path):
-        return True
-    return _write_gif_with_opencv(frame_paths, gif_path)
-
-
-def _write_gif_with_pillow(frame_paths: list[Path], gif_path: Path) -> bool:
-    try:
-        frames = []
-        for frame_path in frame_paths:
-            with Image.open(frame_path) as image:
-                frames.append(image.convert("P", palette=Image.ADAPTIVE))
-        if not frames:
-            return False
-        frames[0].save(
-            gif_path,
-            save_all=True,
-            append_images=frames[1:],
-            duration=220,
-            loop=0,
-            optimize=False,
-        )
-        return gif_path.exists()
-    except Exception:
-        return False
-
-
-def _write_gif_with_opencv(frame_paths: list[Path], gif_path: Path) -> bool:
-    try:
-        if not hasattr(cv2, "Animation") or not hasattr(cv2, "imwriteanimation"):
-            return False
-        if hasattr(cv2, "haveImageWriter") and not cv2.haveImageWriter(".gif"):
-            return False
-        frames = []
-        for frame_path in frame_paths:
-            frame = cv2.imread(str(frame_path))
-            if frame is not None:
-                frames.append(frame)
-        if not frames:
-            return False
-        animation = cv2.Animation()
-        animation.frames = frames
-        animation.durations = [220] * len(frames)
-        animation.loop_count = 0
-        return bool(cv2.imwriteanimation(str(gif_path), animation))
-    except Exception:
-        return False
+    return timeout_sec
 
 
 def _result_error_text(result) -> str:
