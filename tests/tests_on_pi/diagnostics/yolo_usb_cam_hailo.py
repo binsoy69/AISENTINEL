@@ -23,9 +23,14 @@ import sys
 import os
 import threading
 import socket
+from pathlib import Path
 
 import cv2
 import numpy as np
+
+PI_TEST_DIR = Path(__file__).resolve().parents[1]
+if str(PI_TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(PI_TEST_DIR))
 
 from front_node_pi_model_paths import OBJECT_MODEL_PATH
 

@@ -837,16 +837,18 @@ def load_setup_from_profile(profile_path, first_frame, pose_estimator, tracker):
 
 def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                   student_map, baseline_yaw_map, assigned_students, student_lines,
-                  video_path, port, roi_polygon=None):
+                  video_path, port, roi_polygon=None, source_mode="video",
+                  source_fps=None):
     """Run all behavior detectors in a single Pi-side loop."""
     global _latest_frame
 
-    video_name = Path(video_path).stem
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    source_label = str(video_path)
+    video_name = Path(source_label).stem
+    fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if source_mode == "video" else 0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    duration = total_frames / fps if fps > 0 else 0
+    duration = total_frames / fps if fps > 0 and total_frames > 0 else 0
     assigned_tids = set(student_map.keys())
     configured_lines = sum(1 for line in student_lines if line is not None)
 
@@ -884,11 +886,15 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     print()
     print("=" * 78)
     print("  AISENTINEL - All Behavior Detection (Pi + Hailo)")
-    print(f"  Video          : {Path(video_path).name}")
-    print(
-        f"  Resolution     : {width}x{height} | FPS: {fps:.1f} | "
-        f"Duration: {head_mod.fmt_ts(duration)}"
-    )
+    source_heading = "Video" if source_mode == "video" else "Webcam"
+    print(f"  {source_heading:14s}: {Path(source_label).name}")
+    if total_frames > 0:
+        print(
+            f"  Resolution     : {width}x{height} | FPS: {fps:.1f} | "
+            f"Duration: {head_mod.fmt_ts(duration)}"
+        )
+    else:
+        print(f"  Resolution     : {width}x{height} | FPS: {fps:.1f} | Live source")
     print(f"  Students       : {len(student_map)} assigned")
     print(f"  Line config    : {configured_lines}/{len(student_lines)}")
     roi_text = (
@@ -916,7 +922,8 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     print("=" * 78)
     print()
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    if source_mode == "video":
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     frame_idx = 0
     head_stats = defaultdict(int)
@@ -925,16 +932,23 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     hand_warning_total = 0
     object_alert_total = 0
     t_start = time.perf_counter()
+    source_start = time.perf_counter()
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                head_mod.log_info("End of video reached.")
+                if source_mode == "video":
+                    head_mod.log_info("End of video reached.")
+                else:
+                    head_mod.log_info("Webcam stream ended.")
                 break
 
             frame_idx += 1
-            ts_sec = frame_idx / fps if fps > 0 else 0.0
+            if source_mode == "video":
+                ts_sec = frame_idx / fps if fps > 0 else 0.0
+            else:
+                ts_sec = time.perf_counter() - source_start
             raw_frame = frame.copy()
 
             t0 = time.perf_counter()
@@ -1607,8 +1621,12 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             elif has_warning or hand_warning_total > 0:
                 hud_color = hands_mod.COL_WARNING
 
+            frame_label = (
+                f"Frame: {frame_idx}/{total_frames}"
+                if total_frames > 0 else f"Frame: {frame_idx}"
+            )
             hud_lines = [
-                f"Frame: {frame_idx}/{total_frames} | Time: {head_mod.fmt_ts(ts_sec)}",
+                f"{frame_label} | Time: {head_mod.fmt_ts(ts_sec)}",
                 f"Video FPS: {fps:.1f} | Processing FPS: {actual_fps:.1f}",
                 (
                     f"Tracked: {tracked_count}/{len(student_map)} | "
@@ -1868,11 +1886,17 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 _latest_frame = annotated
 
             if frame_idx % 500 == 0:
-                pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
-                head_mod.log_info(
-                    f"Progress: {pct:.1f}% ({frame_idx}/{total_frames}) | "
-                    f"FPS: {actual_fps:.1f}"
-                )
+                if total_frames > 0:
+                    pct = frame_idx / total_frames * 100
+                    head_mod.log_info(
+                        f"Progress: {pct:.1f}% ({frame_idx}/{total_frames}) | "
+                        f"FPS: {actual_fps:.1f}"
+                    )
+                else:
+                    head_mod.log_info(
+                        f"Live progress: {frame_idx} frames | "
+                        f"{head_mod.fmt_ts(ts_sec)} | FPS: {actual_fps:.1f}"
+                    )
 
     except KeyboardInterrupt:
         head_mod.log_info("Interrupted by user.")
@@ -1882,7 +1906,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
     print()
     print("=" * 78)
-    print(f"  Summary: {Path(video_path).name}")
+    print(f"  Summary: {Path(source_label).name}")
     print("-" * 78)
     print(f"  Frames processed : {frame_idx}")
     if elapsed > 0:

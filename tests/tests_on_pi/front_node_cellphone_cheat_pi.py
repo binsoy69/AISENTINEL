@@ -1421,16 +1421,17 @@ def run_assignment_phase(first_frame, student_dets, track_ids, disp_scale):
 # ═══════════════════════════════════════════════════════════════
 
 def run_detection(cap, person_detector, detector, tracker, student_map, video_path,
-                   port, roi_polygon=None):
+                   port, roi_polygon=None, source_mode="video", source_fps=None):
     """Run detection loop, streaming annotated frames via Flask."""
     global _latest_frame
 
-    video_name = Path(video_path).stem
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    source_label = str(video_path)
+    video_name = Path(source_label).stem
+    fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if source_mode == "video" else 0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    duration = total_frames / fps if fps > 0 else 0
+    duration = total_frames / fps if fps > 0 and total_frames > 0 else 0
 
     roi_str = (f"Yes ({len(roi_polygon)} vertices)"
                if roi_polygon is not None else "No (full frame)")
@@ -1438,8 +1439,12 @@ def run_detection(cap, person_detector, detector, tracker, student_map, video_pa
     print()
     print("=" * 70)
     print(f"  AISENTINEL - Cellphone / Cheat Sheet Detection (Pi + Hailo)")
-    print(f"  Video    : {Path(video_path).name}")
-    print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
+    source_heading = "Video" if source_mode == "video" else "Webcam"
+    print(f"  {source_heading:8s}: {Path(source_label).name}")
+    if total_frames > 0:
+        print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
+    else:
+        print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Live source")
     print(f"  Students : {len(student_map)} assigned")
     print(f"  ROI      : {roi_str}")
     print(f"  Detecting: cellphone | cheat_sheet")
@@ -1460,15 +1465,19 @@ def run_detection(cap, person_detector, detector, tracker, student_map, video_pa
     stats = defaultdict(int)
     total_alerts = 0
     t_start = time.perf_counter()
+    source_start = time.perf_counter()
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                log_info("End of video reached.")
+                if source_mode == "video":
+                    log_info("End of video reached.")
+                else:
+                    log_info("Webcam stream ended.")
                 break
             frame_idx += 1
-            ts_sec = frame_idx / fps
+            ts_sec = frame_idx / fps if source_mode == "video" else time.perf_counter() - source_start
 
             # ── Inference ─────────────────────────────────────
             t0 = time.perf_counter()
@@ -1566,8 +1575,12 @@ def run_detection(cap, person_detector, detector, tracker, student_map, video_pa
             actual_fps = frame_idx / elapsed_wall if elapsed_wall > 0 else 0
             n_tracked = len(student_bboxes)
 
+            frame_label = (
+                f"Frame: {frame_idx}/{total_frames}"
+                if total_frames > 0 else f"Frame: {frame_idx}"
+            )
             hud_lines = [
-                f"Frame: {frame_idx}/{total_frames} | Time: {ts_text}",
+                f"{frame_label} | Time: {ts_text}",
                 f"Tracked: {n_tracked}/{len(student_map)} | "
                 f"Alerts: {total_alerts} | "
                 f"Inf: {inference_ms:.0f}ms | FPS: {actual_fps:.1f}",
@@ -1608,9 +1621,13 @@ def run_detection(cap, person_detector, detector, tracker, student_map, video_pa
 
             # Progress
             if frame_idx % 500 == 0:
-                pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
-                log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames}) | "
-                         f"FPS: {actual_fps:.1f}")
+                if total_frames > 0:
+                    pct = frame_idx / total_frames * 100
+                    log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames}) | "
+                             f"FPS: {actual_fps:.1f}")
+                else:
+                    log_info(f"Live progress: {frame_idx} frames | {ts_text} | "
+                             f"FPS: {actual_fps:.1f}")
 
     except KeyboardInterrupt:
         log_info("Stopped by user.")
@@ -1619,7 +1636,7 @@ def run_detection(cap, person_detector, detector, tracker, student_map, video_pa
     elapsed = time.perf_counter() - t_start
     print()
     print("=" * 70)
-    print(f"  Summary: {Path(video_path).name}")
+    print(f"  Summary: {Path(source_label).name}")
     print("-" * 70)
     print(f"  Frames processed : {frame_idx}")
     print(f"  Average FPS      : {frame_idx / elapsed:.1f}" if elapsed > 0 else "")

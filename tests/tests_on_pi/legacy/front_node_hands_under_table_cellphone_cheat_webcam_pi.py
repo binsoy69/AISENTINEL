@@ -2,39 +2,30 @@
 """
 Hands Under Table + Phone / Cheat Sheet Detection - Raspberry Pi + Hailo AI HAT
 ===============================================================================
-Combined Pi test that reuses the same calibration flow as
-front_node_hands_under_table_pi.py while also running the object-cheating model
-from front_node_cellphone_cheat_pi.py.
+Webcam variant of front_node_hands_under_table_cellphone_cheat_pi.py.
 
-Models used:
+This script keeps the same calibration flow as the video-based test:
+  1. Open a USB webcam
+  2. Grab a calibration frame
+  3. ROI calibration: draw a polygon boundary (limits tracking area)
+  4. Click detected persons to assign student numbers
+  5. Desk ROI calibration: draw polygon ROIs for each desk
+  6. Table-edge calibration: draw one 2-point line per desk near the student
+  7. Re-lock student IDs from a fresh live frame
+  8. Web stream starts at http://<pi-ip>:8080 with live annotations
+  9. Console alerts + evidence screenshots saved to ./evidence_combined/
+
+It reuses the same models and logic:
   - yolo_pose_model.hef for person detection / tracking
   - hand_model.hef for hand detection
   - cheat-sheet_phone_model.hef for phone / cheat_sheet detection
-
-Workflow:
-  1. File dialog opens to select a video
-  2. ROI calibration: draw a polygon boundary (limits tracking area)
-  3. First frame: click detected persons to assign student numbers
-  4. Desk ROI calibration: draw polygon ROIs for each desk
-  5. Table-edge calibration: draw one 2-point line per desk near the student
-  6. Web stream starts at http://<pi-ip>:8080 with live annotations
-  7. Console alerts + evidence screenshots saved to ./evidence_combined/
-
-This script preserves the hands-under-table logic:
-  - desk polygons
-  - student-side edge lines
-  - temporal smoothing
-  - warnings for 1 visible hand, alerts for 0 visible hands
-
-It adds phone / cheat_sheet alerts associated to assigned students using the
-object model from front_node_cellphone_cheat_pi.py.
 """
 
 import sys
 import os
 import time
-import threading
-import socket
+import shutil
+import subprocess
 from pathlib import Path
 from collections import defaultdict
 
@@ -42,215 +33,349 @@ import cv2
 import numpy as np
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+PI_TEST_DIR = SCRIPT_DIR.parent
+for path in (SCRIPT_DIR, PI_TEST_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 import front_node_hands_under_table_pi as hands_mod
 import front_node_cellphone_cheat_pi as obj_mod
-import front_node_pi_interactive as pi_ui
-
-# ── Paths ────────────────────────────────────────────────────
-REPO_ROOT = SCRIPT_DIR.parent.parent
-
-POSE_MODEL_PATH = hands_mod.POSE_MODEL_PATH
-HAND_MODEL_PATH = hands_mod.HAND_MODEL_PATH
-OBJECT_MODEL_PATH = obj_mod.OBJ_MODEL_PATH
-
-EVIDENCE_DIR = SCRIPT_DIR / "evidence_combined"
-HANDS_EVIDENCE_DIR = EVIDENCE_DIR / "hands"
-OBJECT_EVIDENCE_DIR = EVIDENCE_DIR / "objects"
-
-# ── Shared globals for Flask streaming ───────────────────────
-_latest_frame = None
-_frame_lock = threading.Lock()
-
-try:
-    from flask import Flask, Response, render_template_string
-    FLASK_AVAILABLE = True
-except ImportError:
-    FLASK_AVAILABLE = False
+import front_node_hands_under_table_cellphone_cheat_pi as combined_mod
 
 
-def save_hand_evidence(annotated_frame, raw_frame, video_name, desk_idx, student_id,
-                       ts_sec):
-    """Save annotated + raw evidence for hands-under-table alerts."""
-    os.makedirs(HANDS_EVIDENCE_DIR, exist_ok=True)
-    ts_str = hands_mod.fmt_ts(ts_sec).replace(":", "").replace(".", "_")
+POSE_MODEL_PATH = combined_mod.POSE_MODEL_PATH
+HAND_MODEL_PATH = combined_mod.HAND_MODEL_PATH
+OBJECT_MODEL_PATH = combined_mod.OBJECT_MODEL_PATH
 
-    fname_ann = (
-        f"{video_name}_desk{desk_idx + 1}_sid{student_id}_{ts_str}_annotated.jpg"
-    )
-    fname_raw = f"{video_name}_desk{desk_idx + 1}_sid{student_id}_{ts_str}_raw.jpg"
-
-    cv2.imwrite(str(HANDS_EVIDENCE_DIR / fname_ann), annotated_frame)
-    cv2.imwrite(str(HANDS_EVIDENCE_DIR / fname_raw), raw_frame)
-    hands_mod.log_info(f"Hands evidence saved: {fname_ann} + raw")
+DEFAULT_WIDTH = 640
+DEFAULT_HEIGHT = 480
+DEFAULT_WARMUP_FRAMES = 12
+DEFAULT_MAX_CAMERAS = 10
+MAX_CAMERA_READ_FAILURES = 20
+OPEN_CAMERA_READ_ATTEMPTS = 1
+CAMERA_OPEN_TIMEOUT_MS = 1000
+CAMERA_READ_TIMEOUT_MS = 1000
 
 
-def save_object_evidence(annotated_frame, raw_frame, student_num, label, conf, ts_sec):
-    """Save annotated + raw evidence for phone / cheat_sheet alerts."""
-    os.makedirs(OBJECT_EVIDENCE_DIR, exist_ok=True)
-    ts_str = hands_mod.fmt_ts(ts_sec).replace(":", "").replace(".", "_")
-    safe_label = label.replace(" ", "_")
-
-    fname_ann = (
-        f"student{student_num}_{safe_label}_{conf:.0f}pct_{ts_str}_annotated.jpg"
-    )
-    fname_raw = f"student{student_num}_{safe_label}_{conf:.0f}pct_{ts_str}_raw.jpg"
-
-    cv2.imwrite(str(OBJECT_EVIDENCE_DIR / fname_ann), annotated_frame)
-    cv2.imwrite(str(OBJECT_EVIDENCE_DIR / fname_raw), raw_frame)
-    hands_mod.log_info(f"Object evidence saved: {fname_ann} + raw")
+def configure_camera(cap, width, height, use_mjpg=True):
+    """Apply live-capture settings, optionally requesting MJPG."""
+    if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, CAMERA_OPEN_TIMEOUT_MS)
+    if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, CAMERA_READ_TIMEOUT_MS)
+    if use_mjpg:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AISENTINEL - Combined Pi Detection</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        h1 {
-            color: #0ff;
-            text-shadow: 0 0 10px rgba(0,255,255,0.5);
-            margin-bottom: 10px;
-        }
-        .info {
-            color: #aaa;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        .stream-container {
-            border: 2px solid #0ff;
-            border-radius: 8px;
-            box-shadow: 0 0 20px rgba(0,255,255,0.3);
-            overflow: hidden;
-            max-width: 90vw;
-        }
-        .stream-container img {
-            display: block;
-            width: 100%;
-            height: auto;
-        }
-        .footer {
-            margin-top: 20px;
-            color: #666;
-            font-size: 0.9em;
-        }
-    </style>
-</head>
-<body>
-    <h1>AISENTINEL - Combined Detection</h1>
-    <p class="info">
-        Raspberry Pi 5 + Hailo AI HAT | Hands Under Table + Phone / Cheat Sheet
-    </p>
-    <div class="stream-container">
-        <img src="/video_feed" alt="Live Stream">
-    </div>
-    <p class="footer">Stream: MJPEG | Press Ctrl+C in terminal to stop</p>
-</body>
-</html>
-"""
+def get_video_device_path(camera_index):
+    """Return /dev/videoN as a Path."""
+    return Path(f"/dev/video{camera_index}")
 
 
-def create_flask_app():
-    app = Flask(__name__)
-    import logging
+def is_capture_device(camera_index):
+    """Return True only for existing video nodes that advertise capture capability."""
+    device_path = get_video_device_path(camera_index)
+    if not device_path.exists():
+        return False
 
-    logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    v4l2_ctl = shutil.which("v4l2-ctl")
+    if not v4l2_ctl:
+        return True
 
-    @app.route("/")
-    def index():
-        return render_template_string(HTML_PAGE)
-
-    @app.route("/video_feed")
-    def video_feed():
-        def generate():
-            while True:
-                with _frame_lock:
-                    frame = _latest_frame
-
-                if frame is not None:
-                    _, jpeg = cv2.imencode(
-                        ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80]
-                    )
-                    yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n"
-                        + jpeg.tobytes()
-                        + b"\r\n"
-                    )
-                else:
-                    time.sleep(0.05)
-
-                time.sleep(0.03)
-
-        return Response(
-            generate(), mimetype="multipart/x-mixed-replace; boundary=frame"
-        )
-
-    return app
-
-
-def get_local_ip():
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-        sock.close()
-        return ip
-    except Exception:
-        return "localhost"
-
-
-def start_web_server(port=8080):
-    app = create_flask_app()
-    thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=port, threaded=True),
-        daemon=True,
-    )
-    thread.start()
-    return thread
-
-
-def describe_first_frame_context(first_hand_dets, first_obj_dets):
-    """Log a lightweight preview of first-frame detections."""
-    preview_bits = [f"hands={len(first_hand_dets)}"]
-
-    if first_obj_dets:
-        obj_text = ", ".join(
-            f"{det['class_name']}({det['confidence']:.0%})" for det in first_obj_dets
+        proc = subprocess.run(
+            [v4l2_ctl, "-D", "-d", str(device_path)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
         )
-        preview_bits.append(f"objects={obj_text}")
+    except Exception:
+        return True
+
+    caps_text = f"{proc.stdout}\n{proc.stderr}".lower()
+    return (
+        "video capture" in caps_text or
+        "video capture multiplanar" in caps_text
+    )
+
+
+def list_capture_camera_indices(max_cameras):
+    """List valid capture-device indices under /dev/video*."""
+    return [
+        camera_index
+        for camera_index in range(max_cameras)
+        if is_capture_device(camera_index)
+    ]
+
+
+def find_usb_camera(width, height, max_cameras):
+    """Return the first camera index that opens and yields a frame."""
+    capture_indices = list_capture_camera_indices(max_cameras)
+    if not capture_indices:
+        return None, None, None
+
+    if len(capture_indices) == 1:
+        camera_index = capture_indices[0]
+        cap, backend_name, config_name = open_camera_with_fallbacks(
+            camera_index, width, height, require_frame=False
+        )
+        if cap is not None:
+            hands_mod.log_info(
+                f"Auto-selected /dev/video{camera_index} via {backend_name} "
+                f"({config_name})."
+            )
+            return cap, camera_index, backend_name
+
+    for camera_index in capture_indices:
+        cap, backend_name, config_name = open_camera_with_fallbacks(
+            camera_index, width, height, require_frame=True
+        )
+        if cap is None:
+            continue
+
+        hands_mod.log_info(
+            f"Auto-selected /dev/video{camera_index} via {backend_name} "
+            f"({config_name})."
+        )
+        return cap, camera_index, backend_name
+
+    fallback_index = capture_indices[0]
+    cap, backend_name, config_name = open_camera_with_fallbacks(
+        fallback_index, width, height, require_frame=False
+    )
+    if cap is not None:
+        hands_mod.log_info(
+            f"Falling back to /dev/video{fallback_index} via {backend_name} "
+            f"({config_name}) without startup frame validation."
+        )
+        return cap, fallback_index, backend_name
+
+    return None, None, None
+
+
+def open_webcam(camera_index, width, height, max_cameras):
+    """Open the requested camera or auto-discover one."""
+    if camera_index is None:
+        return find_usb_camera(width, height, max_cameras)
+
+    cap, backend_name, _config_name = open_camera_with_fallbacks(
+        camera_index, width, height, require_frame=False
+    )
+    if cap is None:
+        return None, None, None
+
+    return cap, camera_index, backend_name
+
+
+def read_latest_frame(cap, attempts=30, pause_sec=0.04):
+    """Read a recent frame from the camera, allowing brief warm-up/retry."""
+    frame = None
+    good_frames = 0
+
+    for _ in range(max(1, attempts)):
+        ret, current = cap.read()
+        if ret and current is not None:
+            frame = current
+            good_frames += 1
+            if good_frames >= 2:
+                break
+        else:
+            good_frames = 0
+        time.sleep(pause_sec)
+
+    return frame
+
+
+def open_single_camera(camera_index, backend_name, backend_id, width, height,
+                       use_mjpg, require_frame):
+    """Open one camera/backend/config combination and wait for a valid frame."""
+    if backend_id is None:
+        cap = cv2.VideoCapture(camera_index)
     else:
-        preview_bits.append("objects=none")
+        cap = cv2.VideoCapture(camera_index, backend_id)
 
-    hands_mod.log_info("First-frame preview: " + " | ".join(preview_bits))
+    if not cap.isOpened():
+        cap.release()
+        return None
+
+    configure_camera(cap, width, height, use_mjpg=use_mjpg)
+    if require_frame:
+        frame = read_latest_frame(
+            cap,
+            attempts=OPEN_CAMERA_READ_ATTEMPTS,
+            pause_sec=0.05,
+        )
+        if frame is None:
+            cap.release()
+            return None
+
+    return cap
 
 
-def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
-                  student_map, desk_polygons, desk_edge_lines, video_path, port,
-                  roi_polygon=None):
-    """Run the combined hands + object detection loop."""
-    global _latest_frame
+def open_camera_with_fallbacks(camera_index, width, height, require_frame):
+    """Open a camera with multiple backend/format fallbacks."""
+    device_path = get_video_device_path(camera_index)
+    if not device_path.exists():
+        return None, None, None
 
-    video_name = Path(video_path).stem
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if not is_capture_device(camera_index):
+        hands_mod.log_info(f"Skipping {device_path} because it is not a capture device.")
+        return None, None, None
+
+    attempts = [
+        ("V4L2", cv2.CAP_V4L2, True, "MJPG"),
+        ("V4L2", cv2.CAP_V4L2, False, "native"),
+        ("default", None, True, "MJPG"),
+        ("default", None, False, "native"),
+    ]
+
+    for backend_name, backend_id, use_mjpg, config_name in attempts:
+        cap = open_single_camera(
+            camera_index,
+            backend_name,
+            backend_id,
+            width,
+            height,
+            use_mjpg=use_mjpg,
+            require_frame=require_frame,
+        )
+        if cap is not None:
+            return cap, backend_name, config_name
+
+    return None, None, None
+
+
+def build_desk_student_numbers(first_person_dets, first_track_ids, student_map,
+                               desk_polygons, img_shape):
+    """Map each desk ROI to the assigned student number from the calibration frame."""
+    desk_candidates = defaultdict(list)
+
+    for det, track_id in zip(first_person_dets, first_track_ids):
+        if track_id not in student_map:
+            continue
+
+        desk_idx, area = hands_mod.find_desk_for_student(
+            det["bbox"], desk_polygons, img_shape
+        )
+        if desk_idx is None or area <= 0:
+            hands_mod.log_info(
+                f"Assigned Student #{student_map[track_id]} does not overlap a desk ROI."
+            )
+            continue
+
+        desk_candidates[desk_idx].append((area, student_map[track_id]))
+
+    desk_student_numbers = {}
+    for desk_idx, candidates in desk_candidates.items():
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        desk_student_numbers[desk_idx] = candidates[0][1]
+
+        if len(candidates) > 1:
+            kept_student = candidates[0][1]
+            hands_mod.log_info(
+                f"Desk #{desk_idx + 1} had multiple assigned students in calibration; "
+                f"keeping Student #{kept_student}."
+            )
+
+    return desk_student_numbers
+
+
+def refresh_live_student_map(cap, person_detector, desk_polygons,
+                             desk_student_numbers, roi_polygon,
+                             max_attempts=20):
+    """Create a fresh tracker/student map from the live webcam feed."""
+    expected_students = set(desk_student_numbers.values())
+
+    for attempt in range(1, max_attempts + 1):
+        frame = read_latest_frame(cap, attempts=1, pause_sec=0.02)
+        if frame is None:
+            continue
+
+        current_person_dets = person_detector.detect_persons(frame)
+        current_person_dets = hands_mod.filter_detections_by_roi(
+            current_person_dets, roi_polygon
+        )
+
+        if not current_person_dets:
+            if attempt == 1 or attempt == max_attempts or attempt % 5 == 0:
+                hands_mod.log_info(
+                    f"Live refresh attempt {attempt}/{max_attempts}: no persons detected yet."
+                )
+            continue
+
+        tracker = obj_mod.IoUTracker(iou_threshold=0.3, max_lost=60)
+        current_track_ids = tracker.update(current_person_dets)
+
+        desk_matches = {}
+        for det, track_id in zip(current_person_dets, current_track_ids):
+            desk_idx, area = hands_mod.find_desk_for_student(
+                det["bbox"], desk_polygons, frame.shape[:2]
+            )
+            if desk_idx is None or area <= 0:
+                continue
+            if desk_idx not in desk_student_numbers:
+                continue
+
+            best = desk_matches.get(desk_idx)
+            if best is None or area > best[1]:
+                desk_matches[desk_idx] = (track_id, area)
+
+        refreshed_student_map = {
+            track_id: desk_student_numbers[desk_idx]
+            for desk_idx, (track_id, _area) in desk_matches.items()
+        }
+
+        if not refreshed_student_map:
+            if attempt == 1 or attempt == max_attempts or attempt % 5 == 0:
+                hands_mod.log_info(
+                    f"Live refresh attempt {attempt}/{max_attempts}: "
+                    "students detected, but none matched the desk ROIs."
+                )
+            continue
+
+        matched_students = set(refreshed_student_map.values())
+        missing_students = sorted(expected_students - matched_students)
+
+        hands_mod.log_info(
+            f"Live refresh locked {len(refreshed_student_map)} student(s) from the webcam."
+        )
+        for track_id, student_num in sorted(refreshed_student_map.items(), key=lambda x: x[1]):
+            hands_mod.log_info(f"  Student #{student_num} -> Track ID {track_id}")
+
+        if missing_students:
+            hands_mod.log_info(
+                "Students not visible during live refresh: "
+                + ", ".join(f"#{student_num}" for student_num in missing_students)
+            )
+
+        return frame, tracker, refreshed_student_map
+
+    return None, None, {}
+
+
+def update_web_stream(frame):
+    """Push the latest annotated frame into the shared Flask stream state."""
+    with combined_mod._frame_lock:
+        combined_mod._latest_frame = frame
+
+
+def run_detection_webcam(cap, person_detector, hand_detector, object_detector,
+                         tracker, student_map, desk_polygons, desk_edge_lines,
+                         camera_index, port, roi_polygon=None):
+    """Run the combined detection loop on a live webcam feed."""
+    source_name = f"webcam{camera_index}"
+    camera_label = f"/dev/video{camera_index}"
+    camera_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    if camera_fps <= 0 or camera_fps > 120:
+        camera_fps = 30.0
+
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     img_shape = (h, w)
-    duration = total_frames / fps if fps > 0 else 0
 
     assigned_tids = set(student_map.keys())
     desk_states = [hands_mod.DeskState(i) for i in range(len(desk_polygons))]
@@ -259,12 +384,11 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
 
     print()
     print("=" * 72)
-    local_ip = get_local_ip()
-    print("  AISENTINEL - Combined Pi Detection")
-    print(f"  Video        : {Path(video_path).name}")
-    print(f"  Resolution   : {w}x{h} | FPS: {fps:.1f} | Duration: {hands_mod.fmt_ts(duration)}")
-    print(f"  Total frames : {total_frames}")
-    print(f"  Students     : {len(student_map)} assigned")
+    local_ip = combined_mod.get_local_ip()
+    print("  AISENTINEL - Combined Pi Detection (Webcam)")
+    print(f"  Camera       : {camera_label}")
+    print(f"  Resolution   : {w}x{h} | Camera FPS: {camera_fps:.1f}")
+    print(f"  Students     : {len(student_map)} live-locked")
     print(f"  Desk ROIs    : {len(desk_polygons)}")
     print(
         f"  Desk lines   : "
@@ -281,43 +405,48 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
         f"{hands_mod.SMOOTH_WINDOW_FRAMES}f smoothing"
     )
     print(f"  Obj cooldown : {obj_mod.EVENT_COOLDOWN_SEC:.1f}s per student/class")
-    print(f"  Evidence     : {EVIDENCE_DIR}")
+    print(f"  Evidence     : {combined_mod.EVIDENCE_DIR}")
     print(f"  Web stream   : http://{local_ip}:{port}")
     print("=" * 72)
     print()
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     frame_idx = 0
     hand_alert_total = 0
     hand_warning_total = 0
     object_alert_total = 0
-    t_start = time.perf_counter()
+    loop_started_at = time.perf_counter()
+    consecutive_failures = 0
 
     try:
         while True:
             ret, frame = cap.read()
-            if not ret:
-                hands_mod.log_info("End of video reached.")
-                break
+            if not ret or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures == 1 or consecutive_failures % 5 == 0:
+                    hands_mod.log_info(
+                        f"Camera read failed ({consecutive_failures}/{MAX_CAMERA_READ_FAILURES})."
+                    )
+                if consecutive_failures >= MAX_CAMERA_READ_FAILURES:
+                    hands_mod.log_info("Too many camera read failures. Stopping.")
+                    break
+                time.sleep(0.05)
+                continue
 
+            consecutive_failures = 0
             frame_idx += 1
-            ts_sec = frame_idx / fps
+            ts_sec = time.perf_counter() - loop_started_at
             raw_frame = frame.copy()
 
             t0 = time.perf_counter()
 
-            # 1. Person detection (pose)
             person_dets = person_detector.detect_persons(frame)
             person_dets = hands_mod.filter_detections_by_roi(person_dets, roi_polygon)
 
-            # 2. Hand detection (sentinel hand model)
             hand_raw = hand_detector.detect(frame)
             hand_dets = [
                 det for det in hand_raw if det["class_name"] == hands_mod.CLASS_HAND
             ]
 
-            # 3. Phone / cheat_sheet detection (sentinel object model)
             object_raw = object_detector.detect(frame)
             object_raw = hands_mod.filter_detections_by_roi(object_raw, roi_polygon)
 
@@ -340,7 +469,6 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                     annotated, [roi_polygon], True, (0, 255, 255), 1, cv2.LINE_AA
                 )
 
-            # 4. Person tracking
             track_ids = tracker.update(person_dets)
             student_tracks = {}
 
@@ -373,11 +501,13 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                 x1, y1, x2, y2 = det["bbox"]
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), hands_mod.COL_HAND, 2)
                 hands_mod.draw_label(
-                    annotated, f"hand {det['confidence']:.0%}", x1, y1 - 2,
-                    hands_mod.COL_HAND
+                    annotated,
+                    f"hand {det['confidence']:.0%}",
+                    x1,
+                    y1 - 2,
+                    hands_mod.COL_HAND,
                 )
 
-            # 5. Assign students to desks
             student_to_best_desk = {}
             for track_id, student_bbox in student_tracks.items():
                 desk_idx, area = hands_mod.find_desk_for_student(
@@ -420,7 +550,6 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                             ):
                                 state.reset_assignment()
 
-            # 6. Associate hands to students
             student_hands = defaultdict(list)
 
             for hand_bbox in hand_boxes:
@@ -449,7 +578,6 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                         cv2.LINE_AA,
                     )
 
-            # 7. Desk-level hands-under-table logic
             frame_hand_alerts = []
             frame_hand_warnings = []
 
@@ -553,7 +681,6 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                 else:
                     state.hands_missing_start = -1.0
 
-            # 8. Associate phone / cheat_sheet objects to students
             object_associations = obj_mod.associate_objects_to_students(
                 object_dets, student_tracks
             )
@@ -607,7 +734,6 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                         }
                     )
 
-            # 9. Desk overlays + status text
             hands_mod.draw_desk_rois(annotated, desk_polygons, desk_states)
             hands_mod.draw_table_edge_lines(annotated, desk_edge_lines, desk_states)
 
@@ -657,14 +783,13 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                     cv2.LINE_AA,
                 )
 
-            # 10. HUD + banners
+            elapsed_wall = time.perf_counter() - loop_started_at
+            actual_fps = frame_idx / elapsed_wall if elapsed_wall > 0 else 0.0
             ts_text = hands_mod.fmt_ts(ts_sec)
-            elapsed_wall = time.perf_counter() - t_start
-            actual_fps = frame_idx / elapsed_wall if elapsed_wall > 0 else 0
 
             hud_lines = [
-                f"Frame: {frame_idx}/{total_frames} | Time: {ts_text}",
-                f"Video FPS: {fps:.1f} | Processing FPS: {actual_fps:.1f}",
+                f"Camera: {camera_label} | Frame: {frame_idx} | Time: {ts_text}",
+                f"Camera FPS: {camera_fps:.1f} | Processing FPS: {actual_fps:.1f}",
                 (
                     f"Tracked: {len(student_tracks)}/{len(student_map)} | "
                     f"Hands: {len(hand_boxes)} | Obj: {len(object_dets)} | "
@@ -742,12 +867,24 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                     f"{event['class_name'].upper()}"
                 )
                 cv2.putText(
-                    annotated, txt, (10, banner_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, (0, 0, 0), 4, cv2.LINE_AA
+                    annotated,
+                    txt,
+                    (10, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 0),
+                    4,
+                    cv2.LINE_AA,
                 )
                 cv2.putText(
-                    annotated, txt, (10, banner_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, hands_mod.COL_ALERT, 2, cv2.LINE_AA
+                    annotated,
+                    txt,
+                    (10, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    hands_mod.COL_ALERT,
+                    2,
+                    cv2.LINE_AA,
                 )
                 banner_y -= 35
 
@@ -759,12 +896,24 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                     f"Desk #{desk_idx + 1}"
                 )
                 cv2.putText(
-                    annotated, txt, (10, banner_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, (0, 0, 0), 4, cv2.LINE_AA
+                    annotated,
+                    txt,
+                    (10, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 0),
+                    4,
+                    cv2.LINE_AA,
                 )
                 cv2.putText(
-                    annotated, txt, (10, banner_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, hands_mod.COL_ALERT, 2, cv2.LINE_AA
+                    annotated,
+                    txt,
+                    (10, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    hands_mod.COL_ALERT,
+                    2,
+                    cv2.LINE_AA,
                 )
                 banner_y -= 35
 
@@ -776,35 +925,58 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                     f"at Desk #{desk_idx + 1}"
                 )
                 cv2.putText(
-                    annotated, txt, (10, banner_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, (0, 0, 0), 4, cv2.LINE_AA
+                    annotated,
+                    txt,
+                    (10, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 0),
+                    4,
+                    cv2.LINE_AA,
                 )
                 cv2.putText(
-                    annotated, txt, (10, banner_y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, hands_mod.COL_WARNING, 2, cv2.LINE_AA
+                    annotated,
+                    txt,
+                    (10, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    hands_mod.COL_WARNING,
+                    2,
+                    cv2.LINE_AA,
                 )
                 banner_y -= 35
 
             (tw, _), _ = cv2.getTextSize(ts_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
             cv2.putText(
-                annotated, ts_text, (w - tw - 10, h - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA
+                annotated,
+                ts_text,
+                (w - tw - 10, h - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 0),
+                3,
+                cv2.LINE_AA,
             )
             cv2.putText(
-                annotated, ts_text, (w - tw - 10, h - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA
+                annotated,
+                ts_text,
+                (w - tw - 10, h - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
             )
 
-            # 11. Save evidence after full annotation is ready
             for desk_idx in frame_hand_alerts:
                 tid = desk_states[desk_idx].assigned_student_id or 0
                 student_num = student_map.get(tid, tid)
-                save_hand_evidence(
-                    annotated, raw_frame, video_name, desk_idx, student_num, ts_sec
+                combined_mod.save_hand_evidence(
+                    annotated, raw_frame, source_name, desk_idx, student_num, ts_sec
                 )
 
             for event in frame_object_alerts:
-                save_object_evidence(
+                combined_mod.save_object_evidence(
                     annotated,
                     raw_frame,
                     event["student_num"],
@@ -813,25 +985,24 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                     ts_sec,
                 )
 
-            with _frame_lock:
-                _latest_frame = annotated
+            update_web_stream(annotated)
 
-            if frame_idx % 500 == 0:
-                pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
+            if frame_idx % 300 == 0:
                 hands_mod.log_info(
-                    f"Progress: {pct:.1f}% ({frame_idx}/{total_frames}) | "
-                    f"FPS: {actual_fps:.1f}"
+                    f"Live progress: {frame_idx} frames | "
+                    f"Runtime: {hands_mod.fmt_ts(ts_sec)} | FPS: {actual_fps:.1f}"
                 )
 
     except KeyboardInterrupt:
         hands_mod.log_info("Stopped by user.")
 
-    elapsed = time.perf_counter() - t_start
+    elapsed = time.perf_counter() - loop_started_at
     print()
     print("=" * 72)
-    print(f"  Summary: {Path(video_path).name}")
+    print(f"  Summary: {source_name}")
     print("-" * 72)
     print(f"  Frames processed : {frame_idx}")
+    print(f"  Runtime          : {hands_mod.fmt_ts(elapsed)}")
     if elapsed > 0:
         print(f"  Average FPS      : {frame_idx / elapsed:.1f}")
     print(f"  Desk ROIs        : {len(desk_polygons)}")
@@ -854,7 +1025,7 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
             f" : {state.total_alerts} alerts, {state.total_warnings} warnings"
         )
     if hand_alert_total > 0 or object_alert_total > 0:
-        print(f"  Evidence saved to: {EVIDENCE_DIR}")
+        print(f"  Evidence saved to: {combined_mod.EVIDENCE_DIR}")
     elif hand_warning_total == 0:
         print("  No combined alerts triggered.")
     print("=" * 72)
@@ -866,36 +1037,31 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "AISENTINEL - Hands Under Table + Phone / Cheat Sheet Detection "
-            "(Pi + Hailo)"
+            "(Pi + Hailo, Webcam)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 front_node_hands_under_table_cellphone_cheat_pi.py
-  python3 front_node_hands_under_table_cellphone_cheat_pi.py --port 9090
-  python3 front_node_hands_under_table_cellphone_cheat_pi.py --object-confidence 0.4
-  python3 front_node_hands_under_table_cellphone_cheat_pi.py --object-model /path/to/model.hef
+  python3 front_node_hands_under_table_cellphone_cheat_webcam_pi.py
+  python3 front_node_hands_under_table_cellphone_cheat_webcam_pi.py --camera 0
+  python3 front_node_hands_under_table_cellphone_cheat_webcam_pi.py --camera 1 --port 9090
+  python3 front_node_hands_under_table_cellphone_cheat_webcam_pi.py --object-confidence 0.4
         """,
     )
     parser.add_argument(
-        "--video",
-        default=None,
-        help="Optional path to a video file",
-    )
-    parser.add_argument(
         "--pose-model",
-        default=None,
+        default=str(POSE_MODEL_PATH),
         help=f"Path to pose HEF model for person detection (default: {POSE_MODEL_PATH})",
     )
     parser.add_argument(
         "--hand-model",
-        default=None,
+        default=str(HAND_MODEL_PATH),
         help=f"Path to hand HEF model (default: {HAND_MODEL_PATH})",
     )
     parser.add_argument(
         "--object-model", "--model",
         dest="object_model",
-        default=None,
+        default=str(OBJECT_MODEL_PATH),
         help=f"Path to phone / cheat_sheet HEF model (default: {OBJECT_MODEL_PATH})",
     )
     parser.add_argument(
@@ -906,66 +1072,100 @@ Examples:
         help="Base confidence threshold for the object model (default: 0.25)",
     )
     parser.add_argument(
-        "--port", type=int, default=8080,
+        "--camera",
+        type=int,
+        default=None,
+        help="USB camera index. Default: auto-detect the first working webcam.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=DEFAULT_WIDTH,
+        help=f"Requested webcam width (default: {DEFAULT_WIDTH})",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=DEFAULT_HEIGHT,
+        help=f"Requested webcam height (default: {DEFAULT_HEIGHT})",
+    )
+    parser.add_argument(
+        "--warmup-frames",
+        type=int,
+        default=DEFAULT_WARMUP_FRAMES,
+        help=f"Frames to discard before grabbing the calibration frame (default: {DEFAULT_WARMUP_FRAMES})",
+    )
+    parser.add_argument(
+        "--max-cameras",
+        type=int,
+        default=DEFAULT_MAX_CAMERAS,
+        help=f"How many camera indexes to scan during auto-detect (default: {DEFAULT_MAX_CAMERAS})",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
         help="Flask web server port (default: 8080)",
     )
     args = parser.parse_args()
 
     print()
     print("=" * 72)
-    print("  AISENTINEL - Combined Pi Detection")
+    print("  AISENTINEL - Combined Pi Detection (Webcam)")
     print("  Person detection : pose model (IoU tracked)")
     print("  Hand detection   : hand_model.hef (hand class)")
     print("  Object detection : object-updated.hef (phone + cheat_sheet)")
     print("  Calibration flow : ROI -> assignment -> desk polygons -> table-edge lines")
+    print("  Source           : live webcam")
     print("=" * 72)
     print()
-
-    video_path = pi_ui.select_video(args.video, hands_mod.select_video_dialog)
-    if not video_path:
-        hands_mod.log_info("No video selected. Exiting.")
-        sys.exit(0)
-
-    pose_model_arg = pi_ui.select_pose_model(args.pose_model)
-    if not pose_model_arg:
-        hands_mod.log_info("No pose model selected. Exiting.")
-        sys.exit(0)
-
-    hand_model_arg = pi_ui.select_hand_model(args.hand_model)
-    if not hand_model_arg:
-        hands_mod.log_info("No hand model selected. Exiting.")
-        sys.exit(0)
-
-    object_model_arg = pi_ui.select_object_model(args.object_model)
-    if not object_model_arg:
-        hands_mod.log_info("No object model selected. Exiting.")
-        sys.exit(0)
 
     if not hands_mod.HAILO_AVAILABLE or not obj_mod.HAILO_AVAILABLE:
         print(f"{hands_mod.TC.RED}[ERROR] hailo_platform is required.{hands_mod.TC.RESET}")
         print("Install: sudo apt install hailo-all")
         sys.exit(1)
 
-    pose_path = Path(pose_model_arg)
+    pose_path = Path(args.pose_model)
     if not pose_path.exists():
         print(f"{hands_mod.TC.RED}[ERROR] Pose HEF model not found: {pose_path}{hands_mod.TC.RESET}")
         print("See POSE_MODEL_SETUP.md for download instructions.")
         sys.exit(1)
 
-    hand_path = Path(hand_model_arg)
+    hand_path = Path(args.hand_model)
     if not hand_path.exists():
         print(f"{hands_mod.TC.RED}[ERROR] Hand HEF model not found: {hand_path}{hands_mod.TC.RESET}")
         sys.exit(1)
 
-    object_path = Path(object_model_arg)
+    object_path = Path(args.object_model)
     if not object_path.exists():
         print(f"{hands_mod.TC.RED}[ERROR] Object HEF model not found: {object_path}{hands_mod.TC.RESET}")
         sys.exit(1)
 
-    if not os.path.isfile(video_path):
-        print(f"{hands_mod.TC.RED}[ERROR] File not found: {video_path}{hands_mod.TC.RESET}")
+    hands_mod.log_info("Opening webcam...")
+    cap, camera_index, backend_name = open_webcam(
+        args.camera,
+        args.width,
+        args.height,
+        args.max_cameras,
+    )
+    if cap is None or camera_index is None:
+        print(f"{hands_mod.TC.RED}[ERROR] Cannot open a webcam.{hands_mod.TC.RESET}")
+        print("Try: ls /dev/video* && v4l2-ctl --list-devices")
         sys.exit(1)
-    hands_mod.log_info(f"Selected: {video_path}")
+
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    hands_mod.log_info(
+        f"Connected to /dev/video{camera_index} using {backend_name} backend "
+        f"at {actual_w}x{actual_h}."
+    )
+
+    hands_mod.log_info("Warming up the webcam...")
+    first_frame = read_latest_frame(cap, attempts=args.warmup_frames, pause_sec=0.04)
+    if first_frame is None:
+        cap.release()
+        print(f"{hands_mod.TC.RED}[ERROR] Cannot read a calibration frame from the webcam.{hands_mod.TC.RESET}")
+        sys.exit(1)
 
     shared_vdevice = hands_mod.VDevice()
     hands_mod.log_info("Hailo VDevice created (shared across all models).")
@@ -999,21 +1199,9 @@ Examples:
         print(f"  [{idx}] {name}{role}")
     print()
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"{hands_mod.TC.RED}[ERROR] Cannot open video: {video_path}{hands_mod.TC.RESET}")
-        sys.exit(1)
-
-    ret, first_frame = cap.read()
-    if not ret:
-        cap.release()
-        print(f"{hands_mod.TC.RED}[ERROR] Cannot read first frame.{hands_mod.TC.RESET}")
-        sys.exit(1)
-
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    w = first_frame.shape[1]
     disp_scale = min(1.0, 1280 / w) if w > 1280 else 1.0
-    hands_mod.log_info(f"Video resolution: {w}x{h}")
+    hands_mod.log_info(f"Calibration frame resolution: {first_frame.shape[1]}x{first_frame.shape[0]}")
 
     hands_mod.log_info("Draw ROI boundary to limit tracking area (or press S to skip).")
     roi_result = hands_mod.calibrate_roi(first_frame, disp_scale)
@@ -1023,18 +1211,18 @@ Examples:
         sys.exit(0)
     roi_polygon = roi_result if isinstance(roi_result, np.ndarray) else None
 
-    hands_mod.log_info("Running pose detection on first frame for student assignment...")
+    hands_mod.log_info("Running pose detection on the calibration frame for student assignment...")
     first_person_dets = person_detector.detect_persons(first_frame)
     first_person_dets = hands_mod.filter_detections_by_roi(
         first_person_dets, roi_polygon
     )
 
-    tracker = obj_mod.IoUTracker(iou_threshold=0.3, max_lost=60)
-    first_track_ids = tracker.update(first_person_dets)
+    assignment_tracker = obj_mod.IoUTracker(iou_threshold=0.3, max_lost=60)
+    first_track_ids = assignment_tracker.update(first_person_dets)
 
     roi_label = " (within ROI)" if roi_polygon is not None else ""
     hands_mod.log_info(
-        f"Detected {len(first_person_dets)} persons on first frame{roi_label}."
+        f"Detected {len(first_person_dets)} persons on the calibration frame{roi_label}."
     )
 
     first_hand_dets = [
@@ -1049,7 +1237,7 @@ Examples:
         if det["confidence"] < min_conf:
             continue
         first_obj_dets.append(det)
-    describe_first_frame_context(first_hand_dets, first_obj_dets)
+    combined_mod.describe_first_frame_context(first_hand_dets, first_obj_dets)
 
     print()
     print(f"  {hands_mod.TC.BOLD}Instructions:{hands_mod.TC.RESET}")
@@ -1072,10 +1260,7 @@ Examples:
         hands_mod.log_info("No students assigned. Exiting.")
         sys.exit(0)
 
-    tracker.keep_only(set(student_map.keys()))
-    hands_mod.log_info(f"Tracker locked to {len(student_map)} assigned student(s).")
-
-    hands_mod.log_info("Now draw polygon ROIs for each desk on the first frame.")
+    hands_mod.log_info("Now draw polygon ROIs for each desk on the calibration frame.")
     desk_polygons = hands_mod.calibrate_desk_rois(first_frame)
     if desk_polygons is None or len(desk_polygons) == 0:
         cap.release()
@@ -1092,30 +1277,72 @@ Examples:
         hands_mod.log_info("Table-edge calibration cancelled. Exiting.")
         sys.exit(0)
 
-    if not FLASK_AVAILABLE:
+    desk_student_numbers = build_desk_student_numbers(
+        first_person_dets,
+        first_track_ids,
+        student_map,
+        desk_polygons,
+        first_frame.shape[:2],
+    )
+    if not desk_student_numbers:
+        cap.release()
+        hands_mod.log_info(
+            "Assigned students did not map onto the desk ROIs. Exiting."
+        )
+        sys.exit(0)
+
+    hands_mod.log_info("Desk-to-student mapping from calibration:")
+    for desk_idx, student_num in sorted(desk_student_numbers.items()):
+        hands_mod.log_info(f"  Desk #{desk_idx + 1} -> Student #{student_num}")
+
+    hands_mod.log_info("Refreshing student locks from a live webcam frame...")
+    live_frame, tracker, live_student_map = refresh_live_student_map(
+        cap,
+        person_detector,
+        desk_polygons,
+        desk_student_numbers,
+        roi_polygon,
+    )
+    if tracker is None or not live_student_map:
+        cap.release()
+        hands_mod.log_info(
+            "Could not re-lock students from the live webcam feed. "
+            "Make sure the assigned students are visible and seated."
+        )
+        sys.exit(0)
+
+    tracker.keep_only(set(live_student_map.keys()))
+    hands_mod.log_info(f"Tracker locked to {len(live_student_map)} live student(s).")
+
+    update_web_stream(live_frame)
+
+    if not combined_mod.FLASK_AVAILABLE:
+        cap.release()
         print(f"{hands_mod.TC.RED}[ERROR] Flask is required for web streaming.{hands_mod.TC.RESET}")
         print("Install: pip install flask")
         sys.exit(1)
 
-    start_web_server(args.port)
-    local_ip = get_local_ip()
+    combined_mod.start_web_server(args.port)
+    local_ip = combined_mod.get_local_ip()
     hands_mod.log_info(f"Web stream at http://{local_ip}:{args.port}")
 
-    hands_mod.log_info("Starting combined detection...")
-    run_detection(
+    hands_mod.log_info("Starting combined live detection...")
+    run_detection_webcam(
         cap,
         person_detector,
         hand_detector,
         object_detector,
         tracker,
-        student_map,
+        live_student_map,
         desk_polygons,
         desk_edge_lines,
-        video_path,
+        camera_index,
         args.port,
         roi_polygon=roi_polygon,
     )
+
     cap.release()
+    cv2.destroyAllWindows()
     hands_mod.log_info("Done!")
 
 

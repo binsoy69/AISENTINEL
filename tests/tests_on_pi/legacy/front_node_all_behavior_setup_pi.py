@@ -19,8 +19,9 @@ from pathlib import Path
 import cv2
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+PI_TEST_DIR = SCRIPT_DIR.parent
+if str(PI_TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(PI_TEST_DIR))
 
 import front_node_all_behavior_pi as combined_mod
 import front_node_all_behavior_setup_io as setup_io

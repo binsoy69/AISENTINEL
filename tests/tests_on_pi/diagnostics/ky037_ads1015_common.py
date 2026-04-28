@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 FRONT_RUNTIME_DIR = REPO_ROOT / "runtime" / "front_node_pi"
 if str(FRONT_RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(FRONT_RUNTIME_DIR))
@@ -185,7 +185,7 @@ def require_calibration(settings: argparse.Namespace) -> None:
 
     print("[ERROR] Calibration is incomplete.")
     print(
-        "Run `python3 tests/tests_on_pi/ky037_ads1015_calibrate.py` first to "
+        "Run `python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py` first to "
         "capture the quiet and loud reference values."
     )
     print(f"Expected config file: {settings.config_file}")

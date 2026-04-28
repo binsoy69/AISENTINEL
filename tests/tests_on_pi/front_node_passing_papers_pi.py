@@ -1169,22 +1169,27 @@ def run_assignment_phase(first_frame, detections, track_ids, disp_scale):
 # ═══════════════════════════════════════════════════════════════
 
 def run_detection(cap, estimator, tracker, student_map, video_path, port,
-                  roi_polygon=None):
+                  roi_polygon=None, source_mode="video", source_fps=None):
     """Run detection loop, streaming annotated frames via Flask."""
     global _latest_frame
 
-    video_name = Path(video_path).stem
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    source_label = str(video_path)
+    video_name = Path(source_label).stem
+    fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if source_mode == "video" else 0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    duration = total_frames / fps if fps > 0 else 0
+    duration = total_frames / fps if fps > 0 and total_frames > 0 else 0
 
     print()
     print("=" * 70)
     print(f"  AISENTINEL - Passing Papers Detection (Pi + Hailo)")
-    print(f"  Video    : {Path(video_path).name}")
-    print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
+    source_heading = "Video" if source_mode == "video" else "Webcam"
+    print(f"  {source_heading:8s}: {Path(source_label).name}")
+    if total_frames > 0:
+        print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
+    else:
+        print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Live source")
     print(f"  Students : {len(student_map)} assigned")
     print(f"  Wrist proximity     : {WRIST_PROXIMITY_PX}px (at ref scale)")
     print(f"  Min proximity dur   : {MIN_INTERACTION_SEC}s")
@@ -1220,15 +1225,19 @@ def run_detection(cap, estimator, tracker, student_map, video_path, port,
 
     frame_idx = 1
     total_alerts = 0
+    source_start = time.perf_counter()
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                log_info("End of video reached.")
+                if source_mode == "video":
+                    log_info("End of video reached.")
+                else:
+                    log_info("Webcam stream ended.")
                 break
             frame_idx += 1
-            ts_sec = frame_idx / fps
+            ts_sec = frame_idx / fps if source_mode == "video" else time.perf_counter() - source_start
 
             # ── Pose inference on Hailo ─────────────────────────
             t0 = time.perf_counter()
@@ -1450,8 +1459,12 @@ def run_detection(cap, estimator, tracker, student_map, video_path, port,
 
             # -- HUD --------------------------------------------------
             n_tracked = sum(1 for t in track_ids if t in students)
+            frame_label = (
+                f"Frame: {frame_idx}/{total_frames}"
+                if total_frames > 0 else f"Frame: {frame_idx}"
+            )
             hud_lines = [
-                f"Frame: {frame_idx}/{total_frames} | Time: {fmt_ts(ts_sec)}",
+                f"{frame_label} | Time: {fmt_ts(ts_sec)}",
                 f"Tracked: {n_tracked} | Assigned: {len(students)} | "
                 f"Alerts: {total_alerts} | Inf: {inference_ms:.0f}ms",
             ]
@@ -1493,8 +1506,11 @@ def run_detection(cap, estimator, tracker, student_map, video_path, port,
 
             # -- Progress ---------------------------------------------
             if frame_idx % 500 == 0:
-                pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
-                log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames})")
+                if total_frames > 0:
+                    pct = frame_idx / total_frames * 100
+                    log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames})")
+                else:
+                    log_info(f"Live progress: {frame_idx} frames | {fmt_ts(ts_sec)}")
 
     except KeyboardInterrupt:
         log_info("Interrupted by user.")
@@ -1502,7 +1518,7 @@ def run_detection(cap, estimator, tracker, student_map, video_path, port,
     # -- Summary --------------------------------------------------
     print()
     print("=" * 70)
-    print(f"  Summary: {Path(video_path).name}")
+    print(f"  Summary: {Path(source_label).name}")
     print("-" * 70)
     print(f"  Frames processed : {frame_idx}")
     print(f"  Students tracked : {len(students)}")

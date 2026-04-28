@@ -24,6 +24,11 @@ import os
 import time
 import argparse
 from datetime import datetime
+from pathlib import Path
+
+PI_TEST_DIR = Path(__file__).resolve().parents[1]
+if str(PI_TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(PI_TEST_DIR))
 
 from front_node_pi_model_paths import OBJECT_MODEL_PATH
 import front_node_pi_interactive as pi_ui

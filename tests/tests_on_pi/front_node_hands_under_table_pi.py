@@ -1389,18 +1389,20 @@ def start_web_server(port=8080):
 # ══════════════════════════════════════════════════════════════
 
 def run_detection(cap, person_detector, hand_detector, tracker, student_map,
-                  assigned_students, student_lines, video_path, port, roi_polygon=None):
+                  assigned_students, student_lines, video_path, port, roi_polygon=None,
+                  source_mode="video", source_fps=None):
     """Run detection loop with dual models: pose for persons, shared sentinel model for hands."""
     global _latest_frame
 
-    video_name = Path(video_path).stem
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    source_label = str(video_path)
+    video_name = Path(source_label).stem
+    fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if source_mode == "video" else 0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     assigned_tids = {student["track_id"] for student in assigned_students}
     configured_lines = sum(1 for line in student_lines if line is not None)
-    duration = total_frames / fps if fps > 0 else 0
+    duration = total_frames / fps if fps > 0 and total_frames > 0 else 0
 
     line_states = [
         LineMonitorState(i, student["track_id"])
@@ -1411,9 +1413,13 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
     print("=" * 60)
     local_ip = get_local_ip()
     print(f"  AISENTINEL - Hands Under Table Detection (Pi + Hailo)")
-    print(f"  Video        : {Path(video_path).name}")
-    print(f"  Resolution   : {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
-    print(f"  Total frames : {total_frames}")
+    source_heading = "Video" if source_mode == "video" else "Webcam"
+    print(f"  {source_heading:12s}: {Path(source_label).name}")
+    if total_frames > 0:
+        print(f"  Resolution   : {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
+        print(f"  Total frames : {total_frames}")
+    else:
+        print(f"  Resolution   : {w}x{h} | FPS: {fps:.1f} | Live source")
     print(f"  Students     : {len(assigned_students)} monitored")
     print(f"  Line config  : {configured_lines}/{len(student_lines)}")
     print(f"  ROI          : {'Yes (' + str(len(roi_polygon)) + ' vertices)' if roi_polygon is not None else 'No (full frame)'}")
@@ -1429,20 +1435,25 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
     print("=" * 60)
     print()
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    if source_mode == "video":
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
     frame_idx = 0
     total_alerts = 0
     total_warnings = 0
+    source_start = time.perf_counter()
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                log_info("End of video reached.")
+                if source_mode == "video":
+                    log_info("End of video reached.")
+                else:
+                    log_info("Webcam stream ended.")
                 break
             frame_idx += 1
-            ts_sec = frame_idx / fps
+            ts_sec = frame_idx / fps if source_mode == "video" else time.perf_counter() - source_start
             raw_frame = frame.copy()
 
             # ──────────────────────────────────────────────────────
@@ -1643,7 +1654,11 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
                 save_evidence(annotated, raw_frame, video_name, line_idx, snum, ts_sec)
 
             ts_text = fmt_ts(ts_sec)
-            hud1 = f"Frame: {frame_idx}/{total_frames} | Time: {ts_text}"
+            frame_label = (
+                f"Frame: {frame_idx}/{total_frames}"
+                if total_frames > 0 else f"Frame: {frame_idx}"
+            )
+            hud1 = f"{frame_label} | Time: {ts_text}"
             tracked_count = len(student_tracks)
             hud2 = (f"Monitored: {tracked_count}/{len(assigned_students)} | Hands: {len(hand_detections)} "
                     f"| Lines: {configured_lines} | Alerts: {total_alerts} | Warn: {total_warnings} "
@@ -1698,15 +1713,18 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
                 _latest_frame = annotated
 
             if frame_idx % 500 == 0:
-                pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
-                log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames})")
+                if total_frames > 0:
+                    pct = frame_idx / total_frames * 100
+                    log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames})")
+                else:
+                    log_info(f"Live progress: {frame_idx} frames | {ts_text}")
 
     except KeyboardInterrupt:
         log_info("Interrupted by user.")
 
     print()
     print("=" * 60)
-    print(f"  Summary: {Path(video_path).name}")
+    print(f"  Summary: {Path(source_label).name}")
     print("-" * 60)
     print(f"  Frames processed : {frame_idx}")
     print(f"  Students         : {len(assigned_students)}")

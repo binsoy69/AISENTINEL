@@ -9,10 +9,10 @@ them to a JSON file. By default it runs an interactive two-step calibration:
 2. capture loud reference near the upper threshold, usually 55 dB
 
 Typical usage:
-    python3 tests/tests_on_pi/ky037_ads1015_calibrate.py
-    python3 tests/tests_on_pi/ky037_ads1015_calibrate.py --capture-quiet
-    python3 tests/tests_on_pi/ky037_ads1015_calibrate.py --capture-loud
-    python3 tests/tests_on_pi/ky037_ads1015_calibrate.py --show-config
+    python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py
+    python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py --capture-quiet
+    python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py --capture-loud
+    python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py --show-config
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def run_interactive_calibration(settings: argparse.Namespace) -> None:
     print()
     print("[INFO] Calibration complete.")
     print(
-        "Run `python3 tests/tests_on_pi/ky037_sound_threshold_test.py` to "
+        "Run `python3 tests/tests_on_pi/diagnostics/ky037_sound_threshold_test.py` to "
         "monitor estimated dB using the saved values."
     )
 

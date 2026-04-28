@@ -74,7 +74,10 @@ import numpy as np
 
 # ── Paths ────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
+PI_TEST_DIR = SCRIPT_DIR.parent
+REPO_ROOT = PI_TEST_DIR.parent.parent
+if str(PI_TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(PI_TEST_DIR))
 
 from front_node_pi_model_paths import POSE_MODEL_PATH
 import front_node_pi_interactive as pi_ui

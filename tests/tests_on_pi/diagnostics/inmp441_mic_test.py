@@ -11,9 +11,9 @@ Prerequisites on Raspberry Pi OS:
     sudo apt install alsa-utils
 
 Usage examples:
-    python3 tests/tests_on_pi/inmp441_mic_test.py --list
-    python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0
-    python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0 --duration 10
+    python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --list
+    python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --device plughw:1,0
+    python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --device plughw:1,0 --duration 10
 
 Notes:
     - The INMP441 is a digital I2S microphone, not an analog mic.
@@ -121,7 +121,7 @@ def choose_device(user_device: str | None, devices: list[CaptureDevice]) -> str:
 
     print("[ERROR] Multiple capture devices were found. Select one explicitly.")
     print("Example:")
-    print("  python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0")
+    print("  python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --device plughw:1,0")
     sys.exit(1)
 
 
@@ -204,9 +204,9 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 tests/tests_on_pi/inmp441_mic_test.py --list
-  python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0
-  python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0 --duration 10
+  python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --list
+  python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --device plughw:1,0
+  python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --device plughw:1,0 --duration 10
 """,
     )
 

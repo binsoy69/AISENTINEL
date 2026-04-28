@@ -49,13 +49,13 @@ If no capture device appears, the mic is not yet exposed correctly to Linux. Tha
 
 I added a test script here:
 
-- `tests/tests_on_pi/inmp441_mic_test.py`
+- `tests/tests_on_pi/diagnostics/inmp441_mic_test.py`
 
 Run it like this:
 
 ```bash
-python3 tests/tests_on_pi/inmp441_mic_test.py --list
-python3 tests/tests_on_pi/inmp441_mic_test.py --device plughw:1,0
+python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --list
+python3 tests/tests_on_pi/diagnostics/inmp441_mic_test.py --device plughw:1,0
 ```
 
 The script:

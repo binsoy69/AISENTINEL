@@ -5,5 +5,4 @@ from _launcher_common import REPO_ROOT, run_script
 
 
 if __name__ == "__main__":
-    run_script(REPO_ROOT / "tests" / "tests_on_pi" / "ky037_sound_threshold_test.py")
-
+    run_script(REPO_ROOT / "tests" / "tests_on_pi" / "diagnostics" / "ky037_sound_threshold_test.py")

@@ -64,9 +64,9 @@ If `ADDR` is tied to `GND`, `i2cdetect -y 1` should normally show `48`.
 This setup now uses two scripts plus one shared runtime module:
 
 - shared runtime helpers: `runtime/front_node_pi/sound_monitor.py`
-- calibration script: `tests/tests_on_pi/ky037_ads1015_calibrate.py`
-- test script: `tests/tests_on_pi/ky037_sound_threshold_test.py`
-- default config file: `tests/tests_on_pi/ky037_ads1015_config.json`
+- calibration script: `tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py`
+- test script: `tests/tests_on_pi/diagnostics/ky037_sound_threshold_test.py`
+- default config file: `tests/tests_on_pi/diagnostics/ky037_ads1015_config.json`
 
 The two Pi helper scripts now import the ADS1015 sampling and dB estimation
 logic from `runtime/front_node_pi/sound_monitor.py`, so the runtime and the
@@ -103,7 +103,7 @@ Add or update the `[sound_sensor]` section in the front-node runtime INI:
 ```ini
 [sound_sensor]
 enabled = true
-calibration_config = tests/tests_on_pi/ky037_ads1015_config.json
+calibration_config = tests/tests_on_pi/diagnostics/ky037_ads1015_config.json
 alert_threshold_db = 55.0
 incident_cooldown_sec = 10.0
 i2c_bus = 1
@@ -141,7 +141,7 @@ Run the full interactive calibration:
 
 ```bash
 cd ~/AISENTINEL
-python3 tests/tests_on_pi/ky037_ads1015_calibrate.py
+python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py
 ```
 
 It will guide you through:
@@ -151,19 +151,19 @@ It will guide you through:
 
 The values are saved automatically to:
 
-- `tests/tests_on_pi/ky037_ads1015_config.json`
+- `tests/tests_on_pi/diagnostics/ky037_ads1015_config.json`
 
 You can also capture each point separately:
 
 ```bash
-python3 tests/tests_on_pi/ky037_ads1015_calibrate.py --capture-quiet
-python3 tests/tests_on_pi/ky037_ads1015_calibrate.py --capture-loud
+python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py --capture-quiet
+python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py --capture-loud
 ```
 
 To save only the runtime settings without capturing references:
 
 ```bash
-python3 tests/tests_on_pi/ky037_ads1015_calibrate.py \
+python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py \
   --quiet-db 45 \
   --loud-db 55 \
   --window-seconds 1.0 \
@@ -174,7 +174,7 @@ python3 tests/tests_on_pi/ky037_ads1015_calibrate.py \
 To inspect the saved values:
 
 ```bash
-python3 tests/tests_on_pi/ky037_ads1015_calibrate.py --show-config
+python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py --show-config
 ```
 
 Example saved config file:
@@ -201,7 +201,7 @@ Example saved config file:
 After calibration, run the estimated dB monitor:
 
 ```bash
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py
+python3 tests/tests_on_pi/diagnostics/ky037_sound_threshold_test.py
 ```
 
 Default output looks like:
@@ -213,7 +213,7 @@ estimated_db=47.3 status=warning
 Debug mode adds RMS and voltage details:
 
 ```bash
-python3 tests/tests_on_pi/ky037_sound_threshold_test.py --debug
+python3 tests/tests_on_pi/diagnostics/ky037_sound_threshold_test.py --debug
 ```
 
 Example debug output:
@@ -267,7 +267,7 @@ script first.
   - Confirm I2C is enabled in `raspi-config`.
   - Recheck `ADDR` wiring. `ADDR -> GND` gives address `0x48`.
 - The test script says calibration is incomplete:
-  - Run `python3 tests/tests_on_pi/ky037_ads1015_calibrate.py`.
+  - Run `python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py`.
   - Or run `--capture-quiet`, then `--capture-loud`.
   - Use `--show-config` to confirm the values were written to the JSON file.
 - RMS and peak-to-peak values do not change with sound:
