@@ -15,10 +15,12 @@ double-click workflows, and beginner-friendly terminal usage.
 
 - `run_front_node_webcam.py`: front node live webcam deployment.
 - `run_mid_node_webcam.py`: mid node live webcam deployment.
-- `run_front_node_video.py`: front node video replay using configured video.
-- `run_mid_node_video.py`: mid node video replay using configured video.
+- `run_front_node_video.py`: front node video replay using a file picker.
+- `run_mid_node_video.py`: mid node video replay using a file picker.
 
-Video replay reads `[video_source] default_video` from the matching runtime INI:
+Video replay opens a file picker, saves the selected file to
+`[video_source] default_video` in the matching runtime INI, then starts the
+node:
 
 - `runtime/central_dashboard/node_front_runtime.ini`
 - `runtime/central_dashboard/node_mid_runtime.ini`
@@ -27,8 +29,9 @@ Video replay reads `[video_source] default_video` from the matching runtime INI:
 
 - `calibrate_front_webcam.py`: save/update the front webcam setup profile.
 - `calibrate_mid_webcam.py`: save/update the mid webcam setup profile.
-- `calibrate_front_video.py`: save/update the front video setup profile.
-- `calibrate_mid_video.py`: save/update the mid video setup profile.
+- `calibrate_front_video.py`: pick a front video and save/update its setup
+  profile.
+- `calibrate_mid_video.py`: pick a mid video and save/update its setup profile.
 
 ## Testing
 
