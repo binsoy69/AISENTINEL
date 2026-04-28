@@ -31,10 +31,12 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from front_node_pc_common import POSE_MODEL_CANDIDATES, first_existing
+
 # ── Paths ────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-POSE_MODEL_PATH = REPO_ROOT / "yolo26s-pose.pt"
+REPO_ROOT = SCRIPT_DIR.parent.parent
+POSE_MODEL_PATH = first_existing(POSE_MODEL_CANDIDATES) or Path("yolo11n-pose.pt")
 
 # ── COCO 17-Keypoint Indices ────────────────────────────────
 KP_NOSE = 0

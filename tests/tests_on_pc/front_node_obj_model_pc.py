@@ -37,23 +37,33 @@ from collections import defaultdict
 import cv2
 from ultralytics import YOLO
 
+from front_node_pc_common import (
+    FRONT_NODE_OBJECT_MODEL_CANDIDATES,
+    SENTINEL_MODEL_CANDIDATES,
+    canonical_label,
+    first_existing,
+)
+
 # ── Paths (relative to repo root) ───────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
 
 # Default model path
-OBJ_MODEL_PATH = REPO_ROOT / "models" / "front_node" / "my_model.pt"
+OBJ_MODEL_PATH = first_existing(
+    FRONT_NODE_OBJECT_MODEL_CANDIDATES + SENTINEL_MODEL_CANDIDATES
+) or (REPO_ROOT / "models" / "front_node" / "my_model.pt")
 
 # Output directory for detection screenshots
 DETECTION_OUTPUT_DIR = SCRIPT_DIR / "detection_output"
 
 # ── Alert classes (these trigger terminal alerts + screenshots) ──
-ALERT_CLASSES = {"cellphone", "cheat_sheet"}
+ALERT_CLASSES = {"cellphone", "phone", "cheat_sheet"}
 
 # ── Detection thresholds ─────────────────────────────────────
 CONFIDENCE_THRESHOLDS = {
     "student": 0.5,
     "cellphone": 0.6,
+    "phone": 0.6,
     "paper": 0.5,
     "hand": 0.5,
     "calculator": 0.5,
@@ -176,7 +186,7 @@ def process_video(
             for box in obj_boxes:
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
-                label = obj_model.names.get(cls_id, f"class_{cls_id}")
+                label = canonical_label(obj_model.names.get(cls_id, f"class_{cls_id}"))
 
                 # Apply per-class threshold
                 min_conf = CONFIDENCE_THRESHOLDS.get(label, 0.5)
@@ -344,7 +354,7 @@ def main():
     # Validate model
     if not os.path.isfile(args.obj_model):
         print(f"{TermColor.RED}[ERROR] Object detection model not found: {args.obj_model}{TermColor.RESET}")
-        print("  Expected at: models/front_node/my_model.pt")
+        print("  Expected a front-node or sentinel .pt model under models/archive/")
         sys.exit(1)
 
     # Load model

@@ -43,13 +43,17 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from front_node_pc_common import POSE_MODEL_CANDIDATES, first_existing
+
 # ── Paths ────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
 
-POSE_MODEL_PATH = REPO_ROOT / "yolo11n-pose.pt"
+POSE_MODEL_PATH = first_existing(POSE_MODEL_CANDIDATES) or Path("yolo11n-pose.pt")
 DETECTION_OUTPUT_DIR = SCRIPT_DIR / "pose_detection_output"
 BYTETRACK_CONFIG = SCRIPT_DIR / "bytetrack_front.yaml"
+if not BYTETRACK_CONFIG.exists():
+    BYTETRACK_CONFIG = SCRIPT_DIR.parent / "tests_on_pi" / "bytetrack_front.yaml"
 
 # ── COCO 17-Keypoint Indices ────────────────────────────────
 KP_NOSE = 0
@@ -881,10 +885,13 @@ def main():
 
     # Validate model
     if not os.path.isfile(args.pose_model):
-        print(f"{TC.RED}[ERROR] Pose model not found: {args.pose_model}{TC.RESET}")
-        print(f"  Expected at: {POSE_MODEL_PATH}")
-        print("  Ultralytics auto-downloads yolo11n-pose.pt on first use.")
-        sys.exit(1)
+        model_name = Path(args.pose_model).name
+        if model_name == args.pose_model and model_name.startswith("yolo") and model_name.endswith(".pt"):
+            print(f"{TC.YELLOW}[INFO] Pose model will be resolved by Ultralytics: {args.pose_model}{TC.RESET}")
+        else:
+            print(f"{TC.RED}[ERROR] Pose model not found: {args.pose_model}{TC.RESET}")
+            print(f"  Expected at: {POSE_MODEL_PATH}")
+            sys.exit(1)
 
     # Validate tracker config
     if not BYTETRACK_CONFIG.exists():

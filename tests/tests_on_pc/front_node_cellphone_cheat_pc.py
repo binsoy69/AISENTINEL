@@ -1,374 +1,200 @@
 #!/usr/bin/env python3
-"""
-Cellphone / Cheat Sheet Detection Test - PC
-=============================================
-Runs the front node YOLO object detection model on a video file,
-filtering for only cellphone and cheat_sheet detections.
+"""PC runner for the updated Pi phone/cheat-sheet logic using Ultralytics .pt models."""
 
-Workflow:
-  1. File picker dialog opens to select a video
-  2. Model runs on each frame, drawing bounding boxes for cellphone/cheat_sheet
-  3. On detection: saves a timestamped screenshot to ./evidence_obj/
+from __future__ import annotations
 
-Controls:
-    q / ESC  - Quit
-    SPACE    - Pause / Resume
-
-Requirements:
-    pip install ultralytics opencv-python
-"""
-
-import sys
 import os
-from pathlib import Path
-from collections import defaultdict
+import sys
 
 import cv2
-from ultralytics import YOLO
+import numpy as np
 
-# ── Paths ────────────────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
-
-OBJ_MODEL_DIR = REPO_ROOT / "models" / "yolov11n-sentinel-new"
-OBJ_MODEL_CANDIDATES = (
-    OBJ_MODEL_DIR / "sentinel_new.pt",
-    OBJ_MODEL_DIR / "sentinel-new.pt",
-    OBJ_MODEL_DIR / "train" / "weights" / "best.pt",
-    OBJ_MODEL_DIR / "train" / "weights" / "last.pt",
+from front_node_pc_common import (
+    CV_WINDOW_PORT_HINT,
+    OBJECT_MODEL_CANDIDATES,
+    POSE_MODEL_CANDIDATES,
+    SCRIPT_DIR,
+    UltralyticsObjectDetector,
+    UltralyticsPoseEstimator,
+    close_cv_window,
+    enable_cv_window_stream,
+    load_pi_module,
+    resolve_model_path,
 )
-EVIDENCE_DIR = SCRIPT_DIR / "evidence_obj"
-
-# ── Only these classes matter ────────────────────────────────
-TARGET_CLASSES = {"cellphone", "cheat_sheet"}
-LABEL_ALIASES = {
-    "phone": "cellphone",
-    "cell_phone": "cellphone",
-    "cell phone": "cellphone",
-}
-
-CONFIDENCE_THRESHOLDS = {
-    "cellphone": 0.6,
-    "cheat_sheet": 0.5,
-}
-
-# ── Colors (BGR) ─────────────────────────────────────────────
-COL_CELLPHONE = (0, 0, 255)       # red
-COL_CHEAT_SHEET = (0, 165, 255)   # orange
-COL_HUD = (0, 255, 0)             # green
-
-CLASS_COLORS = {
-    "cellphone": COL_CELLPHONE,
-    "cheat_sheet": COL_CHEAT_SHEET,
-}
 
 
-# ── Terminal helpers ─────────────────────────────────────────
-class TC:
-    RED = "\033[91m"
-    YELLOW = "\033[93m"
-    GREEN = "\033[92m"
-    CYAN = "\033[96m"
-    BOLD = "\033[1m"
-    RESET = "\033[0m"
+obj_mod = load_pi_module("front_node_cellphone_cheat_pi")
+obj_mod.EVIDENCE_DIR = SCRIPT_DIR / "evidence_obj"
 
 
-def fmt_ts(seconds: float) -> str:
-    total = int(seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    ms = int((seconds - total) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+def _select_video(video_arg):
+    if video_arg:
+        return video_arg
+    obj_mod.log_info("Opening file dialog...")
+    return obj_mod.select_video_dialog()
 
 
-def log_alert(label: str, conf: float, ts_sec: float):
-    ts = fmt_ts(ts_sec)
-    print(
-        f"{TC.RED}{TC.BOLD}[ALERT @ {ts}]{TC.RESET} "
-        f"{TC.RED}{label.upper()} detected (conf={conf:.0%}){TC.RESET}"
-    )
-
-
-def log_info(msg: str):
-    print(f"{TC.CYAN}[INFO]{TC.RESET} {msg}")
-
-
-def log_warn(msg: str):
-    print(f"{TC.YELLOW}[WARN]{TC.RESET} {msg}")
-
-
-def resolve_obj_model_path() -> Path | None:
-    for candidate in OBJ_MODEL_CANDIDATES:
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def canonical_label(label: str) -> str:
-    return LABEL_ALIASES.get(label, label)
-
-
-def close_display_windows():
-    try:
-        cv2.destroyAllWindows()
-    except cv2.error:
-        pass
-
-
-# ── Drawing helpers ──────────────────────────────────────────
-def draw_label(img, text, x, y, bg, fg=(255, 255, 255)):
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-    cv2.rectangle(img, (x, y - th - 6), (x + tw + 4, y), bg, -1)
-    cv2.putText(img, text, (x + 2, y - 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, fg, 1, cv2.LINE_AA)
-
-
-def save_evidence(frame, video_name, label, conf, ts_sec):
-    os.makedirs(EVIDENCE_DIR, exist_ok=True)
-    ts_str = fmt_ts(ts_sec).replace(":", "").replace(".", "_")
-    fname = f"{video_name}_{label}_{conf:.0f}pct_{ts_str}.jpg"
-    path = EVIDENCE_DIR / fname
-    cv2.imwrite(str(path), frame)
-    log_info(f"Evidence saved: {fname}")
-
-
-# ── File Dialog ──────────────────────────────────────────────
-def select_video_dialog():
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    path = filedialog.askopenfilename(
-        title="AISENTINEL - Select Video File",
-        filetypes=[
-            ("Video files", "*.mp4 *.avi *.mkv *.mov *.wmv"),
-            ("All files", "*.*"),
-        ]
-    )
-    root.destroy()
-    return path if path else None
-
-
-# ── Main ─────────────────────────────────────────────────────
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="AISENTINEL - Phone / Cheat Sheet Detection (PC + Ultralytics)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python front_node_cellphone_cheat_pc.py
+  python front_node_cellphone_cheat_pc.py --video path/to/exam.mp4
+  python front_node_cellphone_cheat_pc.py --pose-model models/archive/yolo26s-pose.pt
+  python front_node_cellphone_cheat_pc.py --object-model models/archive/yolov11n-sentinel-new/sentinel_new.pt
+        """,
+    )
+    parser.add_argument("--video", default=None, help="Optional path to a video file")
+    parser.add_argument("--pose-model", default=None, help="Path/name for an Ultralytics pose .pt model")
+    parser.add_argument("--object-model", "--model", dest="object_model", default=None,
+                        help="Path to a .pt detector with phone/cheat_sheet classes")
+    parser.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--person-confidence", type=float, default=obj_mod.PERSON_CONFIDENCE)
+    parser.add_argument("--object-confidence", "--confidence", dest="object_confidence",
+                        type=float, default=0.25, help="Base object confidence")
+    parser.add_argument("--imgsz", type=int, default=640, help="YOLO inference image size")
+    parser.add_argument("--device", default=None, help="Optional Ultralytics device, e.g. cpu, 0")
+    parser.add_argument("--no-roi", action="store_true", help="Skip ROI calibration")
+    args = parser.parse_args()
+
     print()
-    print("=" * 60)
-    print("  AISENTINEL - Cellphone / Cheat Sheet Detection Test (PC)")
-    print("  Detects: cellphone | cheat_sheet")
-    print("=" * 60)
+    print("=" * 70)
+    print("  AISENTINEL - Phone / Cheat Sheet Detection (PC + Ultralytics)")
+    print("  Logic      : tests_on_pi front_node_cellphone_cheat_pi")
+    print("  Hardware   : PC only, no Hailo")
+    print("=" * 70)
     print()
 
-    # ── Select video ──────────────────────────────────────────
-    log_info("Opening file dialog...")
-    video_path = select_video_dialog()
+    video_path = _select_video(args.video)
     if not video_path:
-        log_info("No video selected. Exiting.")
+        obj_mod.log_info("No video selected. Exiting.")
         sys.exit(0)
     if not os.path.isfile(video_path):
-        print(f"{TC.RED}[ERROR] File not found: {video_path}{TC.RESET}")
-        sys.exit(1)
-    log_info(f"Selected: {video_path}")
-
-    # ── Load model ────────────────────────────────────────────
-    obj_model_path = resolve_obj_model_path()
-    if obj_model_path is None:
-        print(f"{TC.RED}[ERROR] Model not found in: {OBJ_MODEL_DIR}{TC.RESET}")
-        print(f"{TC.YELLOW}Checked:{TC.RESET}")
-        for candidate in OBJ_MODEL_CANDIDATES:
-            print(f"  - {candidate}")
+        print(f"{obj_mod.TC.RED}[ERROR] File not found: {video_path}{obj_mod.TC.RESET}")
         sys.exit(1)
 
-    log_info(f"Loading model: {obj_model_path.name}")
-    model = YOLO(str(obj_model_path))
-    log_info("Model loaded.")
+    pose_model = resolve_model_path(
+        args.pose_model,
+        POSE_MODEL_CANDIDATES,
+        fallback_name="yolo11n-pose.pt",
+    )
+    try:
+        object_model = resolve_model_path(args.object_model, OBJECT_MODEL_CANDIDATES)
+    except FileNotFoundError as exc:
+        print(f"{obj_mod.TC.RED}[ERROR] {exc}{obj_mod.TC.RESET}")
+        sys.exit(1)
 
-    # Show which classes the model knows about
-    print(f"\n{TC.BOLD}Model classes:{TC.RESET}")
-    for idx, name in model.names.items():
-        canonical = canonical_label(name)
-        marker = "  << TARGET" if canonical in TARGET_CLASSES else ""
-        thresh = CONFIDENCE_THRESHOLDS.get(canonical, "-")
-        alias_note = f" -> {canonical}" if canonical != name else ""
-        print(f"  [{idx}] {name}{alias_note} (thresh={thresh}){marker}")
-    print()
+    obj_mod.log_info(f"Loading pose model: {pose_model}")
+    person_detector = UltralyticsPoseEstimator(
+        pose_model,
+        conf_threshold=args.person_confidence,
+        imgsz=args.imgsz,
+        device=args.device,
+    )
 
-    # ── Open video ────────────────────────────────────────────
+    obj_mod.log_info(f"Loading object detector: {object_model}")
+    detector = UltralyticsObjectDetector(
+        object_model,
+        conf_threshold=args.object_confidence,
+        imgsz=args.imgsz,
+        device=args.device,
+    )
+
+    object_classes = ", ".join(f"{idx}:{name}" for idx, name in sorted(detector.names.items()))
+    obj_mod.log_info(f"Detector classes: {object_classes}")
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"{TC.RED}[ERROR] Cannot open video: {video_path}{TC.RESET}")
+        print(f"{obj_mod.TC.RED}[ERROR] Cannot open video: {video_path}{obj_mod.TC.RESET}")
         sys.exit(1)
 
-    video_name = Path(video_path).stem
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    duration = total_frames / fps if fps > 0 else 0
-    disp_scale = min(1.0, 1280 / w) if w > 1280 else 1.0
+    ret, first_frame = cap.read()
+    if not ret:
+        cap.release()
+        print(f"{obj_mod.TC.RED}[ERROR] Cannot read first frame.{obj_mod.TC.RESET}")
+        sys.exit(1)
 
-    print("=" * 60)
-    print(f"  Video    : {Path(video_path).name}")
-    print(f"  Resolution: {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
-    print(f"  Total frames: {total_frames}")
-    print(f"  Evidence dir : {EVIDENCE_DIR}")
-    print("=" * 60)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    disp_scale = min(1.0, 1280 / width) if width > 1280 else 1.0
+    obj_mod.log_info(f"Video resolution: {width}x{height}")
+
+    roi_polygon = None
+    if not args.no_roi:
+        obj_mod.log_info("Draw ROI boundary to limit tracking area, or press S to skip.")
+        roi_result = obj_mod.calibrate_roi(first_frame, disp_scale)
+        if isinstance(roi_result, str) and roi_result == "CANCEL":
+            cap.release()
+            obj_mod.log_info("ROI calibration cancelled. Exiting.")
+            sys.exit(0)
+        roi_polygon = roi_result if isinstance(roi_result, np.ndarray) else None
+
+    obj_mod.log_info("Running person detection on first frame for student assignment...")
+    first_student_dets = person_detector.detect_persons(first_frame)
+    first_student_dets = obj_mod.filter_detections_by_roi(first_student_dets, roi_polygon)
+    tracker = obj_mod.IoUTracker(iou_threshold=0.3, max_lost=60)
+    first_track_ids = tracker.update(first_student_dets)
+
+    roi_label = " within ROI" if roi_polygon is not None else ""
+    obj_mod.log_info(f"Detected {len(first_student_dets)} students{roi_label}.")
+
+    first_obj_dets = [
+        d for d in detector.detect(first_frame)
+        if d["class_name"] in obj_mod.OBJECT_CLASSES
+    ]
+    if first_obj_dets:
+        obj_mod.log_info(
+            "Also detected: "
+            + ", ".join(f"{d['class_name']}({d['confidence']:.0%})" for d in first_obj_dets)
+        )
+
+    print()
+    print(f"  {obj_mod.TC.BOLD}Instructions:{obj_mod.TC.RESET}")
+    print("    1. Click on a student bbox to select them")
+    print("    2. Type the student number")
+    print("    3. Press ENTER to assign")
+    print("    4. Repeat, then press S to start")
     print()
 
-    # ── Detection loop ────────────────────────────────────────
-    frame_idx = 0
-    paused = False
-    display_enabled = True
-    stats = defaultdict(int)
-    alert_count = 0
-    win_name = "AISENTINEL - Cellphone / Cheat Sheet Detection"
+    student_map = obj_mod.run_assignment_phase(
+        first_frame, first_student_dets, first_track_ids, disp_scale
+    )
+    if student_map is None:
+        cap.release()
+        obj_mod.log_info("Assignment cancelled. Exiting.")
+        sys.exit(0)
+    if len(student_map) == 0:
+        cap.release()
+        obj_mod.log_info("No students assigned. Exiting.")
+        sys.exit(0)
 
-    while True:
-        if display_enabled and paused:
-            try:
-                key = cv2.waitKey(100) & 0xFF
-            except cv2.error as exc:
-                display_enabled = False
-                paused = False
-                log_warn(
-                    "OpenCV display is unavailable; continuing without preview window. "
-                    f"({exc})"
-                )
-                close_display_windows()
-                continue
-            if key == ord(" "):
-                paused = False
-                log_info("Resumed.")
-            elif key in (ord("q"), 27):
-                break
-            continue
+    tracker.keep_only(set(student_map.keys()))
+    obj_mod.log_info(f"Tracker locked to {len(student_map)} assigned student(s).")
 
-        ret, frame = cap.read()
-        if not ret:
-            log_info("End of video reached.")
-            break
-        frame_idx += 1
-        ts_sec = frame_idx / fps
-
-        # ── Run detection ─────────────────────────────────────
-        results = model(frame, verbose=False, imgsz=640)
-        boxes = results[0].boxes
-
-        annotated = frame.copy()
-        frame_detections = []  # (label, conf) for this frame
-
-        if boxes is not None and len(boxes) > 0:
-            for box in boxes:
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                raw_label = model.names.get(cls_id, f"class_{cls_id}")
-                label = canonical_label(raw_label)
-
-                # Only care about target classes
-                if label not in TARGET_CLASSES:
-                    continue
-
-                min_conf = CONFIDENCE_THRESHOLDS.get(label, 0.5)
-                if conf < min_conf:
-                    continue
-
-                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                stats[label] += 1
-                color = CLASS_COLORS.get(label, (0, 0, 255))
-
-                # Draw bounding box
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                draw_label(annotated, f"{label} {conf:.0%}", x1, y1 - 2, color)
-
-                frame_detections.append((label, conf, x1, y1, x2, y2))
-
-        # ── Alerts + evidence ─────────────────────────────────
-        for label, conf, *_ in frame_detections:
-            alert_count += 1
-            log_alert(label, conf, ts_sec)
-            save_evidence(annotated, video_name, label, conf, ts_sec)
-
-        # ── HUD ───────────────────────────────────────────────
-        ts_text = fmt_ts(ts_sec)
-        hud1 = f"Frame: {frame_idx}/{total_frames} | Time: {ts_text}"
-        hud2 = f"Alerts: {alert_count}"
-
-        cv2.putText(annotated, hud1, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(annotated, hud1, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COL_HUD, 2, cv2.LINE_AA)
-
-        hud_color = COL_CELLPHONE if alert_count > 0 else COL_HUD
-        cv2.putText(annotated, hud2, (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(annotated, hud2, (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, hud_color, 2, cv2.LINE_AA)
-
-        # Alert banner
-        if frame_detections:
-            banner_y = h - 30
-            for label, conf, *_ in frame_detections:
-                txt = f"DETECTED: {label.upper()} ({conf:.0%})"
-                cv2.putText(annotated, txt, (10, banner_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
-                cv2.putText(annotated, txt, (10, banner_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, COL_CELLPHONE, 2, cv2.LINE_AA)
-                banner_y -= 35
-
-        # Timestamp watermark bottom-right
-        (tw, th), _ = cv2.getTextSize(ts_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-        cv2.putText(annotated, ts_text, (w - tw - 10, h - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(annotated, ts_text, (w - tw - 10, h - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-
-        # ── Display ───────────────────────────────────────────
-        disp = annotated
-        if disp_scale < 1.0:
-            disp = cv2.resize(annotated,
-                              (int(w * disp_scale), int(h * disp_scale)))
-        if display_enabled:
-            try:
-                cv2.imshow(win_name, disp)
-                key = cv2.waitKey(1) & 0xFF
-            except cv2.error as exc:
-                display_enabled = False
-                paused = False
-                log_warn(
-                    "OpenCV display is unavailable; continuing without preview window. "
-                    f"({exc})"
-                )
-                close_display_windows()
-            else:
-                if key in (ord("q"), 27):
-                    log_info("Quit requested.")
-                    break
-                elif key == ord(" "):
-                    paused = True
-                    log_info("Paused. Press SPACE to resume.")
-
-        # Progress
-        if frame_idx % 500 == 0:
-            pct = frame_idx / total_frames * 100 if total_frames > 0 else 0
-            log_info(f"Progress: {pct:.1f}% ({frame_idx}/{total_frames})")
-
-    cap.release()
-    close_display_windows()
-
-    # ── Summary ───────────────────────────────────────────────
-    print()
-    print("=" * 60)
-    print(f"  Summary: {Path(video_path).name}")
-    print("-" * 60)
-    print(f"  Frames processed : {frame_idx}")
-    print(f"  Total alerts     : {alert_count}")
-    for label, count in sorted(stats.items()):
-        print(f"    {label:20s}: {count} detections")
-    if alert_count > 0:
-        print(f"  Evidence saved to: {EVIDENCE_DIR}")
-    else:
-        print("  No cellphone/cheat_sheet detected.")
-    print("=" * 60)
+    window_name = enable_cv_window_stream(obj_mod, "AISENTINEL - Phone / Cheat Sheet")
+    obj_mod.log_info(f"OpenCV window: {window_name} (press Q or Esc to stop)")
+    obj_mod.log_info("Starting detection...")
+    try:
+        obj_mod.run_detection(
+            cap,
+            person_detector,
+            detector,
+            tracker,
+            student_map,
+            video_path,
+            CV_WINDOW_PORT_HINT,
+            roi_polygon=roi_polygon,
+        )
+    finally:
+        close_cv_window(window_name)
+        cap.release()
+        person_detector.close()
+        detector.close()
+    obj_mod.log_info("Done!")
 
 
 if __name__ == "__main__":
