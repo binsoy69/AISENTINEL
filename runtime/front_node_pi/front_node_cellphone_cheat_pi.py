@@ -246,8 +246,6 @@ class HailoPoseEstimator:
 
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
-        self.class_names = object_class_names_for_model(hef_path)
-        self.num_classes = len(self.class_names)
         self._infer_ctx = None
         self._infer_pipeline = None
 
@@ -475,6 +473,8 @@ class HailoObjectDetector:
 
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
+        self.class_names = object_class_names_for_model(hef_path)
+        self.num_classes = len(self.class_names)
         self._infer_ctx = None
         self._infer_pipeline = None
 
