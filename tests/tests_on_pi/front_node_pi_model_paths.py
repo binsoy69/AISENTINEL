@@ -31,6 +31,7 @@ HAND_MODEL_CANDIDATES = (
 )
 
 OBJECT_MODEL_CANDIDATES = (
+    MODELS_DIR / "object-updated.hef",
     MODELS_DIR / "cheat-sheet_phone_model.hef",
     MODELS_DIR / "yolov11n-sentinel-new" / "sentinel-yolov11n_new.hef",
     MODELS_DIR / "archive" / "yolov11n-sentinel-new" / "sentinel-yolov11n_new.hef",

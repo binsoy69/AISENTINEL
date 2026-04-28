@@ -53,18 +53,32 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
 POSE_MODEL_PATH = REPO_ROOT / "models" / "yolov8s_pose.hef"
-OBJ_MODEL_PATH = REPO_ROOT / "models" / "yolov11n-sentinel-new" / "sentinel-yolov11n_new.hef"
+OBJ_MODEL_PATH = REPO_ROOT / "models" / "object-updated.hef"
 EVIDENCE_DIR = SCRIPT_DIR / "data" / "evidence_obj"
 
 # ── Class mapping (from exported sentinel_new.onnx metadata) ─
 # Embedded names found in the sibling ONNX export:
 #   {0: 'cheat_sheet', 1: 'hand', 2: 'phone'}
-CLASS_NAMES = {
+OBJECT_UPDATED_CLASS_NAMES = {
+    0: "cheat_sheet",
+    1: "phone",
+}
+
+LEGACY_OBJECT_CLASS_NAMES = {
     0: "cheat_sheet",
     1: "hand",
     2: "phone",
 }
+
+CLASS_NAMES = OBJECT_UPDATED_CLASS_NAMES
 NUM_CLASSES = len(CLASS_NAMES)
+
+
+def object_class_names_for_model(model_path):
+    """Return the class map matching the selected phone/cheat-sheet HEF."""
+    if Path(model_path).name == "object-updated.hef":
+        return dict(OBJECT_UPDATED_CLASS_NAMES)
+    return dict(LEGACY_OBJECT_CLASS_NAMES)
 
 # ── Object classes to monitor from the model output ──────────
 OBJECT_CLASSES = {"phone", "cheat_sheet"}
@@ -75,7 +89,7 @@ ALERT_CLASSES = {"phone", "cheat_sheet"}
 PERSON_CONFIDENCE = 0.5
 
 CONFIDENCE_THRESHOLDS = {
-    "phone": 0.4,
+    "phone": 0.25,
     "cheat_sheet": 0.3,
 }
 
@@ -232,6 +246,8 @@ class HailoPoseEstimator:
 
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
+        self.class_names = object_class_names_for_model(hef_path)
+        self.num_classes = len(self.class_names)
         self._infer_ctx = None
         self._infer_pipeline = None
 
@@ -487,6 +503,7 @@ class HailoObjectDetector:
         self.input_w = self.input_shape[1]
 
         log_info(f"Model input shape : {self.input_shape}")
+        log_info(f"Model classes     : {self.num_classes} -> {self.class_names}")
         for out_info in self.output_vstream_info:
             log_info(f"Model output layer: {out_info.name} -> {out_info.shape}")
         log_info("Hailo device ready.")
@@ -622,7 +639,7 @@ class HailoObjectDetector:
                                 ],
                                 'confidence': score,
                                 'class_id': int(cls_id),
-                                'class_name': CLASS_NAMES.get(cls_id, f"cls_{cls_id}"),
+                                'class_name': self.class_names.get(cls_id, f"cls_{cls_id}"),
                             })
             except (IndexError, TypeError):
                 return None
@@ -631,7 +648,7 @@ class HailoObjectDetector:
 
     def _try_decode_multiscale(self, raw_output):
         """Decode split YOLO detection heads (64ch box + nc cls per scale)."""
-        nc = NUM_CLASSES
+        nc = self.num_classes
         groups = {}
         for _, arr in raw_output.items():
             try:
@@ -695,7 +712,7 @@ class HailoObjectDetector:
 
     def _try_decode_concatenated(self, raw_output):
         """Try to decode a single concatenated output [N, 4+nc] or [4+nc, N]."""
-        nc = NUM_CLASSES
+        nc = self.num_classes
         expected = 4 + nc
 
         for arr in raw_output.values():
@@ -715,7 +732,7 @@ class HailoObjectDetector:
 
     def _filter_decoded(self, output, img_w, img_h):
         """Apply confidence filter + NMS on decoded [N, 4+nc] array."""
-        nc = NUM_CLASSES
+        nc = self.num_classes
         boxes = output[:, :4]
         cls_scores = output[:, 4:]
 
@@ -748,7 +765,7 @@ class HailoObjectDetector:
                     'bbox': cb[idx].astype(int).tolist(),
                     'confidence': float(cc[idx]),
                     'class_id': int(cid),
-                    'class_name': CLASS_NAMES.get(cid, f"cls_{cid}"),
+                    'class_name': self.class_names.get(cid, f"cls_{cid}"),
                 })
 
         return results
@@ -1700,7 +1717,7 @@ Examples:
 
     # Show class info
     print(f"\n{TC.BOLD}Model classes:{TC.RESET}")
-    for idx, name in CLASS_NAMES.items():
+    for idx, name in detector.class_names.items():
         role = "  << ALERT" if name in ALERT_CLASSES else "  << IGNORED"
         thresh = CONFIDENCE_THRESHOLDS.get(name, "-")
         print(f"  [{idx}] {name} (thresh={thresh}){role}")

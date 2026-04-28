@@ -231,12 +231,16 @@ COCO_LABELS = [
     "toothbrush"
 ]
 
-FRONT_NODE_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
+OBJECT_UPDATED_LABELS = ["cheat_sheet", "phone"]
+LEGACY_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
 
 
 def labels_for_model(model_path):
-    if os.path.basename(str(model_path)) == OBJECT_MODEL_PATH.name:
-        return FRONT_NODE_OBJECT_LABELS
+    basename = os.path.basename(str(model_path))
+    if basename == "object-updated.hef":
+        return OBJECT_UPDATED_LABELS
+    if basename in (OBJECT_MODEL_PATH.name, "cheat-sheet_phone_model.hef", "sentinel-yolov11n_new.hef"):
+        return LEGACY_OBJECT_LABELS
     return COCO_LABELS
 
 

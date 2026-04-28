@@ -282,7 +282,7 @@ def load_runtime_config(
                 parser,
                 ["models"],
                 "object",
-                "models/yolov11n-sentinel-new/sentinel-yolov11n_new.hef",
+                "models/object-updated.hef",
             )
         ),
         pose_confidence=_get_value(

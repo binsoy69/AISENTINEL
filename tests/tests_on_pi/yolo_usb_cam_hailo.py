@@ -77,7 +77,8 @@ COCO_LABELS = [
     "hair drier", "toothbrush",
 ]
 
-FRONT_NODE_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
+OBJECT_UPDATED_LABELS = ["cheat_sheet", "phone"]
+LEGACY_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
 
 np.random.seed(42)
 COLORS = np.random.randint(0, 255, size=(len(COCO_LABELS), 3), dtype=np.uint8)
@@ -117,8 +118,11 @@ def nms(boxes, scores, iou_threshold=0.45):
 
 
 def labels_for_model(model_path):
-    if os.path.basename(str(model_path)) == OBJECT_MODEL_PATH.name:
-        return FRONT_NODE_OBJECT_LABELS
+    basename = os.path.basename(str(model_path))
+    if basename == "object-updated.hef":
+        return OBJECT_UPDATED_LABELS
+    if basename in (OBJECT_MODEL_PATH.name, "cheat-sheet_phone_model.hef", "sentinel-yolov11n_new.hef"):
+        return LEGACY_OBJECT_LABELS
     return COCO_LABELS
 
 

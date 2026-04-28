@@ -1112,7 +1112,7 @@ Examples:
     print("  AISENTINEL - Combined Pi Detection (Webcam)")
     print("  Person detection : pose model (IoU tracked)")
     print("  Hand detection   : hand_model.hef (hand class)")
-    print("  Object detection : cheat-sheet_phone_model.hef (phone + cheat_sheet)")
+    print("  Object detection : object-updated.hef (phone + cheat_sheet)")
     print("  Calibration flow : ROI -> assignment -> desk polygons -> table-edge lines")
     print("  Source           : live webcam")
     print("=" * 72)
@@ -1186,7 +1186,7 @@ Examples:
     )
 
     print(f"\n{hands_mod.TC.BOLD}Object model classes:{hands_mod.TC.RESET}")
-    for idx, name in obj_mod.CLASS_NAMES.items():
+    for idx, name in object_detector.class_names.items():
         role = "  << ALERT" if name in obj_mod.ALERT_CLASSES else "  << IGNORED"
         thresh = obj_mod.CONFIDENCE_THRESHOLDS.get(name, "-")
         print(f"  [{idx}] {name} (thresh={thresh}){role}")

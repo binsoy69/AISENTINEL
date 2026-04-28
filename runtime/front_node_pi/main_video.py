@@ -193,7 +193,7 @@ def main() -> None:
             )
 
             print(f"\n{head_mod.TC.BOLD}Object model classes:{head_mod.TC.RESET}")
-            for idx, name in obj_mod.CLASS_NAMES.items():
+            for idx, name in object_detector.class_names.items():
                 role = "  << ALERT" if name in obj_mod.ALERT_CLASSES else "  << IGNORED"
                 thresh = obj_mod.CONFIDENCE_THRESHOLDS.get(name, "-")
                 print(f"  [{idx}] {name} (thresh={thresh}){role}")
