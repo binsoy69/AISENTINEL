@@ -18,6 +18,14 @@ from _webcam_common import (
 )
 
 import front_node_head_behavior_pi as head_mod
+from front_node_test_config import (
+    DEFAULT_WEBCAM_CONFIG_PATH,
+    add_config_arg,
+    apply_head_config,
+    cli_or_config,
+    load_test_config,
+    path_arg,
+)
 
 
 def main() -> None:
@@ -32,10 +40,21 @@ Examples:
         """,
     )
     add_webcam_args(parser)
+    add_config_arg(parser, DEFAULT_WEBCAM_CONFIG_PATH)
     parser.add_argument("--model", default=None, help=f"Path to pose HEF model (default: {head_mod.POSE_MODEL_PATH})")
-    parser.add_argument("--port", type=int, default=8080, help="Flask web server port (default: 8080)")
-    parser.add_argument("--confidence", type=float, default=0.5, help="Person detection confidence (default: 0.5)")
+    parser.add_argument("--port", type=int, default=None, help="Flask web server port (default: config)")
+    parser.add_argument("--confidence", type=float, default=None, help="Person detection confidence (default: config)")
     args = parser.parse_args()
+    config = load_test_config(args.config, DEFAULT_WEBCAM_CONFIG_PATH)
+    apply_head_config(head_mod, config)
+    camera_index = cli_or_config(args.camera, config.webcam_source.camera_index)
+    capture_width = cli_or_config(args.width, config.webcam_source.capture_width)
+    capture_height = cli_or_config(args.height, config.webcam_source.capture_height)
+    requested_fps = cli_or_config(args.fps, config.webcam_source.capture_fps)
+    warmup_frames = cli_or_config(args.warmup_frames, config.webcam_source.warmup_frames)
+    port = cli_or_config(args.port, config.port)
+    model_arg_value = cli_or_config(args.model, path_arg(config.pose_model))
+    confidence = cli_or_config(args.confidence, config.pose_confidence)
 
     print()
     print("=" * 70)
@@ -44,7 +63,7 @@ Examples:
     print("=" * 70)
     print()
 
-    model_arg = head_mod.pi_ui.select_pose_model(args.model)
+    model_arg = head_mod.pi_ui.select_pose_model(model_arg_value)
     if not model_arg:
         head_mod.log_info("No pose model selected. Exiting.")
         return
@@ -55,15 +74,15 @@ Examples:
     require_file(model_path, "Pose HEF model", head_mod.TC)
 
     cap, opened_as = open_webcam(
-        args.camera,
-        args.width,
-        args.height,
-        args.fps,
+        camera_index,
+        capture_width,
+        capture_height,
+        requested_fps,
         use_mjpg=not args.no_mjpg,
     )
-    source_label = webcam_source_label(args.camera)
-    actual_fps = capture_fps(cap, args.fps)
-    first_frame = read_warmup_frame(cap, args.warmup_frames)
+    source_label = webcam_source_label(camera_index)
+    actual_fps = capture_fps(cap, requested_fps)
+    first_frame = read_warmup_frame(cap, warmup_frames)
     if first_frame is None:
         cap.release()
         raise SystemExit(f"{head_mod.TC.RED}[ERROR] Cannot read a calibration frame from the webcam.{head_mod.TC.RESET}")
@@ -73,10 +92,13 @@ Examples:
     disp_scale = min(1.0, 1280 / width) if width > 1280 else 1.0
     head_mod.log_info(f"Opened webcam {opened_as}: {width}x{height} @ {actual_fps:.1f} FPS")
 
-    estimator = head_mod.HailoPoseEstimator(str(model_path), conf_threshold=args.confidence)
+    estimator = head_mod.HailoPoseEstimator(str(model_path), conf_threshold=confidence)
     head_mod.log_info("Running pose detection on the calibration frame for student assignment...")
     first_detections = estimator.detect_pose(first_frame)
-    tracker = head_mod.IoUTracker(iou_threshold=0.3, max_lost=60)
+    tracker = head_mod.IoUTracker(
+        iou_threshold=config.tracking.iou_threshold,
+        max_lost=config.tracking.max_lost,
+    )
     first_track_ids = tracker.update(first_detections)
 
     head_mod.log_info(f"Detected {len(first_detections)} persons.")
@@ -92,8 +114,8 @@ Examples:
         return
 
     tracker.keep_only(set(student_map.keys()))
-    head_mod.start_web_server(args.port)
-    head_mod.log_info(f"Web stream at http://{head_mod.get_local_ip()}:{args.port}")
+    head_mod.start_web_server(port)
+    head_mod.log_info(f"Web stream at http://{head_mod.get_local_ip()}:{port}")
     head_mod.log_info("Starting webcam detection...")
     head_mod.run_detection(
         cap,
@@ -101,7 +123,7 @@ Examples:
         tracker,
         student_map,
         source_label,
-        args.port,
+        port,
         baseline_yaw_map=baseline_yaw_map,
         source_mode="webcam",
         source_fps=actual_fps,

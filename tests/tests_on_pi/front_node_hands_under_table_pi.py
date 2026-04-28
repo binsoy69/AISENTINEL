@@ -74,6 +74,14 @@ REPO_ROOT = SCRIPT_DIR.parent.parent
 
 from front_node_pi_model_paths import HAND_MODEL_PATH, POSE_MODEL_PATH
 import front_node_pi_interactive as pi_ui
+from front_node_test_config import (
+    DEFAULT_VIDEO_CONFIG_PATH,
+    add_config_arg,
+    apply_hands_config,
+    cli_or_config,
+    load_test_config,
+    path_arg,
+)
 
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_hands"
 
@@ -1764,15 +1772,22 @@ Examples:
   python3 front_node_hands_under_table_pi.py --port 9090
         """,
     )
+    add_config_arg(parser, DEFAULT_VIDEO_CONFIG_PATH)
     parser.add_argument("--video", default=None,
                         help="Optional path to a video file")
     parser.add_argument("--pose-model", default=None,
                         help=f"Path to pose HEF model for person detection (default: {POSE_MODEL_PATH})")
     parser.add_argument("--hand-model", default=None,
                         help=f"Path to detection HEF model containing the hand class (default: {HAND_MODEL_PATH})")
-    parser.add_argument("--port", type=int, default=8080,
-                        help="Flask web server port (default: 8080)")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Flask web server port (default: config)")
     args = parser.parse_args()
+    config = load_test_config(args.config, DEFAULT_VIDEO_CONFIG_PATH)
+    apply_hands_config(sys.modules[__name__], config)
+    video_arg = cli_or_config(args.video, path_arg(config.video_source.default_video))
+    pose_model_arg_value = cli_or_config(args.pose_model, path_arg(config.pose_model))
+    hand_model_arg_value = cli_or_config(args.hand_model, path_arg(config.hand_model))
+    port = cli_or_config(args.port, config.port)
 
     print()
     print("=" * 60)
@@ -1787,17 +1802,17 @@ Examples:
     print("=" * 60)
     print()
 
-    video_path = pi_ui.select_video(args.video, select_video_dialog)
+    video_path = pi_ui.select_video(video_arg, select_video_dialog)
     if not video_path:
         log_info("No video selected. Exiting.")
         sys.exit(0)
 
-    pose_model_arg = pi_ui.select_pose_model(args.pose_model)
+    pose_model_arg = pi_ui.select_pose_model(pose_model_arg_value)
     if not pose_model_arg:
         log_info("No pose model selected. Exiting.")
         sys.exit(0)
 
-    hand_model_arg = pi_ui.select_hand_model(args.hand_model)
+    hand_model_arg = pi_ui.select_hand_model(hand_model_arg_value)
     if not hand_model_arg:
         log_info("No hand model selected. Exiting.")
         sys.exit(0)
@@ -1875,7 +1890,10 @@ Examples:
     first_detections = filter_detections_by_roi(first_detections, roi_polygon)
 
     # ── Create tracker and assign initial IDs ────────────────
-    tracker = IoUTracker(iou_threshold=0.3, max_lost=60)
+    tracker = IoUTracker(
+        iou_threshold=config.tracking.iou_threshold,
+        max_lost=config.tracking.max_lost,
+    )
     first_track_ids = tracker.update(first_detections)
 
     log_info(f"Detected {len(first_detections)} persons (within ROI).")
@@ -1926,14 +1944,14 @@ Examples:
         print("Install: pip install flask")
         sys.exit(1)
 
-    start_web_server(args.port)
+    start_web_server(port)
     local_ip = get_local_ip()
-    log_info(f"Web stream at http://{local_ip}:{args.port}")
+    log_info(f"Web stream at http://{local_ip}:{port}")
 
     # ── Run detection ───────────────────────────────────────
     log_info("Starting detection...")
     run_detection(cap, person_detector, hand_detector, tracker, student_map,
-                  assigned_students, student_lines, video_path, args.port,
+                  assigned_students, student_lines, video_path, port,
                   roi_polygon=roi_polygon)
     cap.release()
     log_info("Done!")

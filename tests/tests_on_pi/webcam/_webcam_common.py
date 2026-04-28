@@ -20,32 +20,32 @@ def add_webcam_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--camera",
         type=int,
-        default=0,
-        help="Webcam index to open (default: 0)",
+        default=None,
+        help="Webcam index to open (default: config)",
     )
     parser.add_argument(
         "--width",
         type=int,
-        default=1280,
-        help="Requested capture width (default: 1280)",
+        default=None,
+        help="Requested capture width (default: config)",
     )
     parser.add_argument(
         "--height",
         type=int,
-        default=720,
-        help="Requested capture height (default: 720)",
+        default=None,
+        help="Requested capture height (default: config)",
     )
     parser.add_argument(
         "--fps",
         type=float,
-        default=30.0,
-        help="Requested capture FPS (default: 30)",
+        default=None,
+        help="Requested capture FPS (default: config)",
     )
     parser.add_argument(
         "--warmup-frames",
         type=int,
-        default=10,
-        help="Frames to discard before the calibration frame (default: 10)",
+        default=None,
+        help="Frames to discard before the calibration frame (default: config)",
     )
     parser.add_argument(
         "--no-mjpg",

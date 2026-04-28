@@ -19,6 +19,14 @@ from _webcam_common import (
 )
 
 import front_node_cellphone_cheat_pi as obj_mod
+from front_node_test_config import (
+    DEFAULT_WEBCAM_CONFIG_PATH,
+    add_config_arg,
+    apply_object_config,
+    cli_or_config,
+    load_test_config,
+    path_arg,
+)
 
 
 def main() -> None:
@@ -33,11 +41,23 @@ Examples:
         """,
     )
     add_webcam_args(parser)
+    add_config_arg(parser, DEFAULT_WEBCAM_CONFIG_PATH)
     parser.add_argument("--model", default=None, help=f"Path to object HEF model (default: {obj_mod.OBJ_MODEL_PATH})")
     parser.add_argument("--pose-model", default=None, help=f"Path to pose HEF model (default: {obj_mod.POSE_MODEL_PATH})")
-    parser.add_argument("--port", type=int, default=8080, help="Flask web server port (default: 8080)")
-    parser.add_argument("--confidence", type=float, default=0.25, help="Base detection confidence (default: 0.25)")
+    parser.add_argument("--port", type=int, default=None, help="Flask web server port (default: config)")
+    parser.add_argument("--confidence", type=float, default=None, help="Base detection confidence (default: config)")
     args = parser.parse_args()
+    config = load_test_config(args.config, DEFAULT_WEBCAM_CONFIG_PATH)
+    apply_object_config(obj_mod, config)
+    camera_index = cli_or_config(args.camera, config.webcam_source.camera_index)
+    capture_width = cli_or_config(args.width, config.webcam_source.capture_width)
+    capture_height = cli_or_config(args.height, config.webcam_source.capture_height)
+    requested_fps = cli_or_config(args.fps, config.webcam_source.capture_fps)
+    warmup_frames = cli_or_config(args.warmup_frames, config.webcam_source.warmup_frames)
+    port = cli_or_config(args.port, config.port)
+    pose_model_arg_value = cli_or_config(args.pose_model, path_arg(config.pose_model))
+    object_model_arg_value = cli_or_config(args.model, path_arg(config.object_model))
+    object_confidence = cli_or_config(args.confidence, config.object_confidence)
 
     print()
     print("=" * 70)
@@ -46,11 +66,11 @@ Examples:
     print("=" * 70)
     print()
 
-    pose_model_arg = obj_mod.pi_ui.select_pose_model(args.pose_model)
+    pose_model_arg = obj_mod.pi_ui.select_pose_model(pose_model_arg_value)
     if not pose_model_arg:
         obj_mod.log_info("No pose model selected. Exiting.")
         return
-    object_model_arg = obj_mod.pi_ui.select_object_model(args.model)
+    object_model_arg = obj_mod.pi_ui.select_object_model(object_model_arg_value)
     if not object_model_arg:
         obj_mod.log_info("No object model selected. Exiting.")
         return
@@ -62,10 +82,10 @@ Examples:
     require_file(pose_path, "Pose HEF model", obj_mod.TC)
     require_file(object_path, "Object HEF model", obj_mod.TC)
 
-    cap, opened_as = open_webcam(args.camera, args.width, args.height, args.fps, use_mjpg=not args.no_mjpg)
-    source_label = webcam_source_label(args.camera)
-    actual_fps = capture_fps(cap, args.fps)
-    first_frame = read_warmup_frame(cap, args.warmup_frames)
+    cap, opened_as = open_webcam(camera_index, capture_width, capture_height, requested_fps, use_mjpg=not args.no_mjpg)
+    source_label = webcam_source_label(camera_index)
+    actual_fps = capture_fps(cap, requested_fps)
+    first_frame = read_warmup_frame(cap, warmup_frames)
     if first_frame is None:
         cap.release()
         raise SystemExit(f"{obj_mod.TC.RED}[ERROR] Cannot read a calibration frame from the webcam.{obj_mod.TC.RESET}")
@@ -84,7 +104,7 @@ Examples:
     )
     detector = obj_mod.HailoObjectDetector(
         str(object_path),
-        conf_threshold=args.confidence,
+        conf_threshold=object_confidence,
         vdevice=shared_vdevice,
     )
 
@@ -106,7 +126,10 @@ Examples:
     obj_mod.log_info("Running person detection on the calibration frame for student assignment...")
     first_student_dets = person_detector.detect_persons(first_frame)
     first_student_dets = obj_mod.filter_detections_by_roi(first_student_dets, roi_polygon)
-    tracker = obj_mod.IoUTracker(iou_threshold=0.3, max_lost=60)
+    tracker = obj_mod.IoUTracker(
+        iou_threshold=config.tracking.iou_threshold,
+        max_lost=config.tracking.max_lost,
+    )
     first_track_ids = tracker.update(first_student_dets)
     obj_mod.log_info(f"Detected {len(first_student_dets)} students on the calibration frame.")
 
@@ -117,8 +140,8 @@ Examples:
         return
 
     tracker.keep_only(set(student_map.keys()))
-    obj_mod.start_web_server(args.port)
-    obj_mod.log_info(f"Web stream at http://{obj_mod.get_local_ip()}:{args.port}")
+    obj_mod.start_web_server(port)
+    obj_mod.log_info(f"Web stream at http://{obj_mod.get_local_ip()}:{port}")
     obj_mod.log_info("Starting webcam detection...")
     obj_mod.run_detection(
         cap,
@@ -127,7 +150,7 @@ Examples:
         tracker,
         student_map,
         source_label,
-        args.port,
+        port,
         roi_polygon=roi_polygon,
         source_mode="webcam",
         source_fps=actual_fps,

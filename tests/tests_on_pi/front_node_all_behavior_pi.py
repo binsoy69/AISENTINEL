@@ -48,6 +48,14 @@ import front_node_hands_under_table_pi as hands_mod
 import front_node_cellphone_cheat_pi as obj_mod
 import front_node_all_behavior_setup_io as setup_io
 import front_node_pi_interactive as pi_ui
+from front_node_test_config import (
+    DEFAULT_VIDEO_CONFIG_PATH,
+    add_config_arg,
+    apply_all_behavior_config,
+    cli_or_config,
+    load_test_config,
+    path_arg,
+)
 
 # ── Paths ────────────────────────────────────────────────────
 POSE_MODEL_PATH = head_mod.POSE_MODEL_PATH
@@ -1966,6 +1974,7 @@ Examples:
   python3 front_node_all_behavior_pi.py --pose-model /path/to/yolo_pose_model.hef
         """,
     )
+    add_config_arg(parser, DEFAULT_VIDEO_CONFIG_PATH)
     parser.add_argument(
         "--video",
         default=None,
@@ -1990,21 +1999,21 @@ Examples:
     parser.add_argument(
         "--pose-confidence",
         type=float,
-        default=0.5,
-        help="Pose/person confidence threshold (default: 0.5)",
+        default=None,
+        help="Pose/person confidence threshold (default: config)",
     )
     parser.add_argument(
         "--object-confidence", "--confidence",
         dest="object_confidence",
         type=float,
-        default=0.25,
-        help="Base confidence threshold for the object model (default: 0.25)",
+        default=None,
+        help="Base confidence threshold for the object model (default: config)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8080,
-        help="Flask web server port (default: 8080)",
+        default=None,
+        help="Flask web server port (default: config)",
     )
     parser.add_argument(
         "--calibration-file",
@@ -2017,6 +2026,18 @@ Examples:
         help="Force manual setup even if a saved setup JSON exists",
     )
     args = parser.parse_args()
+    config = load_test_config(args.config, DEFAULT_VIDEO_CONFIG_PATH)
+    apply_all_behavior_config(sys.modules[__name__], config)
+    video_arg = cli_or_config(args.video, path_arg(config.video_source.default_video))
+    pose_model_arg_value = cli_or_config(args.pose_model, path_arg(config.pose_model))
+    hand_model_arg_value = cli_or_config(args.hand_model, path_arg(config.hand_model))
+    object_model_arg_value = cli_or_config(
+        args.object_model,
+        path_arg(config.object_model),
+    )
+    pose_confidence = cli_or_config(args.pose_confidence, config.pose_confidence)
+    object_confidence = cli_or_config(args.object_confidence, config.object_confidence)
+    port = cli_or_config(args.port, config.port)
 
     print()
     print("=" * 78)
@@ -2031,22 +2052,22 @@ Examples:
     print("=" * 78)
     print()
 
-    video_path = pi_ui.select_video(args.video, pass_mod.select_video_dialog)
+    video_path = pi_ui.select_video(video_arg, pass_mod.select_video_dialog)
     if not video_path:
         head_mod.log_info("No video selected. Exiting.")
         sys.exit(0)
 
-    pose_model_arg = pi_ui.select_pose_model(args.pose_model)
+    pose_model_arg = pi_ui.select_pose_model(pose_model_arg_value)
     if not pose_model_arg:
         head_mod.log_info("No pose model selected. Exiting.")
         sys.exit(0)
 
-    hand_model_arg = pi_ui.select_hand_model(args.hand_model)
+    hand_model_arg = pi_ui.select_hand_model(hand_model_arg_value)
     if not hand_model_arg:
         head_mod.log_info("No hand model selected. Exiting.")
         sys.exit(0)
 
-    object_model_arg = pi_ui.select_object_model(args.object_model)
+    object_model_arg = pi_ui.select_object_model(object_model_arg_value)
     if not object_model_arg:
         head_mod.log_info("No object model selected. Exiting.")
         sys.exit(0)
@@ -2086,7 +2107,7 @@ Examples:
 
     pose_estimator = SharedHailoPoseEstimator(
         str(pose_path),
-        conf_threshold=args.pose_confidence,
+        conf_threshold=pose_confidence,
         vdevice=shared_vdevice,
     )
     hand_detector = hands_mod.HailoObjectDetector(
@@ -2097,7 +2118,7 @@ Examples:
     )
     object_detector = obj_mod.HailoObjectDetector(
         str(object_path),
-        conf_threshold=args.object_confidence,
+        conf_threshold=object_confidence,
         vdevice=shared_vdevice,
     )
 
@@ -2141,12 +2162,20 @@ Examples:
             )
             sys.exit(1)
     elif not args.ignore_saved_calibration:
-        auto_calibration = setup_io.default_setup_profile_path(video_path)
-        if auto_calibration.exists():
-            calibration_path = auto_calibration
+        candidates = []
+        if config.video_source.default_setup_profile is not None:
+            candidates.append(config.video_source.default_setup_profile)
+        candidates.append(setup_io.default_setup_profile_path(video_path))
+        for auto_calibration in candidates:
+            if auto_calibration.exists():
+                calibration_path = auto_calibration
+                break
 
     setup_bundle = None
-    tracker = ReacquiringLockedIoUTracker(iou_threshold=0.3, max_lost=60)
+    tracker = ReacquiringLockedIoUTracker(
+        iou_threshold=config.tracking.iou_threshold,
+        max_lost=config.tracking.max_lost,
+    )
 
     if calibration_path is not None:
         try:
@@ -2166,12 +2195,18 @@ Examples:
             head_mod.log_info(
                 f"Saved setup could not be used ({exc}). Falling back to manual setup."
             )
-            tracker = ReacquiringLockedIoUTracker(iou_threshold=0.3, max_lost=60)
+            tracker = ReacquiringLockedIoUTracker(
+                iou_threshold=config.tracking.iou_threshold,
+                max_lost=config.tracking.max_lost,
+            )
 
     if setup_bundle is None:
         if calibration_path is not None:
             head_mod.log_info("Falling back to manual setup.")
-        tracker = ReacquiringLockedIoUTracker(iou_threshold=0.3, max_lost=60)
+        tracker = ReacquiringLockedIoUTracker(
+            iou_threshold=config.tracking.iou_threshold,
+            max_lost=config.tracking.max_lost,
+        )
         setup_bundle = run_manual_setup(
             first_frame,
             pose_estimator,
@@ -2195,8 +2230,8 @@ Examples:
         print("Install: pip install flask")
         sys.exit(1)
 
-    start_web_server(args.port)
-    head_mod.log_info(f"Web stream at http://{get_local_ip()}:{args.port}")
+    start_web_server(port)
+    head_mod.log_info(f"Web stream at http://{get_local_ip()}:{port}")
     head_mod.log_info("Starting all-behavior detection...")
 
     try:
@@ -2211,7 +2246,7 @@ Examples:
             assigned_students,
             student_lines,
             video_path,
-            args.port,
+            port,
             roi_polygon=roi_polygon,
         )
     finally:

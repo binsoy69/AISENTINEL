@@ -17,6 +17,14 @@ from _webcam_common import (
 )
 
 import front_node_all_behavior_pi as combined_mod
+from front_node_test_config import (
+    DEFAULT_WEBCAM_CONFIG_PATH,
+    add_config_arg,
+    apply_all_behavior_config,
+    cli_or_config,
+    load_test_config,
+    path_arg,
+)
 
 
 head_mod = combined_mod.head_mod
@@ -48,15 +56,29 @@ Examples:
         """,
     )
     add_webcam_args(parser)
+    add_config_arg(parser, DEFAULT_WEBCAM_CONFIG_PATH)
     parser.add_argument("--pose-model", default=None, help=f"Path to pose HEF model (default: {combined_mod.POSE_MODEL_PATH})")
     parser.add_argument("--hand-model", default=None, help=f"Path to hand HEF model (default: {combined_mod.HAND_MODEL_PATH})")
     parser.add_argument("--object-model", "--model", dest="object_model", default=None, help=f"Path to object HEF model (default: {combined_mod.OBJECT_MODEL_PATH})")
-    parser.add_argument("--pose-confidence", type=float, default=0.5, help="Pose/person confidence threshold (default: 0.5)")
-    parser.add_argument("--object-confidence", "--confidence", dest="object_confidence", type=float, default=0.25, help="Base object confidence threshold (default: 0.25)")
-    parser.add_argument("--port", type=int, default=8080, help="Flask web server port (default: 8080)")
+    parser.add_argument("--pose-confidence", type=float, default=None, help="Pose/person confidence threshold (default: config)")
+    parser.add_argument("--object-confidence", "--confidence", dest="object_confidence", type=float, default=None, help="Base object confidence threshold (default: config)")
+    parser.add_argument("--port", type=int, default=None, help="Flask web server port (default: config)")
     parser.add_argument("--calibration-file", default=None, help="Path to a saved ROI/assignment/desk-line setup JSON")
     parser.add_argument("--ignore-saved-calibration", action="store_true", help="Force manual setup even if a saved setup JSON exists")
     args = parser.parse_args()
+    config = load_test_config(args.config, DEFAULT_WEBCAM_CONFIG_PATH)
+    apply_all_behavior_config(combined_mod, config)
+    camera_index = cli_or_config(args.camera, config.webcam_source.camera_index)
+    capture_width = cli_or_config(args.width, config.webcam_source.capture_width)
+    capture_height = cli_or_config(args.height, config.webcam_source.capture_height)
+    requested_fps = cli_or_config(args.fps, config.webcam_source.capture_fps)
+    warmup_frames = cli_or_config(args.warmup_frames, config.webcam_source.warmup_frames)
+    port = cli_or_config(args.port, config.port)
+    pose_model_arg_value = cli_or_config(args.pose_model, path_arg(config.pose_model))
+    hand_model_arg_value = cli_or_config(args.hand_model, path_arg(config.hand_model))
+    object_model_arg_value = cli_or_config(args.object_model, path_arg(config.object_model))
+    pose_confidence = cli_or_config(args.pose_confidence, config.pose_confidence)
+    object_confidence = cli_or_config(args.object_confidence, config.object_confidence)
 
     print()
     print("=" * 78)
@@ -66,15 +88,15 @@ Examples:
     print("=" * 78)
     print()
 
-    pose_model_arg = combined_mod.pi_ui.select_pose_model(args.pose_model)
+    pose_model_arg = combined_mod.pi_ui.select_pose_model(pose_model_arg_value)
     if not pose_model_arg:
         head_mod.log_info("No pose model selected. Exiting.")
         return
-    hand_model_arg = combined_mod.pi_ui.select_hand_model(args.hand_model)
+    hand_model_arg = combined_mod.pi_ui.select_hand_model(hand_model_arg_value)
     if not hand_model_arg:
         head_mod.log_info("No hand model selected. Exiting.")
         return
-    object_model_arg = combined_mod.pi_ui.select_object_model(args.object_model)
+    object_model_arg = combined_mod.pi_ui.select_object_model(object_model_arg_value)
     if not object_model_arg:
         head_mod.log_info("No object model selected. Exiting.")
         return
@@ -88,10 +110,10 @@ Examples:
     require_file(hand_path, "Hand HEF model", head_mod.TC)
     require_file(object_path, "Object HEF model", head_mod.TC)
 
-    cap, opened_as = open_webcam(args.camera, args.width, args.height, args.fps, use_mjpg=not args.no_mjpg)
-    source_label = webcam_source_label(args.camera)
-    actual_fps = capture_fps(cap, args.fps)
-    first_frame = read_warmup_frame(cap, args.warmup_frames)
+    cap, opened_as = open_webcam(camera_index, capture_width, capture_height, requested_fps, use_mjpg=not args.no_mjpg)
+    source_label = webcam_source_label(camera_index)
+    actual_fps = capture_fps(cap, requested_fps)
+    first_frame = read_warmup_frame(cap, warmup_frames)
     if first_frame is None:
         cap.release()
         raise SystemExit(f"{head_mod.TC.RED}[ERROR] Cannot read a calibration frame from the webcam.{head_mod.TC.RESET}")
@@ -105,7 +127,7 @@ Examples:
     head_mod.log_info("Hailo VDevice created (shared across all models).")
     pose_estimator = combined_mod.SharedHailoPoseEstimator(
         str(pose_path),
-        conf_threshold=args.pose_confidence,
+        conf_threshold=pose_confidence,
         vdevice=shared_vdevice,
     )
     hand_detector = hands_mod.HailoObjectDetector(
@@ -116,7 +138,7 @@ Examples:
     )
     object_detector = obj_mod.HailoObjectDetector(
         str(object_path),
-        conf_threshold=args.object_confidence,
+        conf_threshold=object_confidence,
         vdevice=shared_vdevice,
     )
 
@@ -129,12 +151,20 @@ Examples:
             print(f"{head_mod.TC.RED}[ERROR] Setup file not found: {calibration_path}{head_mod.TC.RESET}")
             raise SystemExit(1)
     elif not args.ignore_saved_calibration:
-        auto_calibration = setup_io.default_setup_profile_path(source_label)
-        if auto_calibration.exists():
-            calibration_path = auto_calibration
+        candidates = []
+        if config.webcam_source.default_setup_profile is not None:
+            candidates.append(config.webcam_source.default_setup_profile)
+        candidates.append(setup_io.default_setup_profile_path(source_label))
+        for auto_calibration in candidates:
+            if auto_calibration.exists():
+                calibration_path = auto_calibration
+                break
 
     setup_bundle = None
-    tracker = combined_mod.ReacquiringLockedIoUTracker(iou_threshold=0.3, max_lost=60)
+    tracker = combined_mod.ReacquiringLockedIoUTracker(
+        iou_threshold=config.tracking.iou_threshold,
+        max_lost=config.tracking.max_lost,
+    )
     if calibration_path is not None:
         try:
             head_mod.log_info(f"Loading saved setup: {calibration_path}")
@@ -151,10 +181,16 @@ Examples:
                 print(str(exc))
                 raise SystemExit(1) from exc
             head_mod.log_info(f"Saved setup could not be used ({exc}). Falling back to manual setup.")
-            tracker = combined_mod.ReacquiringLockedIoUTracker(iou_threshold=0.3, max_lost=60)
+            tracker = combined_mod.ReacquiringLockedIoUTracker(
+                iou_threshold=config.tracking.iou_threshold,
+                max_lost=config.tracking.max_lost,
+            )
 
     if setup_bundle is None:
-        tracker = combined_mod.ReacquiringLockedIoUTracker(iou_threshold=0.3, max_lost=60)
+        tracker = combined_mod.ReacquiringLockedIoUTracker(
+            iou_threshold=config.tracking.iou_threshold,
+            max_lost=config.tracking.max_lost,
+        )
         setup_bundle = combined_mod.run_manual_setup(
             first_frame,
             pose_estimator,
@@ -168,8 +204,8 @@ Examples:
             head_mod.log_info("Setup cancelled. Exiting.")
             return
 
-    combined_mod.start_web_server(args.port)
-    head_mod.log_info(f"Web stream at http://{combined_mod.get_local_ip()}:{args.port}")
+    combined_mod.start_web_server(port)
+    head_mod.log_info(f"Web stream at http://{combined_mod.get_local_ip()}:{port}")
     head_mod.log_info("Starting all-behavior webcam detection...")
     combined_mod.run_detection(
         cap,
@@ -182,7 +218,7 @@ Examples:
         setup_bundle["assigned_students"],
         setup_bundle["student_lines"],
         source_label,
-        args.port,
+        port,
         roi_polygon=setup_bundle["roi_polygon"],
         source_mode="webcam",
         source_fps=actual_fps,

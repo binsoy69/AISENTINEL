@@ -55,6 +55,14 @@ REPO_ROOT = SCRIPT_DIR.parent.parent
 
 from front_node_pi_model_paths import POSE_MODEL_PATH
 import front_node_pi_interactive as pi_ui
+from front_node_test_config import (
+    DEFAULT_VIDEO_CONFIG_PATH,
+    add_config_arg,
+    apply_head_config,
+    cli_or_config,
+    load_test_config,
+    path_arg,
+)
 
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_head"
 
@@ -1338,15 +1346,22 @@ Examples:
   python3 front_node_head_behavior_pi.py --port 9090
         """,
     )
+    add_config_arg(parser, DEFAULT_VIDEO_CONFIG_PATH)
     parser.add_argument("--video", default=None,
                         help="Optional path to a video file")
     parser.add_argument("--model", default=None,
                         help=f"Path to pose HEF model (default: {POSE_MODEL_PATH})")
-    parser.add_argument("--port", type=int, default=8080,
-                        help="Flask web server port (default: 8080)")
-    parser.add_argument("--confidence", type=float, default=0.5,
-                        help="Person detection confidence (default: 0.5)")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Flask web server port (default: config)")
+    parser.add_argument("--confidence", type=float, default=None,
+                        help="Person detection confidence (default: config)")
     args = parser.parse_args()
+    config = load_test_config(args.config, DEFAULT_VIDEO_CONFIG_PATH)
+    apply_head_config(sys.modules[__name__], config)
+    video_arg = cli_or_config(args.video, path_arg(config.video_source.default_video))
+    model_arg_value = cli_or_config(args.model, path_arg(config.pose_model))
+    port = cli_or_config(args.port, config.port)
+    confidence = cli_or_config(args.confidence, config.pose_confidence)
 
     print()
     print("=" * 60)
@@ -1355,12 +1370,12 @@ Examples:
     print("=" * 60)
     print()
 
-    video_path = pi_ui.select_video(args.video, select_video_dialog)
+    video_path = pi_ui.select_video(video_arg, select_video_dialog)
     if not video_path:
         log_info("No video selected. Exiting.")
         sys.exit(0)
 
-    model_arg = pi_ui.select_pose_model(args.model)
+    model_arg = pi_ui.select_pose_model(model_arg_value)
     if not model_arg:
         log_info("No pose model selected. Exiting.")
         sys.exit(0)
@@ -1386,7 +1401,7 @@ Examples:
     # ── Load Hailo pose estimator ───────────────────────────
     estimator = HailoPoseEstimator(
         str(model_path),
-        conf_threshold=args.confidence,
+        conf_threshold=confidence,
     )
 
     # ── Open video & read first frame ───────────────────────
@@ -1412,7 +1427,10 @@ Examples:
     first_detections = estimator.detect_pose(first_frame)
 
     # ── Create tracker and assign initial IDs ───────────────
-    tracker = IoUTracker(iou_threshold=0.3, max_lost=60)
+    tracker = IoUTracker(
+        iou_threshold=config.tracking.iou_threshold,
+        max_lost=config.tracking.max_lost,
+    )
     first_track_ids = tracker.update(first_detections)
 
     log_info(f"Detected {len(first_detections)} persons.")
@@ -1448,13 +1466,13 @@ Examples:
         print("Install: pip install flask")
         sys.exit(1)
 
-    start_web_server(args.port)
+    start_web_server(port)
     local_ip = get_local_ip()
-    log_info(f"Web stream at http://{local_ip}:{args.port}")
+    log_info(f"Web stream at http://{local_ip}:{port}")
 
     # ── Run detection ───────────────────────────────────────
     log_info("Starting detection...")
-    run_detection(cap, estimator, tracker, student_map, video_path, args.port,
+    run_detection(cap, estimator, tracker, student_map, video_path, port,
                   baseline_yaw_map)
     cap.release()
     log_info("Done!")
