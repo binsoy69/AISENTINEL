@@ -42,6 +42,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import front_node_head_behavior_pi as head_mod
 import front_node_passing_papers_pi as pass_mod
+import front_node_pi_interactive as pi_ui
 
 # ── Paths ────────────────────────────────────────────────────
 POSE_MODEL_PATH = head_mod.POSE_MODEL_PATH
@@ -837,8 +838,13 @@ Examples:
         """,
     )
     parser.add_argument(
+        "--video",
+        default=None,
+        help="Optional path to a video file",
+    )
+    parser.add_argument(
         "--model",
-        default=str(POSE_MODEL_PATH),
+        default=None,
         help=f"Path to pose HEF model (default: {POSE_MODEL_PATH})",
     )
     parser.add_argument(
@@ -865,22 +871,27 @@ Examples:
     print("=" * 72)
     print()
 
+    video_path = pi_ui.select_video(args.video, pass_mod.select_video_dialog)
+    if not video_path:
+        head_mod.log_info("No video selected. Exiting.")
+        sys.exit(0)
+
+    model_arg = pi_ui.select_pose_model(args.model)
+    if not model_arg:
+        head_mod.log_info("No pose model selected. Exiting.")
+        sys.exit(0)
+
     if not head_mod.HAILO_AVAILABLE or not pass_mod.HAILO_AVAILABLE:
         print(f"{head_mod.TC.RED}[ERROR] hailo_platform is required.{head_mod.TC.RESET}")
         print("Install: sudo apt install hailo-all")
         sys.exit(1)
 
-    model_path = Path(args.model)
+    model_path = Path(model_arg)
     if not model_path.exists():
         print(f"{head_mod.TC.RED}[ERROR] HEF model not found: {model_path}{head_mod.TC.RESET}")
         print("See POSE_MODEL_SETUP.md for download instructions.")
         sys.exit(1)
 
-    head_mod.log_info("Opening file dialog...")
-    video_path = pass_mod.select_video_dialog()
-    if not video_path:
-        head_mod.log_info("No video selected. Exiting.")
-        sys.exit(0)
     if not os.path.isfile(video_path):
         print(f"{head_mod.TC.RED}[ERROR] File not found: {video_path}{head_mod.TC.RESET}")
         sys.exit(1)

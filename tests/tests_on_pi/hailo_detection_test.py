@@ -26,6 +26,7 @@ import argparse
 from datetime import datetime
 
 from front_node_pi_model_paths import OBJECT_MODEL_PATH
+import front_node_pi_interactive as pi_ui
 
 # Check prerequisites before importing heavy libraries
 HAILO_MODULE = None  # Will be set after successful import
@@ -174,7 +175,7 @@ def print_error_and_exit(errors):
     print("ERROR: Missing dependencies")
     print("=" * 60)
     for error in errors:
-        print(f"  ✗ {error}")
+        print(f"  [ERROR] {error}")
     print("\nTry running with --diagnose for detailed info:")
     print("  python hailo_detection_test.py --diagnose")
     print("\nOr try using system Python directly:")
@@ -188,10 +189,11 @@ if "--diagnose" in sys.argv:
     run_diagnostics()
     sys.exit(0)
 
-# Check prerequisites
-errors = check_prerequisites()
-if errors:
-    print_error_and_exit(errors)
+# Check prerequisites unless argparse is about to handle help output.
+if not any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+    errors = check_prerequisites()
+    if errors:
+        print_error_and_exit(errors)
 
 
 # Now import based on what we found
@@ -489,7 +491,7 @@ Examples:
     parser.add_argument(
         "--input", "-i",
         type=str,
-        default="0",
+        default=None,
         help="Input source: camera index (0), device path (/dev/video0), or video file"
     )
     
@@ -537,17 +539,21 @@ def main():
     print("=" * 60)
     
     args = parse_args()
+
+    input_source = pi_ui.select_input_source(args.input, pi_ui.select_video_dialog)
+    if not input_source:
+        print("\n[INFO] No input source selected. Exiting.")
+        return 0
     
     # Find or validate HEF model
-    hef_path = args.hef
-    if hef_path is None:
-        hef_path = find_default_hef()
-        if hef_path is None:
-            print("\n[ERROR] No HEF model found!")
-            print("Please specify a model using --hef /path/to/model.hef")
-            print("\nTo download models, run:")
-            print("  hailo-download-resources --all")
-            return 1
+    default_hef = find_default_hef()
+    hef_path = pi_ui.select_generic_hef(
+        args.hef,
+        [default_hef, OBJECT_MODEL_PATH] if default_hef else [OBJECT_MODEL_PATH],
+    )
+    if not hef_path:
+        print("\n[INFO] No HEF model selected. Exiting.")
+        return 0
     
     if not os.path.exists(hef_path):
         print(f"\n[ERROR] Model file not found: {hef_path}")
@@ -555,7 +561,7 @@ def main():
     
     print(f"\n[CONFIG]")
     print(f"  Model: {hef_path}")
-    print(f"  Input: {args.input}")
+    print(f"  Input: {input_source}")
     print(f"  Confidence: {args.confidence}")
     if args.filter:
         print(f"  Filter: {', '.join(args.filter)}")
@@ -571,14 +577,14 @@ def main():
         return 1
     
     # Open video source
-    if args.input.isdigit():
-        source = int(args.input)
+    if input_source.isdigit():
+        source = int(input_source)
     else:
-        source = args.input
+        source = input_source
     
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        print(f"\n[ERROR] Failed to open video source: {args.input}")
+        print(f"\n[ERROR] Failed to open video source: {input_source}")
         print("\nCheck available cameras: ls /dev/video*")
         detector.close()
         return 1

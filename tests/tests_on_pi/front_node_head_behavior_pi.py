@@ -54,6 +54,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
 from front_node_pi_model_paths import POSE_MODEL_PATH
+import front_node_pi_interactive as pi_ui
 
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_head"
 
@@ -1321,7 +1322,9 @@ Examples:
   python3 front_node_head_behavior_pi.py --port 9090
         """,
     )
-    parser.add_argument("--model", default=str(POSE_MODEL_PATH),
+    parser.add_argument("--video", default=None,
+                        help="Optional path to a video file")
+    parser.add_argument("--model", default=None,
                         help=f"Path to pose HEF model (default: {POSE_MODEL_PATH})")
     parser.add_argument("--port", type=int, default=8080,
                         help="Flask web server port (default: 8080)")
@@ -1336,24 +1339,29 @@ Examples:
     print("=" * 60)
     print()
 
+    video_path = pi_ui.select_video(args.video, select_video_dialog)
+    if not video_path:
+        log_info("No video selected. Exiting.")
+        sys.exit(0)
+
+    model_arg = pi_ui.select_pose_model(args.model)
+    if not model_arg:
+        log_info("No pose model selected. Exiting.")
+        sys.exit(0)
+
     # ── Validate Hailo ──────────────────────────────────────
     if not HAILO_AVAILABLE:
         print(f"{TC.RED}[ERROR] hailo_platform is required.{TC.RESET}")
         print("Install: sudo apt install hailo-all")
         sys.exit(1)
 
-    model_path = Path(args.model)
+    model_path = Path(model_arg)
     if not model_path.exists():
         print(f"{TC.RED}[ERROR] HEF model not found: {model_path}{TC.RESET}")
         print("See POSE_MODEL_SETUP.md for download instructions.")
         sys.exit(1)
 
     # ── Select video via file dialog ────────────────────────
-    log_info("Opening file dialog...")
-    video_path = select_video_dialog()
-    if not video_path:
-        log_info("No video selected. Exiting.")
-        sys.exit(0)
     if not os.path.isfile(video_path):
         print(f"{TC.RED}[ERROR] File not found: {video_path}{TC.RESET}")
         sys.exit(1)

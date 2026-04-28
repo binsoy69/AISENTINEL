@@ -47,6 +47,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import front_node_hands_under_table_pi as hands_mod
 import front_node_cellphone_cheat_pi as obj_mod
+import front_node_pi_interactive as pi_ui
 
 # ── Paths ────────────────────────────────────────────────────
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -877,19 +878,24 @@ Examples:
         """,
     )
     parser.add_argument(
+        "--video",
+        default=None,
+        help="Optional path to a video file",
+    )
+    parser.add_argument(
         "--pose-model",
-        default=str(POSE_MODEL_PATH),
+        default=None,
         help=f"Path to pose HEF model for person detection (default: {POSE_MODEL_PATH})",
     )
     parser.add_argument(
         "--hand-model",
-        default=str(HAND_MODEL_PATH),
+        default=None,
         help=f"Path to hand HEF model (default: {HAND_MODEL_PATH})",
     )
     parser.add_argument(
         "--object-model", "--model",
         dest="object_model",
-        default=str(OBJECT_MODEL_PATH),
+        default=None,
         help=f"Path to phone / cheat_sheet HEF model (default: {OBJECT_MODEL_PATH})",
     )
     parser.add_argument(
@@ -915,32 +921,47 @@ Examples:
     print("=" * 72)
     print()
 
+    video_path = pi_ui.select_video(args.video, hands_mod.select_video_dialog)
+    if not video_path:
+        hands_mod.log_info("No video selected. Exiting.")
+        sys.exit(0)
+
+    pose_model_arg = pi_ui.select_pose_model(args.pose_model)
+    if not pose_model_arg:
+        hands_mod.log_info("No pose model selected. Exiting.")
+        sys.exit(0)
+
+    hand_model_arg = pi_ui.select_hand_model(args.hand_model)
+    if not hand_model_arg:
+        hands_mod.log_info("No hand model selected. Exiting.")
+        sys.exit(0)
+
+    object_model_arg = pi_ui.select_object_model(args.object_model)
+    if not object_model_arg:
+        hands_mod.log_info("No object model selected. Exiting.")
+        sys.exit(0)
+
     if not hands_mod.HAILO_AVAILABLE or not obj_mod.HAILO_AVAILABLE:
         print(f"{hands_mod.TC.RED}[ERROR] hailo_platform is required.{hands_mod.TC.RESET}")
         print("Install: sudo apt install hailo-all")
         sys.exit(1)
 
-    pose_path = Path(args.pose_model)
+    pose_path = Path(pose_model_arg)
     if not pose_path.exists():
         print(f"{hands_mod.TC.RED}[ERROR] Pose HEF model not found: {pose_path}{hands_mod.TC.RESET}")
         print("See POSE_MODEL_SETUP.md for download instructions.")
         sys.exit(1)
 
-    hand_path = Path(args.hand_model)
+    hand_path = Path(hand_model_arg)
     if not hand_path.exists():
         print(f"{hands_mod.TC.RED}[ERROR] Hand HEF model not found: {hand_path}{hands_mod.TC.RESET}")
         sys.exit(1)
 
-    object_path = Path(args.object_model)
+    object_path = Path(object_model_arg)
     if not object_path.exists():
         print(f"{hands_mod.TC.RED}[ERROR] Object HEF model not found: {object_path}{hands_mod.TC.RESET}")
         sys.exit(1)
 
-    hands_mod.log_info("Opening file dialog...")
-    video_path = hands_mod.select_video_dialog()
-    if not video_path:
-        hands_mod.log_info("No video selected. Exiting.")
-        sys.exit(0)
     if not os.path.isfile(video_path):
         print(f"{hands_mod.TC.RED}[ERROR] File not found: {video_path}{hands_mod.TC.RESET}")
         sys.exit(1)
