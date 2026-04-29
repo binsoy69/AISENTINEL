@@ -66,14 +66,20 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
 
     connection = connect_db(config.db_path)
     init_db(connection)
-    repository = CentralRepository(connection)
+    connection.close()
+    repository = CentralRepository(connection_factory=lambda: connect_db(config.db_path))
     manager = CentralServiceManager(config, repository, http_client=http_client)
     app.extensions["central_repository"] = repository
     app.extensions["central_manager"] = manager
-    app.extensions["central_connection"] = connection
+    app.extensions["central_connection"] = repository
     app.extensions["central_shutdown_done"] = False
 
+    manager.cleanup_runtime_storage_on_startup()
     manager.reset_runtime_sessions_on_startup()
+
+    @app.teardown_appcontext
+    def _close_thread_connection(_exc=None):
+        repository.close_thread_connection()
 
     def _shutdown_active_session() -> None:
         if app.extensions.get("central_shutdown_done"):
@@ -167,6 +173,13 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
         if action not in {"start", "stop", "restart"}:
             return jsonify({"error": "Unsupported session action."}), 404
         result = manager.dispatch_session_command(session_id, action)
+        status_code = int(result.pop("status_code", 200))
+        return jsonify(result), status_code
+
+    @app.route("/api/v1/sessions/<session_id>/incidents")
+    @browser_api_login_required
+    def session_incidents_api(session_id: str):
+        result = manager.session_incidents(session_id)
         status_code = int(result.pop("status_code", 200))
         return jsonify(result), status_code
 

@@ -3,7 +3,8 @@
 AISENTINEL is a dual-node real-time exam proctoring system. The current
 implementation has a central dashboard service plus two Raspberry Pi node
 agents. Each node runs detection locally, streams raw/annotated previews,
-records evidence, and syncs incident manifests/assets to the central dashboard.
+records evidence, and uploads incident manifests/assets live to the central
+dashboard.
 
 ## Current Architecture
 
@@ -16,7 +17,7 @@ records evidence, and syncs incident manifests/assets to the central dashboard.
 
 The front and mid nodes both use the same Hailo-backed runtime logic through the
 central-dashboard node agent. The node identity, camera label, source mode, and
-runtime config are selected by INI files.
+runtime config are selected by local INI files under `config/`.
 
 ## Main Programs
 
@@ -51,20 +52,18 @@ Packaging:
 
 ## Runtime Configs
 
-- `runtime/central_dashboard/central_service.ini`: central dashboard bind
+- `config/central.ini`: central dashboard bind
   address, browser auth, central DB/evidence storage, and registered node keys.
-- `runtime/central_dashboard/node_front.ini`: front node webcam deployment.
-- `runtime/central_dashboard/node_mid.ini`: mid node webcam deployment.
-- `runtime/central_dashboard/node_front_video.ini`: front node video replay.
-- `runtime/central_dashboard/node_mid_video.ini`: mid node video replay.
-- `runtime/central_dashboard/node_front_runtime.ini`: front node models,
+- `config/front_node.ini`: front node identity, capture source, models,
   thresholds, setup profiles, video defaults, evidence output, and KY-037 sound.
-- `runtime/central_dashboard/node_mid_runtime.ini`: mid node models,
+- `config/mid_node.ini`: mid node identity, capture source, models,
   thresholds, setup profiles, video defaults, and evidence output.
 
-Paths in repo INI files are resolved relative to the repository root. The
-Windows packaged central dashboard EXE uses its external `central_service.ini`
-beside the EXE and resolves relative data/evidence paths from that EXE folder.
+Only `config/*.ini.example` files are tracked. Real `config/*.ini` files are
+machine-local and ignored by git. Paths in repo INI files are resolved relative
+to the repository root. The Windows packaged central dashboard EXE uses its
+external `central_service.ini` beside the EXE and resolves relative
+data/evidence paths from that EXE folder.
 
 ## Detection Coverage
 
@@ -89,7 +88,9 @@ overlays stay out of the dashboard stream.
 3. Create an exam session in the central browser dashboard.
 4. Start both nodes from the dashboard.
 5. Each node runs local detection and streams raw/annotated feeds.
-6. Incidents and evidence sync to the central dashboard.
+6. Incidents and evidence upload live to the central dashboard. Each upload is
+   attempted immediately, retried once, then dropped and counted if central is
+   unavailable.
 7. Review, verify, filter, and export evidence from the dashboard.
 
 ## Raspberry Pi Double-Click Support

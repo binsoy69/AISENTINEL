@@ -178,6 +178,123 @@ def activate_runtime_session(runtime: NodeRuntime, session_id: str = "session-1"
         runtime._status = "running"
 
 
+class NodeRuntimeLiveUploadTests(unittest.TestCase):
+    def test_finalized_incident_uploads_live_without_persistent_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            poster_path = tmpdir / "poster.jpg"
+            gif_path = tmpdir / "evidence.gif"
+            poster_path.write_bytes(b"poster")
+            gif_path.write_bytes(b"gif")
+            http_client = FakeHttpClient([HttpResult(200, {"ok": True}, '{"ok": true}') for _ in range(3)])
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime, "session-001")
+
+            runtime.record_finalized_incident(
+                IncidentManifest(
+                    incident_id="incident-001",
+                    session_id="session-001",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="object",
+                    type_label="Using Phone",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=5,
+                    summary="Student #05 using phone detected",
+                    sync_status="ready",
+                    sync_attempts=0,
+                    asset_names=["poster.jpg", "evidence.gif"],
+                ),
+                [
+                    {"asset_type": "poster", "file_path": poster_path, "filename": "poster.jpg"},
+                    {"asset_type": "gif", "file_path": gif_path, "filename": "evidence.gif"},
+                ],
+            )
+
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            self.assertEqual(len(http_client.requests), 3)
+            self.assertTrue(http_client.requests[0][0].endswith("/api/v1/incidents"))
+            self.assertEqual(http_client.requests[1][1]["asset_type"], "gif")
+            self.assertEqual(http_client.requests[2][1]["asset_type"], "poster")
+            self.assertEqual(runtime.heartbeat().extra["uploads"]["dropped_upload_count"], 0)
+            runtime.close()
+
+    def test_failed_live_upload_retries_once_then_counts_drop(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            http_client = FakeHttpClient(
+                [
+                    HttpResult(503, {"error": "down"}, "down"),
+                    HttpResult(503, {"error": "down"}, "down"),
+                ]
+            )
+            runtime = NodeRuntime(build_config(tmpdir), http_client=http_client)
+            activate_runtime_session(runtime, "session-001")
+
+            runtime.record_detected_incident(
+                IncidentManifest(
+                    incident_id="incident-001",
+                    session_id="session-001",
+                    node_id="front",
+                    camera_label="Front Camera",
+                    behavior_type="head",
+                    type_label="Head Tilt",
+                    student_numbers=[5],
+                    created_at="2026-04-24T01:00:00Z",
+                    display_time="09:00 AM",
+                    frame_count=0,
+                    summary="Student #05 head tilt detected",
+                    sync_status="recording",
+                    sync_attempts=0,
+                    asset_names=[],
+                )
+            )
+
+            heartbeat = runtime.heartbeat()
+            self.assertEqual(len(http_client.requests), 2)
+            self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            self.assertEqual(heartbeat.extra["uploads"]["dropped_upload_count"], 1)
+            self.assertIn("incident-001", heartbeat.extra["uploads"]["last_dropped_upload_error"])
+            runtime.close()
+
+    def test_start_session_clears_stale_backlog(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config = replace(build_config(tmpdir), detector_mode="front_runtime")
+
+            def fake_runner(runtime: NodeRuntime, session: SessionSpec) -> None:
+                runtime.mark_session_running()
+
+            runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
+            try:
+                runtime.sync_queue.enqueue(
+                    "manifest",
+                    "old-incident",
+                    "front",
+                    {"manifest_payload": {"incident_id": "old-incident", "session_id": "old-session"}},
+                )
+
+                ack = runtime.start_session(
+                    {
+                        "subject_code": "CS321",
+                        "professor": "Dr. Reyes",
+                        "session_date": "2026-04-24",
+                        "start_time": "09:00",
+                        "end_time": "11:00",
+                    }
+                )
+                self.assertTrue(ack.ok)
+                thread = runtime._session_thread
+                if thread is not None:
+                    thread.join(timeout=2.0)
+                self.assertEqual(runtime.sync_queue.backlog_count(), 0)
+            finally:
+                runtime.close()
+
+
+@unittest.skip("Durable node sync backlog behavior was replaced by live two-attempt uploads.")
 class NodeRuntimeSyncTests(unittest.TestCase):
     def test_runtime_startup_clears_existing_backlog(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:

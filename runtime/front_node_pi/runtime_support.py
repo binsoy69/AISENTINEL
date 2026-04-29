@@ -112,6 +112,9 @@ def apply_behavior_config(
 
     modules.combined_mod.EVIDENCE_PRE_EVENT_FRAMES = config.evidence.pre_event_frames
     modules.combined_mod.EVIDENCE_POST_EVENT_FRAMES = config.evidence.post_event_frames
+    modules.combined_mod.EVIDENCE_GIF_FRAME_COUNT = config.evidence.gif_frame_count
+    modules.combined_mod.EVIDENCE_GIF_MAX_WIDTH = config.evidence.gif_max_width
+    modules.combined_mod.EVIDENCE_GIF_FPS = config.evidence.gif_fps
     modules.combined_mod.DUPLICATE_SUPPRESSION_SEC = (
         config.spam_suppression.duplicate_suppression_sec
     )

@@ -400,6 +400,7 @@ def _normalize_front_runtime_incident(
     front_manifest: dict,
 ) -> tuple[IncidentManifest, list[dict]]:
     poster_relpath = _best_poster_relpath(front_manifest)
+    gif_relpath = str(front_manifest.get("gif_relpath") or "").strip()
     behavior_type = str(front_manifest.get("behavior_type", "")).strip() or "object"
     assets = []
     asset_names = []
@@ -411,6 +412,15 @@ def _normalize_front_runtime_incident(
                 "asset_type": "poster",
                 "file_path": _local_evidence_path(evidence_root, poster_relpath),
                 "filename": asset_names[-1],
+            }
+        )
+    if gif_relpath and behavior_type.lower() != "noise":
+        asset_names.append("evidence.gif")
+        assets.append(
+            {
+                "asset_type": "gif",
+                "file_path": _local_evidence_path(evidence_root, gif_relpath),
+                "filename": "evidence.gif",
             }
         )
 
@@ -430,7 +440,7 @@ def _normalize_front_runtime_incident(
         or "unverified",
         poster_path="",
         gif_path="",
-        frame_count=1 if poster_relpath else 0,
+        frame_count=int(front_manifest.get("frame_count") or (5 if gif_relpath else 1 if poster_relpath else 0)),
         summary=str(front_manifest.get("summary", "")).strip(),
         sync_status="ready",
         sync_attempts=0,

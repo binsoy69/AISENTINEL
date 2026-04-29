@@ -1,10 +1,40 @@
-; AISENTINEL central-dashboard mid-node detector runtime configuration
-; Paths inside this file are resolved relative to the repository root.
+[agent]
+node_id = mid
+display_name = Mid Node
+camera_label = Mid Camera
+profile = mid
+host = 0.0.0.0
+port = 8092
+api_key = CHANGE_ME_MID_NODE_API_KEY
+central_base_url = http://CENTRAL_DASHBOARD_HOST_OR_IP:8090
+registration_interval_sec = 10
+heartbeat_interval_sec = 3
+sync_interval_sec = 2
+http_timeout_sec = 5
+local_db_path = runtime/central_dashboard/data/node_mid/queue.sqlite3
+
+[capture]
+; Launchers choose webcam or video mode without requiring a second INI.
+source_mode = webcam
+camera_index = 0
+video_path =
+
+[preview]
+width = 960
+fps = 10
+jpeg_quality = 72
+
+[detector]
+mode = front_runtime
+motion_threshold = 24.0
+motion_min_area_ratio = 0.012
+motion_cooldown_sec = 8.0
+annotated_banner_ttl_sec = 4.0
 
 [models]
-pose = models/yolo_pose_model.hef
-hand = models/hand-latest.hef
-object = models/object-updated.hef
+pose = models/CHANGE_ME_POSE_MODEL.hef
+hand = models/CHANGE_ME_HAND_MODEL.hef
+object = models/CHANGE_ME_OBJECT_MODEL.hef
 
 [inference]
 pose_confidence = 0.70
@@ -15,12 +45,12 @@ port = 8081
 
 [web_dashboard]
 username = admin
-password = admin123
-secret_key = change-this-secret-key
+password = CHANGE_ME_LOCAL_NODE_DASHBOARD_PASSWORD
+secret_key = CHANGE_ME_RANDOM_NODE_SECRET
 session_ttl_minutes = 480
 
 [video_source]
-default_video = test-videos/Midcam-set2-002.mp4
+default_video = CHANGE_ME_VIDEO_FILE.mp4
 default_setup_profile =
 auto_use_saved_setup = true
 
@@ -74,13 +104,17 @@ edge_disappear_arm_sec = 0.75
 [object_detection]
 person_confidence = 0.50
 phone_confidence = 0.25
-cheat_sheet_confidence = 0.50
+cheat_sheet_confidence = 0.30
 event_cooldown_sec = 10.0
 assoc_iou_thresh = 0.05
 
 [evidence]
-pre_event_frames = 10
-post_event_frames = 10
+root = runtime/central_dashboard/data/node_mid/evidence
+pre_event_frames = 2
+post_event_frames = 2
+gif_frame_count = 5
+gif_max_width = 640
+gif_fps = 4
 
 [spam_suppression]
 duplicate_suppression_sec = 60.0
@@ -88,7 +122,7 @@ clear_required_sec = 3.0
 
 [sound_sensor]
 enabled = false
-calibration_config = tests/tests_on_pi/diagnostics/ky037_ads1015_config.json
+calibration_config = CHANGE_ME_SOUND_CALIBRATION.json
 alert_threshold_db = 55.0
 incident_cooldown_sec = 10.0
 i2c_bus = 1

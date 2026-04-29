@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import configparser
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from pathlib import Path
 RUNTIME_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = RUNTIME_ROOT.parent.parent
 CONFIG_BASE_ENV_VAR = "AISENTINEL_CONFIG_BASE"
+PLACEHOLDER_TOKENS = ("CHANGE_ME", "dev-key", "admin123", "central-dashboard-secret")
 
 
 def _config_base_dir() -> Path:
@@ -69,6 +71,7 @@ def load_central_service_config(config_path: str | os.PathLike[str]) -> CentralS
     if not loaded:
         raise FileNotFoundError(f"Central service config not found: {path}")
     path_base_dir = _config_base_dir()
+    _warn_on_placeholder_values(path, parser)
 
     known_nodes: dict[str, KnownNodeConfig] = {}
     for section in parser.sections():
@@ -132,3 +135,23 @@ def load_central_service_config(config_path: str | os.PathLike[str]) -> CentralS
         browser_auth=browser_auth,
         known_nodes=known_nodes,
     )
+
+
+def _warn_on_placeholder_values(config_path: Path, parser: configparser.ConfigParser) -> None:
+    logger = logging.getLogger(__name__)
+    watched = [
+        ("browser_auth", "password"),
+        ("browser_auth", "secret_key"),
+    ]
+    watched.extend((section, "api_key") for section in parser.sections() if section.startswith("node:"))
+    for section, option in watched:
+        if not parser.has_option(section, option):
+            continue
+        value = parser.get(section, option, fallback="")
+        if any(token in value for token in PLACEHOLDER_TOKENS):
+            logger.warning(
+                "Config %s still contains placeholder/default value for [%s] %s.",
+                config_path,
+                section,
+                option,
+            )

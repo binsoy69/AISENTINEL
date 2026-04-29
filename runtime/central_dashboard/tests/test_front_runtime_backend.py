@@ -24,14 +24,25 @@ from central_dashboard.node_agent.front_runtime import (
 )
 from central_dashboard.node_agent.state import NodeRuntime
 from central_dashboard.shared.dto import IncidentManifest
+from central_dashboard.shared.http import HttpResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_ROOT = ROOT.parents[1] / "config"
 FRONT_NODE_ROOT = ROOT.parent / "front_node_pi"
 if str(FRONT_NODE_ROOT) not in sys.path:
     sys.path.insert(0, str(FRONT_NODE_ROOT))
 
 import front_node_all_behavior_pi as combined_runtime  # type: ignore
+
+
+class FakeHttpClient:
+    def __init__(self):
+        self.requests = []
+
+    def post_json(self, url: str, payload: dict, *, headers=None, timeout=5.0):
+        self.requests.append((url, payload, timeout))
+        return HttpResult(200, {"ok": True}, '{"ok": true}')
 
 
 class FrontRuntimeBackendTests(unittest.TestCase):
@@ -148,7 +159,8 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 while not runtime.should_stop_requested():
                     time.sleep(0.01)
 
-            runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
+            http_client = FakeHttpClient()
+            runtime = NodeRuntime(config, http_client=http_client, front_runtime_runner=fake_runner)
             ack = runtime.start_session(
                 {
                     "subject_code": "CS321",
@@ -167,15 +179,14 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertTrue(heartbeat.extra["stream"]["last_frame_at"])
             self.assertGreaterEqual(heartbeat.incident_count, 1)
 
-            due_items = runtime.sync_queue.due_items(limit=10)
-            self.assertEqual({item.item_type for item in due_items}, {"manifest", "asset"})
-            manifest_item = next(item for item in due_items if item.item_type == "manifest")
-            asset_item = next(item for item in due_items if item.item_type == "asset")
+            self.assertEqual(len(http_client.requests), 2)
+            manifest_item = http_client.requests[0][1]
+            asset_item = http_client.requests[1][1]
             self.assertEqual(
-                manifest_item.payload["manifest_payload"]["type_label"],
+                manifest_item["type_label"],
                 "Head Tilt",
             )
-            self.assertEqual(asset_item.payload["filename"], "frames/poster.jpg")
+            self.assertEqual(asset_item["filename"], "frames/poster.jpg")
 
             chunk = next(runtime.stream_generator("annotated"))
             self.assertIn(b"Content-Type: image/jpeg", chunk)
@@ -263,7 +274,8 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 while not runtime.should_stop_requested():
                     time.sleep(0.01)
 
-            runtime = NodeRuntime(config, front_runtime_runner=fake_runner)
+            http_client = FakeHttpClient()
+            runtime = NodeRuntime(config, http_client=http_client, front_runtime_runner=fake_runner)
             ack = runtime.start_session(
                 {
                     "subject_code": "CS321",
@@ -281,17 +293,15 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertEqual(heartbeat.extra["sound"]["current_db"], 61.4)
             self.assertTrue(heartbeat.extra["sound"]["over_threshold"])
 
-            due_items = runtime.sync_queue.due_items(limit=10)
-            self.assertEqual(len(due_items), 2)
-            self.assertEqual({item.item_type for item in due_items}, {"manifest", "asset"})
-            manifest_item = next(item for item in due_items if item.item_type == "manifest")
-            asset_item = next(item for item in due_items if item.item_type == "asset")
+            self.assertEqual(len(http_client.requests), 2)
+            manifest_item = http_client.requests[0][1]
+            asset_item = http_client.requests[1][1]
             self.assertEqual(
-                manifest_item.payload["manifest_payload"]["behavior_type"],
+                manifest_item["behavior_type"],
                 "noise",
             )
-            self.assertEqual(asset_item.payload["asset_type"], "poster")
-            self.assertEqual(asset_item.payload["filename"], "poster.jpg")
+            self.assertEqual(asset_item["asset_type"], "poster")
+            self.assertEqual(asset_item["filename"], "poster.jpg")
             runtime.close()
 
     def test_normalize_front_runtime_incident_uses_stable_upload_asset_names(self):
@@ -331,11 +341,11 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertEqual(incident.student_numbers, [5])
             self.assertEqual(
                 [asset["filename"] for asset in assets],
-                ["poster.jpg"],
+                ["poster.jpg", "evidence.gif"],
             )
             self.assertEqual(
                 [asset["asset_type"] for asset in assets],
-                ["poster"],
+                ["poster", "gif"],
             )
 
     def test_normalize_front_runtime_incident_uses_event_frame_as_snapshot_only(self):
@@ -411,7 +421,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             runtime_cfg = front_runtime_config.load_runtime_config(
-                str(ROOT / "node_front_runtime.ini")
+                str(CONFIG_ROOT / "front_node.ini.example")
             )
             default_profile = tmpdir / "saved_setup.json"
             auto_profile = tmpdir / "auto_setup.json"

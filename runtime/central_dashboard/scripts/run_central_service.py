@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent.parent
 if str(ROOT.parent) not in sys.path:
     sys.path.insert(0, str(ROOT.parent))
 
@@ -20,7 +21,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the AISENTINEL central dashboard service.")
     parser.add_argument(
         "--config",
-        default=str(ROOT / "central_service.ini"),
+        default=str(REPO_ROOT / "config" / "central.ini"),
         help="Path to the central service INI file.",
     )
     args = parser.parse_args()

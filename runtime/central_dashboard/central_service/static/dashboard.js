@@ -78,14 +78,28 @@ const els = {
     alertToastProgressFill: document.getElementById("alert-toast-progress-fill"),
 };
 
+function groupIncidentsBySession(incidents) {
+    const grouped = {};
+    for (const incident of Array.isArray(incidents) ? incidents : []) {
+        const sessionId = String(incident.session_id || "");
+        if (!sessionId) continue;
+        if (!grouped[sessionId]) grouped[sessionId] = [];
+        grouped[sessionId].push(incident);
+    }
+    return grouped;
+}
+
+const initialIncidentsBySession = groupIncidentsBySession(initialState.incidents);
+
 const state = {
     snapshot: initialState,
+    incidentsBySession: initialIncidentsBySession,
     feedModes: {},
     recordsSubject: "",
     recordsSessionId: "",
     recordsFilter: "all",
     recordsQuery: "",
-    knownIncidentIds: new Set((Array.isArray(initialState.incidents) ? initialState.incidents : []).map((incident) => String(incident.incident_id || "")).filter(Boolean)),
+    knownIncidentIds: new Set(Object.values(initialIncidentsBySession).flat().map((incident) => String(incident.incident_id || "")).filter(Boolean)),
     activeAlertId: null,
     dismissedIncidentIds: new Set(),
     alertTimer: 0,
@@ -130,7 +144,7 @@ function workspaceSession() {
 }
 
 function allIncidents() {
-    return Array.isArray(state.snapshot.incidents) ? state.snapshot.incidents : [];
+    return Object.values(state.incidentsBySession || {}).flat();
 }
 
 function snapshotIncidents(snapshot) {
@@ -144,11 +158,23 @@ function newIncidentsFromSnapshot(snapshot) {
     });
 }
 
-function rememberIncidentIds(snapshot) {
-    for (const incident of snapshotIncidents(snapshot)) {
+function mergeSnapshotIncidents(snapshot) {
+    const incidents = snapshotIncidents(snapshot);
+    const sessionId = String(snapshot?.active_session?.session_id || "");
+    if (sessionId) {
+        state.incidentsBySession[sessionId] = incidents;
+    }
+}
+
+function rememberIncidentList(incidents) {
+    for (const incident of Array.isArray(incidents) ? incidents : []) {
         const incidentId = String(incident.incident_id || "");
         if (incidentId) state.knownIncidentIds.add(incidentId);
     }
+}
+
+function rememberIncidentIds(snapshot) {
+    rememberIncidentList(snapshotIncidents(snapshot));
 }
 
 function sessionIncidents() {
@@ -195,14 +221,14 @@ function isNoiseIncident(incident) {
 }
 
 function incidentEvidenceUrl(incident) {
-    return incident?.poster_url || incident?.gif_url || "";
+    return incident?.gif_url || incident?.poster_url || "";
 }
 
 function evidenceCellMarkup(incident) {
-    if (incident?.poster_url) {
-        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
-    }
     if (incident?.gif_url) {
+        return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View GIF</button>`;
+    }
+    if (incident?.poster_url) {
         return `<button class="evidence-button" type="button" data-open-evidence="${escapeHtml(incident.incident_id)}">View Snapshot</button>`;
     }
     const syncStatus = String(incident?.sync_status || "").toLowerCase();
@@ -266,6 +292,7 @@ function sessionStatusClass(status) {
     if (normalized === "degraded") return "is-degraded";
     if (normalized === "cleared") return "is-stopped";
     if (normalized === "stopped") return "is-stopped";
+    if (normalized === "completed") return "is-stopped";
     if (normalized === "error") return "is-error";
     return "is-created";
 }
@@ -667,7 +694,7 @@ function renderFeeds() {
         card.querySelector(`[data-feed-mode="${node.node_id}"]`).value = mode;
         card.querySelector("[data-feed-state]").textContent = `State: ${sessionStatusLabel(node.state || "unknown")}`;
         card.querySelector("[data-feed-fps]").textContent = `FPS: ${Number(node.fps || 0).toFixed(1)}`;
-        card.querySelector("[data-feed-backlog]").textContent = `Backlog: ${Number(node.sync_backlog || 0)}`;
+        card.querySelector("[data-feed-backlog]").textContent = `Queue: ${Number(node.sync_backlog || 0)}`;
         const sound = activeSessionSound(node);
         card.querySelector("[data-feed-sound]").textContent = sound?.enabled
             ? `Noise: ${formatDbValue(sound.current_db)} / ${formatDbValue(sound.threshold_db)}`
@@ -877,9 +904,10 @@ function renderSystem() {
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
     els.systemGrid.innerHTML = nodes.length ? nodes.map((node) => {
         const seen = parseIso(node.last_seen_at);
-        const errorText = String(node.last_error || "").trim();
+        const errorText = String(node.last_error || node.last_dropped_upload_error || "").trim();
         const sound = node.extra?.sound || null;
-        return `<article class="system-card"><div class="system-card-head"><div><p class="panel-eyebrow">${escapeHtml(node.camera_label || node.node_id)}</p><h3>${escapeHtml(node.display_name || node.node_id)}</h3></div><span class="node-pill ${node.online ? "is-online" : "is-offline"}">${node.online ? "Online" : "Offline"}</span></div><div class="system-card-meta"><div class="system-card-meta-item"><span class="system-meta-label">Runtime State</span><strong>${escapeHtml(sessionStatusLabel(node.state || "unknown"))}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Seen</span><strong>${escapeHtml(seen ? `${formatDate(seen)} ${formatTime(seen)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Processing FPS</span><strong>${Number(node.fps || 0).toFixed(1)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sync Backlog</span><strong>${Number(node.sync_backlog || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Level</span><strong>${sound?.enabled ? formatDbValue(sound.current_db) : "Disabled"}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Threshold</span><strong>${sound?.enabled ? formatDbValue(sound.threshold_db) : "--"}</strong></div></div><div class="system-card-error ${errorText ? "has-error" : ""}">${escapeHtml(errorText || sound?.last_error || "No node error reported in the latest heartbeat.")}</div></article>`;
+        const lastDrop = parseIso(node.last_dropped_upload_at);
+        return `<article class="system-card"><div class="system-card-head"><div><p class="panel-eyebrow">${escapeHtml(node.camera_label || node.node_id)}</p><h3>${escapeHtml(node.display_name || node.node_id)}</h3></div><span class="node-pill ${node.online ? "is-online" : "is-offline"}">${node.online ? "Online" : "Offline"}</span></div><div class="system-card-meta"><div class="system-card-meta-item"><span class="system-meta-label">Runtime State</span><strong>${escapeHtml(sessionStatusLabel(node.state || "unknown"))}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Seen</span><strong>${escapeHtml(seen ? `${formatDate(seen)} ${formatTime(seen)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Processing FPS</span><strong>${Number(node.fps || 0).toFixed(1)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Local Queue</span><strong>${Number(node.sync_backlog || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Dropped Uploads</span><strong>${Number(node.dropped_upload_count || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Drop</span><strong>${escapeHtml(lastDrop ? `${formatDate(lastDrop)} ${formatTime(lastDrop)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Level</span><strong>${sound?.enabled ? formatDbValue(sound.current_db) : "Disabled"}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Threshold</span><strong>${sound?.enabled ? formatDbValue(sound.threshold_db) : "--"}</strong></div></div><div class="system-card-error ${errorText ? "has-error" : ""}">${escapeHtml(errorText || sound?.last_error || "No node error reported in the latest heartbeat.")}</div></article>`;
     }).join("") : `<article class="system-card"><h3>Waiting for node registration</h3><p class="panel-copy">System details will appear once the front and mid nodes register with the central service.</p></article>`;
 }
 
@@ -998,12 +1026,23 @@ async function fetchJson(url, options = {}) {
     return payload;
 }
 
+async function loadSessionIncidents(sessionId) {
+    const targetId = String(sessionId || "").trim();
+    if (!targetId) return [];
+    const result = await fetchJson(`/api/v1/sessions/${encodeURIComponent(targetId)}/incidents`);
+    const incidents = Array.isArray(result.incidents) ? result.incidents : [];
+    state.incidentsBySession[targetId] = incidents;
+    rememberIncidentList(incidents);
+    return incidents;
+}
+
 async function refresh() {
     if (state.pollInFlight) return;
     state.pollInFlight = true;
     try {
         const nextSnapshot = await fetchJson("/api/v1/dashboard");
         const newIncidents = newIncidentsFromSnapshot(nextSnapshot);
+        mergeSnapshotIncidents(nextSnapshot);
         state.snapshot = nextSnapshot;
         rememberIncidentIds(nextSnapshot);
         render();
@@ -1078,6 +1117,7 @@ async function clearRecords() {
         method: "POST",
         body: JSON.stringify({ session_id: session.session_id }),
     });
+    state.incidentsBySession[session.session_id] = [];
     const clearedCount = Number(result.cleared_incidents || 0);
     showBanner(clearedCount ? `Cleared ${clearedCount} record(s) for ${scopeLabel}.` : `No synced records were stored for ${scopeLabel}.`);
     await refresh();
@@ -1088,6 +1128,7 @@ async function deleteSession(sessionId) {
     if (!targetId) return;
     if (!window.confirm(`Delete stored session ${targetId}? This removes its session record, synced incidents, and saved evidence.`)) return;
     const result = await fetchJson(`/api/v1/sessions/${encodeURIComponent(targetId)}`, { method: "DELETE" });
+    delete state.incidentsBySession[targetId];
     if (currentSessionId() === targetId) resetActiveSessionState();
     showBanner(`Deleted session ${targetId}. Removed ${Number(result.cleared_incidents || 0)} incident record(s).`);
     await refresh();
@@ -1106,6 +1147,9 @@ async function deleteSubject(subjectCode) {
         body: JSON.stringify({ subject_code: targetSubject }),
     });
     if (current && String(current.subject_code || "").trim() === targetSubject) resetActiveSessionState();
+    for (const session of sessionsHistory().filter((item) => String(item.subject_code || "").trim() === targetSubject)) {
+        delete state.incidentsBySession[session.session_id];
+    }
     showBanner(`Deleted ${Number(result.deleted_sessions || 0)} session(s) under ${targetSubject}.`);
     await refresh();
 }
@@ -1140,10 +1184,15 @@ els.recordsSubject.addEventListener("change", (event) => {
 });
 els.recordsSession.addEventListener("change", (event) => {
     state.recordsSessionId = event.target.value;
-    renderRecordsScope();
-    renderRecords();
-    renderAnalytics();
-    renderSeatMap();
+    const sessionId = state.recordsSessionId;
+    loadSessionIncidents(sessionId)
+        .catch((error) => showBanner(error.message, true))
+        .finally(() => {
+            renderRecordsScope();
+            renderRecords();
+            renderAnalytics();
+            renderSeatMap();
+        });
 });
 els.recordsClear.addEventListener("click", () => clearRecords().catch((error) => showBanner(error.message, true)));
 els.alertToastClose.addEventListener("click", () => dismissAlertPopup(state.activeAlertId));

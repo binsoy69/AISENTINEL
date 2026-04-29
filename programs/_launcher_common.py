@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import configparser
+from dataclasses import replace
 import logging
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ REPO_ROOT = PROGRAMS_DIR.parent
 RUNTIME_ROOT = REPO_ROOT / "runtime"
 CENTRAL_DASHBOARD_ROOT = RUNTIME_ROOT / "central_dashboard"
 FRONT_NODE_RUNTIME_ROOT = RUNTIME_ROOT / "front_node_pi"
+CONFIG_ROOT = REPO_ROOT / "config"
 VIDEO_FILE_TYPES = (
     ("Video files", "*.mp4 *.avi *.mov *.mkv *.m4v *.wmv"),
     ("MP4 files", "*.mp4"),
@@ -52,14 +54,31 @@ def repo_path(relative_path: str | os.PathLike[str]) -> Path:
 
 
 def central_dashboard_config(name: str) -> Path:
-    return repo_path(CENTRAL_DASHBOARD_ROOT / name)
+    return repo_path(CONFIG_ROOT / name)
+
+
+def _missing_config_message(path: Path) -> str:
+    example = path.with_suffix(path.suffix + ".example")
+    if example.exists():
+        return (
+            f"Required local config was not found: {path}\n"
+            f"Copy {example} to {path}, then edit placeholders for this machine."
+        )
+    return f"Required local config was not found: {path}"
+
+
+def require_operator_config(config_name: str) -> Path:
+    path = central_dashboard_config(config_name)
+    if not path.exists():
+        raise SystemExit(_missing_config_message(path))
+    return path
 
 
 def _read_ini(path: Path) -> configparser.ConfigParser:
     parser = configparser.ConfigParser()
     loaded = parser.read(path, encoding="utf-8")
     if not loaded:
-        raise SystemExit(f"Config file was not found: {path}")
+        raise SystemExit(_missing_config_message(path))
     return parser
 
 
@@ -83,63 +102,38 @@ def _write_ini(path: Path, parser: configparser.ConfigParser) -> None:
         parser.write(stream)
 
 
-def _node_runtime_config_path(node_config_path: Path) -> Path:
-    parser = _read_ini(node_config_path)
-    source_mode = parser.get("capture", "source_mode", fallback="").strip().lower()
-    if source_mode != "video":
-        raise SystemExit(
-            f"{node_config_path} must set [capture] source_mode = video for this launcher."
-        )
-    return _resolve_config_path(
-        parser.get("detector", "runtime_config_path", fallback=""),
-        label=f"{node_config_path} [detector] runtime_config_path",
-    )
-
-
 def _configured_node_video_path(node_config_path: Path) -> Path | None:
     parser = _read_ini(node_config_path)
     node_video = parser.get("capture", "video_path", fallback="").strip()
     if node_video:
         return repo_path(node_video)
 
-    runtime_config_path = _node_runtime_config_path(node_config_path)
-    runtime_parser = _read_ini(runtime_config_path)
-    runtime_video = runtime_parser.get("video_source", "default_video", fallback="").strip()
-    if not runtime_video:
+    video_value = parser.get("video_source", "default_video", fallback="").strip()
+    if not video_value:
         return None
-    return repo_path(runtime_video)
+    return repo_path(video_value)
 
 
 def validate_node_video_config(node_config_path: Path) -> Path:
     """Return the configured video path or exit with a beginner-readable message."""
     parser = _read_ini(node_config_path)
-    source_mode = parser.get("capture", "source_mode", fallback="").strip().lower()
-    if source_mode != "video":
-        raise SystemExit(
-            f"{node_config_path} must set [capture] source_mode = video for this launcher."
-        )
 
     node_video = parser.get("capture", "video_path", fallback="").strip()
     if node_video:
         video_path = repo_path(node_video)
     else:
-        runtime_config_path = _resolve_config_path(
-            parser.get("detector", "runtime_config_path", fallback=""),
-            label=f"{node_config_path} [detector] runtime_config_path",
-        )
-        runtime_parser = _read_ini(runtime_config_path)
-        video_value = runtime_parser.get("video_source", "default_video", fallback="").strip()
+        video_value = parser.get("video_source", "default_video", fallback="").strip()
         if not video_value:
             raise SystemExit(
                 "Video mode needs a default video path. Set "
-                f"[video_source] default_video in {runtime_config_path}."
+                f"[video_source] default_video in {node_config_path}."
             )
         video_path = repo_path(video_value)
 
     if not video_path.exists():
         raise SystemExit(
             "Configured video file was not found: "
-            f"{video_path}\nUpdate [video_source] default_video in the node runtime INI."
+            f"{video_path}\nUpdate [video_source] default_video in {node_config_path}."
         )
     return video_path
 
@@ -207,9 +201,8 @@ def select_node_video_file(config_name: str, *, title: str, picker=None) -> tupl
 
 
 def save_node_video_default(node_config_path: Path, video_path: Path) -> None:
-    """Persist the selected video in the node runtime INI for replay launchers."""
-    runtime_config_path = _node_runtime_config_path(node_config_path)
-    parser = _read_ini(runtime_config_path)
+    """Persist the selected video in the unified node INI for replay launchers."""
+    parser = _read_ini(node_config_path)
     if not parser.has_section("video_source"):
         parser.add_section("video_source")
 
@@ -223,12 +216,10 @@ def save_node_video_default(node_config_path: Path, video_path: Path) -> None:
     parser.set("video_source", "default_video", _repo_relative(video_path))
     if not same_video:
         parser.set("video_source", "default_setup_profile", "")
-    _write_ini(runtime_config_path, parser)
+    if parser.has_section("capture") and parser.get("capture", "video_path", fallback="").strip():
+        parser.set("capture", "video_path", "")
+    _write_ini(node_config_path, parser)
 
-    node_parser = _read_ini(node_config_path)
-    if node_parser.get("capture", "video_path", fallback="").strip():
-        node_parser.set("capture", "video_path", "")
-        _write_ini(node_config_path, node_parser)
 
 
 def run_script(script_path: Path, *args: str) -> None:
@@ -246,13 +237,13 @@ def run_script(script_path: Path, *args: str) -> None:
         sys.path[:] = old_sys_path
 
 
-def run_central_dashboard(config_name: str = "central_service.ini") -> None:
+def run_central_dashboard(config_name: str = "central.ini") -> None:
     configure_repo_environment()
     configure_runtime_logging()
     from central_dashboard.central_service.app import create_app
     from central_dashboard.central_service.config import load_central_service_config
 
-    config_path = central_dashboard_config(config_name)
+    config_path = require_operator_config(config_name)
     config = load_central_service_config(config_path)
     app = create_app(config)
 
@@ -273,13 +264,14 @@ def run_node_agent(
     *,
     require_video: bool = False,
     choose_video: bool = False,
+    source_mode: str | None = None,
 ) -> None:
     configure_repo_environment()
     configure_runtime_logging()
     from central_dashboard.node_agent.app import create_app
     from central_dashboard.node_agent.config import load_node_agent_config
 
-    config_path = central_dashboard_config(config_name)
+    config_path = require_operator_config(config_name)
     if choose_video:
         config_path, video_path = select_node_video_file(
             config_name,
@@ -292,6 +284,10 @@ def run_node_agent(
         print(f"[INFO] Video source configured: {video_path}")
 
     config = load_node_agent_config(config_path)
+    if source_mode:
+        config = replace(config, source_mode=source_mode)
+    elif require_video or choose_video:
+        config = replace(config, source_mode="video")
     app = create_app(config)
 
     print()
@@ -308,10 +304,11 @@ def run_node_agent(
 
 
 def run_node_webcam_calibration(config_name: str) -> None:
+    config_path = require_operator_config(config_name)
     run_script(
         CENTRAL_DASHBOARD_ROOT / "scripts" / "calibrate_node_webcam.py",
         "--config",
-        str(central_dashboard_config(config_name)),
+        str(config_path),
     )
 
 

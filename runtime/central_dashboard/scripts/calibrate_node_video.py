@@ -30,7 +30,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default=str(ROOT / "node_front.ini"),
+        default=str(REPO_ROOT / "config" / "front_node.ini"),
         help="Path to the node agent INI file.",
     )
     parser.add_argument(

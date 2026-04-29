@@ -92,6 +92,9 @@ class ObjectDetectionConfig:
 class EvidenceConfig:
     pre_event_frames: int
     post_event_frames: int
+    gif_frame_count: int
+    gif_max_width: int
+    gif_fps: float
 
 
 @dataclass(frozen=True)
@@ -600,15 +603,36 @@ def load_runtime_config(
                 parser,
                 ["evidence"],
                 "pre_event_frames",
-                10,
+                2,
                 getter_name="getint",
             ),
             post_event_frames=_get_value(
                 parser,
                 ["evidence"],
                 "post_event_frames",
-                10,
+                2,
                 getter_name="getint",
+            ),
+            gif_frame_count=_get_value(
+                parser,
+                ["evidence"],
+                "gif_frame_count",
+                5,
+                getter_name="getint",
+            ),
+            gif_max_width=_get_value(
+                parser,
+                ["evidence"],
+                "gif_max_width",
+                640,
+                getter_name="getint",
+            ),
+            gif_fps=_get_value(
+                parser,
+                ["evidence"],
+                "gif_fps",
+                4.0,
+                getter_name="getfloat",
             ),
         ),
         spam_suppression=SpamSuppressionConfig(

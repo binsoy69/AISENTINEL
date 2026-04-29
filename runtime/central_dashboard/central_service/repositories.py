@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
+import threading
 
 from central_dashboard.shared.dto import (
     IncidentManifest,
@@ -29,8 +30,60 @@ def _parse_iso(value: str | None) -> datetime | None:
 class CentralRepository:
     """Persistence layer for the central service."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    def __init__(self, connection: sqlite3.Connection | None = None, *, connection_factory=None) -> None:
+        if connection is None and connection_factory is None:
+            raise ValueError("CentralRepository requires a connection or connection_factory.")
+        self._connection = connection
+        self._connection_factory = connection_factory
+        self._local = threading.local()
+        self._thread_connections: list[sqlite3.Connection] = []
+        self._lock = threading.RLock()
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        if self._connection_factory is None:
+            return self._connection
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = self._connection_factory()
+            self._local.connection = connection
+            with self._lock:
+                self._thread_connections.append(connection)
+        return connection
+
+    def close_thread_connection(self) -> None:
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            return
+        try:
+            connection.close()
+        finally:
+            self._local.connection = None
+            with self._lock:
+                self._thread_connections = [
+                    item for item in self._thread_connections if item is not connection
+                ]
+
+    def close(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+        with self._lock:
+            connections = list(self._thread_connections)
+            self._thread_connections.clear()
+        for connection in connections:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+
+    def __getattribute__(self, name):
+        attr = object.__getattribute__(self, name)
+        if name.startswith("_") or name in {"connection"} or not callable(attr):
+            return attr
+        def locked(*args, **kwargs):
+            with object.__getattribute__(self, "_lock"):
+                return attr(*args, **kwargs)
+        return locked
 
     def upsert_node_registration(self, descriptor: NodeDescriptor) -> None:
         received_at = utc_now_iso()
@@ -315,16 +368,54 @@ class CentralRepository:
         ).fetchone()
         return self._row_to_incident(row) if row else None
 
-    def list_incidents(self, limit: int = 120) -> list[dict]:
+    def list_incidents(self, limit: int | None = 120, *, session_id: str | None = None) -> list[dict]:
+        params: list[object] = []
+        where = ""
+        if session_id:
+            where = "WHERE session_id=?"
+            params.append(session_id)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "LIMIT ?"
+            params.append(int(limit))
         rows = self.connection.execute(
-            """
+            f"""
             SELECT * FROM incidents
+            {where}
             ORDER BY created_at DESC
-            LIMIT ?
+            {limit_clause}
             """,
-            (limit,),
+            tuple(params),
         ).fetchall()
         return [self._row_to_incident(row) for row in rows]
+
+    def list_session_ids(self) -> set[str]:
+        rows = self.connection.execute("SELECT session_id FROM sessions").fetchall()
+        return {str(row["session_id"]) for row in rows}
+
+    def list_incident_ids_for_session(self, session_id: str) -> set[str]:
+        rows = self.connection.execute(
+            "SELECT incident_id FROM incidents WHERE session_id=?",
+            (session_id,),
+        ).fetchall()
+        return {str(row["incident_id"]) for row in rows}
+
+    def delete_orphan_incidents(self) -> int:
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM incidents
+            WHERE session_id NOT IN (SELECT session_id FROM sessions)
+            """
+        ).fetchone()
+        self.connection.execute(
+            """
+            DELETE FROM incidents
+            WHERE session_id NOT IN (SELECT session_id FROM sessions)
+            """
+        )
+        self.connection.commit()
+        return int(row["total"] if row else 0)
 
     def delete_incidents_for_session(self, session_id: str) -> int:
         row = self.connection.execute(
@@ -374,4 +465,8 @@ class CentralRepository:
                     "online": online,
                 }
             )
+            uploads = snapshot[-1]["extra"].get("uploads", {}) if isinstance(snapshot[-1]["extra"], dict) else {}
+            snapshot[-1]["dropped_upload_count"] = int(uploads.get("dropped_upload_count") or 0)
+            snapshot[-1]["last_dropped_upload_at"] = str(uploads.get("last_dropped_upload_at") or "")
+            snapshot[-1]["last_dropped_upload_error"] = str(uploads.get("last_dropped_upload_error") or "")
         return snapshot

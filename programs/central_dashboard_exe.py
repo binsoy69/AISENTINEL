@@ -35,7 +35,7 @@ def _configure_paths() -> None:
 def _default_config_path(app_dir: Path) -> Path:
     if _is_frozen():
         return app_dir / "central_service.ini"
-    return app_dir / "runtime" / "central_dashboard" / "central_service.ini"
+    return app_dir / "config" / "central.ini"
 
 
 def main() -> None:

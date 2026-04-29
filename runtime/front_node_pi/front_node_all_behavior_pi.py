@@ -42,6 +42,7 @@ from queue import Queue
 
 import cv2
 import numpy as np
+from PIL import Image
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -66,8 +67,11 @@ PASSING_EVIDENCE_DIR = EVIDENCE_DIR / "passing_papers"
 HANDS_EVIDENCE_DIR = EVIDENCE_DIR / "hands"
 OBJECT_EVIDENCE_DIR = EVIDENCE_DIR / "objects"
 NOISE_EVIDENCE_DIR = EVIDENCE_DIR / "noise"
-EVIDENCE_PRE_EVENT_FRAMES = 10
-EVIDENCE_POST_EVENT_FRAMES = 10
+EVIDENCE_PRE_EVENT_FRAMES = 2
+EVIDENCE_POST_EVENT_FRAMES = 2
+EVIDENCE_GIF_FRAME_COUNT = 5
+EVIDENCE_GIF_MAX_WIDTH = 640
+EVIDENCE_GIF_FPS = 4.0
 DUPLICATE_SUPPRESSION_SEC = 60.0
 SUPPRESSION_CLEAR_REQUIRED_SEC = 3.0
 
@@ -1198,7 +1202,7 @@ def _build_sequence_incident(sequence, status: str) -> dict:
         "poster_relpath": sequence.get("poster_relpath", ""),
         "gif_relpath": sequence.get("gif_relpath", ""),
         "manifest_relpath": sequence.get("manifest_relpath", ""),
-        "frame_count": len(sequence.get("frame_paths", [])),
+        "frame_count": int(sequence.get("frame_count") or len(sequence.get("frame_paths", []))),
         "review_status": DEFAULT_EVIDENCE_REVIEW_STATUS,
         "reviewed_at": "",
         "reviewed_by": "",
@@ -1214,22 +1218,92 @@ def _ensure_sequence_storage(sequence) -> None:
     sequence["event_dir"] = event_dir
     sequence["frames_dir"] = event_dir
     sequence["frame_paths"] = []
+    sequence["frame_count"] = 0
     sequence["poster_relpath"] = ""
     sequence["gif_relpath"] = ""
     sequence["manifest_relpath"] = ""
 
 
-def _save_grouped_evidence_frame(sequence, frame, frame_tag: str) -> None:
+def _resize_gif_frame(frame):
+    height, width = frame.shape[:2]
+    max_width = max(1, int(EVIDENCE_GIF_MAX_WIDTH))
+    if width <= max_width:
+        return frame
+    scale = max_width / float(width)
+    return cv2.resize(
+        frame,
+        (max_width, max(1, int(height * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
+def _save_evidence_gif(path: Path, frames: list) -> bool:
+    if not frames:
+        return False
+    duration_ms = max(1, int(round(1000 / max(0.1, float(EVIDENCE_GIF_FPS)))))
+    images = []
+    for frame in frames:
+        rgb = cv2.cvtColor(_resize_gif_frame(frame), cv2.COLOR_BGR2RGB)
+        images.append(Image.fromarray(rgb))
+    images[0].save(
+        path,
+        save_all=True,
+        append_images=images[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=True,
+    )
+    return True
+
+
+def _copy_evidence_snapshot(snapshot):
+    copied = dict(snapshot)
+    if snapshot.get("raw_frame") is not None:
+        copied["raw_frame"] = snapshot["raw_frame"].copy()
+    return copied
+
+
+def _sequence_gif_snapshots(sequence) -> list:
+    pre = list(sequence.get("pre_event_snapshots") or [])[-2:]
+    event = sequence.get("event_snapshot")
+    post = list(sequence.get("post_event_snapshots") or [])[:2]
+    fallback = event or (pre[-1] if pre else None) or (post[0] if post else None)
+    if fallback is None:
+        return []
+    while len(pre) < 2:
+        pre.insert(0, fallback)
+    while len(post) < 2:
+        post.append(post[-1] if post else fallback)
+    frames = pre[-2:] + [event or fallback] + post[:2]
+    return frames[:5]
+
+
+def _save_grouped_evidence_media(sequence) -> None:
     _ensure_sequence_storage(sequence)
-    frame_path = sequence["event_dir"] / "poster.jpg"
-    cv2.imwrite(str(frame_path), frame)
-    sequence["frame_paths"] = [frame_path]
-    sequence["poster_relpath"] = _relative_evidence_path(frame_path)
-    sequence["gif_relpath"] = ""
+    snapshots = _sequence_gif_snapshots(sequence)
+    if not snapshots:
+        sequence["frame_count"] = 0
+        return
+    evidence_frames = [build_evidence_frame(sequence, snapshot) for snapshot in snapshots]
+    poster_path = sequence["event_dir"] / "poster.jpg"
+    gif_path = sequence["event_dir"] / "evidence.gif"
+    event_index = min(2, len(evidence_frames) - 1)
+    cv2.imwrite(str(poster_path), evidence_frames[event_index])
+    sequence["frame_paths"] = [poster_path]
+    sequence["poster_relpath"] = _relative_evidence_path(poster_path)
+    sequence["frame_count"] = len(evidence_frames)
+    try:
+        if _save_evidence_gif(gif_path, evidence_frames):
+            sequence["gif_relpath"] = _relative_evidence_path(gif_path)
+        else:
+            sequence["gif_relpath"] = ""
+    except Exception as exc:  # pragma: no cover - runtime safety
+        sequence["gif_relpath"] = ""
+        head_mod.log_info(f"Evidence GIF could not be written: {exc}")
 
 
 def _finalize_evidence_sequence(sequence) -> None:
-    sequence["gif_relpath"] = ""
+    _save_grouped_evidence_media(sequence)
     manifest_path = sequence["event_dir"] / "manifest.json"
     manifest_relpath = _relative_evidence_path(manifest_path)
     sequence["manifest_relpath"] = manifest_relpath
@@ -1239,7 +1313,7 @@ def _finalize_evidence_sequence(sequence) -> None:
         _relative_evidence_path(frame_path)
         for frame_path in sequence.get("frame_paths", [])
     ]
-    manifest["frame_count"] = len(manifest["frame_relpaths"])
+    manifest["frame_count"] = int(sequence.get("frame_count") or len(manifest["frame_relpaths"]))
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     with _dashboard_lock:
@@ -1253,7 +1327,7 @@ def _finalize_evidence_sequence(sequence) -> None:
         sequence["incident_id"],
         status="ready",
         poster_relpath=manifest.get("poster_relpath", ""),
-        gif_relpath="",
+        gif_relpath=manifest.get("gif_relpath", ""),
         manifest_relpath=manifest_relpath,
         frame_count=manifest["frame_count"],
     )
@@ -1373,8 +1447,12 @@ def build_live_preview_frame(
 
 def save_evidence_sequence_frame(sequence, snapshot, frame_tag):
     """Save one evidence frame for the given alert sequence."""
-    evidence_frame = build_evidence_frame(sequence, snapshot)
-    _save_grouped_evidence_frame(sequence, evidence_frame, frame_tag)
+    sequence["event_snapshot"] = _copy_evidence_snapshot(snapshot)
+    sequence["post_event_snapshots"] = [
+        _copy_evidence_snapshot(snapshot),
+        _copy_evidence_snapshot(snapshot),
+    ]
+    _save_grouped_evidence_media(sequence)
 
 
 def _evidence_writer_loop(task_queue: Queue) -> None:
@@ -1444,7 +1522,7 @@ def _stop_evidence_writer(task_queue: Queue | None, thread: threading.Thread | N
 def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_type,
                             event_ts_sec, incident_finalize_callback=None,
                             incident_detected_callback=None, **payload):
-    """Create a single-snapshot evidence sequence for the current alert."""
+    """Create a compact 5-frame evidence sequence for the current alert."""
     with _dashboard_lock:
         camera_label = _dashboard_state["source_label"]
         session_details = dict(_dashboard_state["session_details"])
@@ -1464,6 +1542,12 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
         "camera_label": camera_label,
         "session_details": session_details,
         "event_dir": None,
+        "pre_event_snapshots": [
+            _copy_evidence_snapshot(snapshot)
+            for snapshot in list(recent_frames)[-2:]
+        ],
+        "event_snapshot": None,
+        "post_event_snapshots": [],
         "incident_finalize_callback": incident_finalize_callback,
         **payload,
     }
@@ -1482,18 +1566,24 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
 
 
 def flush_evidence_sequences(task_queue, sequence_queue, snapshot):
-    """Save one event snapshot and finalize every queued alert."""
+    """Advance pending evidence sequences and finalize once post frames exist."""
+    remaining = []
     for seq in sequence_queue:
-        _queue_evidence_frame(
-            task_queue,
-            seq,
-            snapshot,
-            _evidence_frame_tag(seq["next_relative_idx"]),
-        )
-        seq["next_relative_idx"] += 1
-        _queue_evidence_finalize(task_queue, seq)
+        if seq.get("event_snapshot") is None:
+            seq["event_snapshot"] = _copy_evidence_snapshot(snapshot)
+            remaining.append(seq)
+            continue
 
-    return []
+        post_event_snapshots = seq.setdefault("post_event_snapshots", [])
+        if len(post_event_snapshots) < 2:
+            post_event_snapshots.append(_copy_evidence_snapshot(snapshot))
+
+        if len(post_event_snapshots) >= 2:
+            _queue_evidence_finalize(task_queue, seq)
+        else:
+            remaining.append(seq)
+
+    return remaining
 
 
 def create_flask_app():
@@ -2079,7 +2169,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     )
     print(
         f"  Evidence       : {EVIDENCE_DIR} | "
-        "single alert snapshot"
+        "poster.jpg + 5-frame evidence.gif"
     )
     print(
         f"  Suppression    : {DUPLICATE_SUPPRESSION_SEC:.1f}s duplicate window | "

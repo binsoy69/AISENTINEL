@@ -134,6 +134,38 @@ class CentralServiceManager:
         stopped_sessions = self.repository.update_all_active_session_statuses("stopped")
         return {"ok": True, "stopped_sessions": stopped_sessions, "results": results}
 
+    def cleanup_runtime_storage_on_startup(self) -> dict:
+        orphan_incidents = self.repository.delete_orphan_incidents()
+        valid_session_ids = self.repository.list_session_ids()
+        removed_evidence_dirs = 0
+        if self.config.evidence_root.exists():
+            for session_dir in self.config.evidence_root.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                if session_dir.name not in valid_session_ids:
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                    removed_evidence_dirs += 1
+                    continue
+                valid_incident_ids = self.repository.list_incident_ids_for_session(session_dir.name)
+                for node_dir in session_dir.iterdir():
+                    if not node_dir.is_dir():
+                        continue
+                    for incident_dir in node_dir.iterdir():
+                        if incident_dir.is_dir() and incident_dir.name not in valid_incident_ids:
+                            shutil.rmtree(incident_dir, ignore_errors=True)
+                            removed_evidence_dirs += 1
+        if orphan_incidents or removed_evidence_dirs:
+            self.logger.info(
+                "startup cleanup removed orphan_incidents=%s evidence_dirs=%s",
+                orphan_incidents,
+                removed_evidence_dirs,
+            )
+        return {
+            "ok": True,
+            "orphan_incidents": orphan_incidents,
+            "removed_evidence_dirs": removed_evidence_dirs,
+        }
+
     def shutdown_active_session(self) -> dict:
         session = self.repository.get_active_session()
         if session is None:
@@ -181,6 +213,7 @@ class CentralServiceManager:
 
     def record_heartbeat(self, heartbeat: NodeHeartbeat) -> dict:
         self.repository.update_node_heartbeat(heartbeat)
+        self._derive_active_session_status_from_nodes(heartbeat)
         stream = heartbeat.extra.get("stream", {}) if isinstance(heartbeat.extra, dict) else {}
         self.logger.info(
             "node heartbeat: node=%s state=%s session=%s fps=%.1f backlog=%s stream=%s error=%s",
@@ -193,6 +226,39 @@ class CentralServiceManager:
             heartbeat.last_error or "-",
         )
         return {"ok": True, "heartbeat": heartbeat.to_dict()}
+
+    def _derive_active_session_status_from_nodes(self, heartbeat: NodeHeartbeat) -> None:
+        if not heartbeat.session_id:
+            return
+        active_session = self.repository.get_active_session()
+        if not active_session or active_session.get("session_id") != heartbeat.session_id:
+            return
+        if str(active_session.get("status", "")).lower() not in {"running", "degraded"}:
+            return
+        nodes = self.repository.node_status_snapshot(
+            self.config.known_nodes,
+            offline_after_sec=self.config.node_offline_after_sec,
+        )
+        participants = [
+            node for node in nodes
+            if str(node.get("session_id") or "").strip() == heartbeat.session_id
+        ]
+        if not participants:
+            return
+        active_states = {"starting", "running", "stopping", "finalizing"}
+        terminal_states = {"completed", "idle", "stopped", "error"}
+        states = {str(node.get("state") or "").lower() for node in participants}
+        if states & active_states:
+            return
+        if states and states <= terminal_states:
+            next_status = "error" if "error" in states else "stopped"
+            self.repository.update_session_status(heartbeat.session_id, next_status)
+            self.logger.info(
+                "derived session status from node heartbeats: session=%s status=%s states=%s",
+                heartbeat.session_id,
+                next_status,
+                sorted(states),
+            )
 
     def create_session(self, payload: dict) -> dict:
         session = SessionSpec.from_dict(payload)
@@ -377,13 +443,29 @@ class CentralServiceManager:
                 "raw": f"/api/v1/streams/{node['node_id']}/raw",
                 "annotated": f"/api/v1/streams/{node['node_id']}/annotated",
             }
-        incidents = [self._public_incident(row["incident_id"]) for row in self.repository.list_incidents()]
+        active_session_id = str(active_session.get("session_id") or "").strip() if active_session else ""
+        incidents = (
+            self.session_incidents(active_session_id)["incidents"]
+            if active_session_id else []
+        )
         return {
             "active_session": active_session,
             "nodes": nodes,
             "incidents": incidents,
             "sessions_history": self.repository.list_sessions_history(),
         }
+
+    def session_incidents(self, session_id: str) -> dict:
+        target_session_id = str(session_id or "").strip()
+        if not target_session_id:
+            return {"ok": False, "error": "Session not found.", "status_code": 404}
+        if self.repository.get_session(target_session_id) is None:
+            return {"ok": False, "error": "Session not found.", "status_code": 404}
+        incidents = [
+            self._public_incident(row["incident_id"])
+            for row in self.repository.list_incidents(limit=None, session_id=target_session_id)
+        ]
+        return {"ok": True, "session_id": target_session_id, "incidents": incidents}
 
     def open_node_stream(self, node_id: str, mode: str):
         nodes = self.repository.node_status_snapshot(

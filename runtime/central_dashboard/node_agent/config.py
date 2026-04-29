@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import configparser
+import logging
 import os
 from pathlib import Path
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = RUNTIME_ROOT.parent.parent
+PLACEHOLDER_TOKENS = ("CHANGE_ME", "CENTRAL_DASHBOARD_HOST_OR_IP", "dev-key", "admin123")
 
 
 def _resolve_path(raw_value: str | None) -> Path | None:
@@ -53,6 +55,9 @@ class NodeAgentConfig:
     evidence_root: Path
     pre_event_frames: int
     post_event_frames: int
+    gif_frame_count: int = 5
+    gif_max_width: int = 640
+    gif_fps: float = 4.0
     clear_sync_backlog_on_session_start: bool = False
 
 
@@ -66,6 +71,14 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
     loaded = parser.read(path, encoding="utf-8")
     if not loaded:
         raise FileNotFoundError(f"Node agent config not found: {path}")
+
+    detector_mode = parser.get("detector", "mode", fallback="motion").strip() or "motion"
+    runtime_config_path = _resolve_path(
+        parser.get("detector", "runtime_config_path", fallback="")
+    )
+    if detector_mode == "front_runtime" and runtime_config_path is None:
+        runtime_config_path = path
+    _warn_on_placeholder_values(path, parser)
 
     return NodeAgentConfig(
         config_path=path,
@@ -107,10 +120,8 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         preview_width=max(320, parser.getint("preview", "width", fallback=960)),
         preview_fps=max(1.0, parser.getfloat("preview", "fps", fallback=10.0)),
         jpeg_quality=max(20, min(95, parser.getint("preview", "jpeg_quality", fallback=72))),
-        detector_mode=parser.get("detector", "mode", fallback="motion").strip() or "motion",
-        runtime_config_path=_resolve_path(
-            parser.get("detector", "runtime_config_path", fallback="")
-        ),
+        detector_mode=detector_mode,
+        runtime_config_path=runtime_config_path,
         motion_threshold=max(1.0, parser.getfloat("detector", "motion_threshold", fallback=24.0)),
         motion_min_area_ratio=max(0.001, parser.getfloat("detector", "motion_min_area_ratio", fallback=0.012)),
         motion_cooldown_sec=max(1.0, parser.getfloat("detector", "motion_cooldown_sec", fallback=8.0)),
@@ -120,4 +131,33 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         ) or (REPO_ROOT / "runtime/central_dashboard/data/node_front/evidence"),
         pre_event_frames=max(1, parser.getint("evidence", "pre_event_frames", fallback=8)),
         post_event_frames=max(1, parser.getint("evidence", "post_event_frames", fallback=8)),
+        gif_frame_count=max(1, parser.getint("evidence", "gif_frame_count", fallback=5)),
+        gif_max_width=max(1, parser.getint("evidence", "gif_max_width", fallback=640)),
+        gif_fps=max(0.1, parser.getfloat("evidence", "gif_fps", fallback=4.0)),
     )
+
+
+def _warn_on_placeholder_values(config_path: Path, parser: configparser.ConfigParser) -> None:
+    logger = logging.getLogger(__name__)
+    watched = (
+        ("agent", "api_key"),
+        ("agent", "central_base_url"),
+        ("web_dashboard", "password"),
+        ("web_dashboard", "secret_key"),
+        ("models", "pose"),
+        ("models", "hand"),
+        ("models", "object"),
+        ("video_source", "default_video"),
+        ("sound_sensor", "calibration_config"),
+    )
+    for section, option in watched:
+        if not parser.has_option(section, option):
+            continue
+        value = parser.get(section, option, fallback="")
+        if any(token in value for token in PLACEHOLDER_TOKENS):
+            logger.warning(
+                "Config %s still contains placeholder/default value for [%s] %s.",
+                config_path,
+                section,
+                option,
+            )

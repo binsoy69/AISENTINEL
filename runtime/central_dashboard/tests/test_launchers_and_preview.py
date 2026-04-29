@@ -34,23 +34,27 @@ import front_node_all_behavior_pi as combined_runtime
 
 
 class LauncherAndPreviewTests(unittest.TestCase):
-    def _configured_default_video_name(self, runtime_config_name: str) -> str:
-        parser = configparser.ConfigParser()
-        parser.read(central_dashboard_config(runtime_config_name), encoding="utf-8")
-        return Path(parser.get("video_source", "default_video")).name
-
     def test_video_launchers_resolve_configured_default_videos(self):
-        front_video = validate_node_video_config(
-            central_dashboard_config("node_front_video.ini")
-        )
-        mid_video = validate_node_video_config(
-            central_dashboard_config("node_mid_video.ini")
-        )
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            video_path = tmpdir / "classroom.mp4"
+            video_path.write_bytes(b"video")
+            node_config = tmpdir / "front_node.ini"
+            node_config.write_text(
+                f"""
+[capture]
+source_mode = webcam
+video_path =
 
-        self.assertEqual(front_video.name, self._configured_default_video_name("node_front_runtime.ini"))
-        self.assertEqual(mid_video.name, self._configured_default_video_name("node_mid_runtime.ini"))
-        self.assertTrue(front_video.exists())
-        self.assertTrue(mid_video.exists())
+[video_source]
+default_video = {video_path}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            configured_video = validate_node_video_config(node_config)
+
+        self.assertEqual(configured_video, video_path.resolve(strict=False))
 
     def test_select_video_file_returns_existing_picker_path(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
@@ -104,24 +108,16 @@ class LauncherAndPreviewTests(unittest.TestCase):
             new_video = tmpdir / "new.mp4"
             old_video.write_bytes(b"old")
             new_video.write_bytes(b"new")
-            runtime_config = tmpdir / "runtime.ini"
             node_config = tmpdir / "node.ini"
-            runtime_config.write_text(
-                f"""
-[video_source]
-default_video = {old_video}
-default_setup_profile = runtime/central_dashboard/data/node_front/setup_profiles/old.json
-""".strip(),
-                encoding="utf-8",
-            )
             node_config.write_text(
                 f"""
 [capture]
-source_mode = video
+source_mode = webcam
 video_path = {old_video}
 
-[detector]
-runtime_config_path = {runtime_config}
+[video_source]
+default_video = {old_video}
+default_setup_profile = runtime/central_dashboard/data/node_front/setup_profiles/old.json
 """.strip(),
                 encoding="utf-8",
             )
@@ -129,37 +125,27 @@ runtime_config_path = {runtime_config}
             save_node_video_default(node_config, new_video)
 
             parser = configparser.ConfigParser()
-            parser.read(runtime_config, encoding="utf-8")
-            node_parser = configparser.ConfigParser()
-            node_parser.read(node_config, encoding="utf-8")
+            parser.read(node_config, encoding="utf-8")
 
         self.assertEqual(Path(parser.get("video_source", "default_video")), new_video)
         self.assertEqual(parser.get("video_source", "default_setup_profile"), "")
-        self.assertEqual(node_parser.get("capture", "video_path"), "")
+        self.assertEqual(parser.get("capture", "video_path"), "")
 
     def test_save_node_video_default_keeps_profile_for_same_video(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             video = tmpdir / "same.mp4"
             video.write_bytes(b"same")
-            runtime_config = tmpdir / "runtime.ini"
             node_config = tmpdir / "node.ini"
-            runtime_config.write_text(
-                f"""
-[video_source]
-default_video = {video}
-default_setup_profile = runtime/central_dashboard/data/node_front/setup_profiles/same.json
-""".strip(),
-                encoding="utf-8",
-            )
             node_config.write_text(
                 f"""
 [capture]
-source_mode = video
+source_mode = webcam
 video_path =
 
-[detector]
-runtime_config_path = {runtime_config}
+[video_source]
+default_video = {video}
+default_setup_profile = runtime/central_dashboard/data/node_front/setup_profiles/same.json
 """.strip(),
                 encoding="utf-8",
             )
@@ -167,7 +153,7 @@ runtime_config_path = {runtime_config}
             save_node_video_default(node_config, video)
 
             parser = configparser.ConfigParser()
-            parser.read(runtime_config, encoding="utf-8")
+            parser.read(node_config, encoding="utf-8")
 
         self.assertEqual(
             parser.get("video_source", "default_setup_profile"),
@@ -175,7 +161,7 @@ runtime_config_path = {runtime_config}
         )
 
     def test_run_node_video_calibration_passes_selected_video_to_script(self):
-        selected_config = Path("runtime/central_dashboard/node_front_video.ini")
+        selected_config = Path("config/front_node.ini")
         selected_video = Path("test-videos/selected.mp4")
 
         with (
@@ -186,7 +172,7 @@ runtime_config_path = {runtime_config}
             ),
             mock.patch.object(launcher_common, "run_script") as run_script_mock,
         ):
-            launcher_common.run_node_video_calibration("node_front_video.ini")
+            launcher_common.run_node_video_calibration("front_node.ini")
 
         args = run_script_mock.call_args.args
         self.assertEqual(args[1:], ("--config", str(selected_config), "--video", str(selected_video)))

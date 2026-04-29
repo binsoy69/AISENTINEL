@@ -68,6 +68,9 @@ class NodeRuntime:
         self._incident_count = 0
         self._incident_ids: set[str] = set()
         self._last_error = ""
+        self._dropped_upload_count = 0
+        self._last_dropped_upload_at = ""
+        self._last_dropped_upload_error = ""
         self._banner_text = ""
         self._banner_expires = 0.0
         self._registration_ok = False
@@ -141,6 +144,11 @@ class NodeRuntime:
             fps = self._fps
             incident_count = self._incident_count
             last_error = self._last_error
+            upload_state = {
+                "dropped_upload_count": self._dropped_upload_count,
+                "last_dropped_upload_at": self._last_dropped_upload_at,
+                "last_dropped_upload_error": self._last_dropped_upload_error,
+            }
             stream_state = {
                 "raw_seq": self._raw_seq,
                 "annotated_seq": self._annotated_seq,
@@ -162,6 +170,7 @@ class NodeRuntime:
                 "detector_mode": self.config.detector_mode,
                 "sound": dict(self._sound_state),
                 "stream": stream_state,
+                "uploads": upload_state,
             },
         )
 
@@ -315,39 +324,8 @@ class NodeRuntime:
             return False
 
     def sync_once(self) -> int:
-        active_session_id = self._active_sync_session_id()
-        if not active_session_id:
-            self._clear_sync_backlog("node has no active sync session")
-            return 0
-
-        self.sync_queue.clear_except_session(active_session_id)
-        self.sync_queue.purge_asset_type("frame")
-        synced = 0
-        for item in self._prioritized_due_items():
-            try:
-                if item.item_type == "manifest":
-                    disposition = self._sync_manifest(item.payload)
-                else:
-                    if self.sync_queue.has_pending_manifest(item.incident_id):
-                        self.sync_queue.mark_retry(item, "waiting for incident manifest sync")
-                        continue
-                    disposition = self._sync_asset(item)
-                if disposition == SYNC_OK:
-                    self.sync_queue.mark_done(item.item_id)
-                    if item.item_type == "manifest" and _queue_item_manifest_status(item) != "recording":
-                        self.sync_queue.purge_recording_manifests(item.incident_id)
-                    synced += 1
-                elif disposition == SYNC_DROP:
-                    self.sync_queue.mark_done(item.item_id)
-                else:
-                    self.sync_queue.mark_retry(item, "sync failed")
-            except Exception as exc:  # pragma: no cover - runtime network safety
-                self.sync_queue.mark_retry(item, str(exc))
-                self._set_error(f"sync failed: {exc}")
-                self.logger.warning("sync failed: %s", exc)
-        if synced:
-            self.logger.info("synced %s queued item(s)", synced)
-        return synced
+        self._clear_sync_backlog("persistent sync queue is disabled")
+        return 0
 
     def _prioritized_due_items(self) -> list[SyncQueueItem]:
         active_session_id = self._active_sync_session_id()
@@ -385,13 +363,13 @@ class NodeRuntime:
         return SYNC_RETRY
 
     def _sync_asset(self, item: SyncQueueItem) -> str:
-        payload = item.payload
+        return self._upload_asset_payload(item.payload, attempts=item.attempts)
+
+    def _upload_asset_payload(self, payload: dict, *, attempts: int = 0) -> str:
         asset_type = _asset_payload_type(payload)
         file_path = Path(payload["file_path"])
         if not file_path.exists():
             self._set_error(f"evidence upload dropped: missing file {file_path}")
-            return SYNC_DROP
-        if not file_path.exists():
             return SYNC_DROP
         content = file_path.read_bytes()
         asset_payload = {
@@ -424,7 +402,7 @@ class NodeRuntime:
         if result.status_code == 400:
             error_text = _result_error_text(result) or "bad evidence upload request"
             self._set_error(f"evidence upload failed: {error_text}")
-            return SYNC_DROP if item.attempts >= 3 else SYNC_RETRY
+            return SYNC_DROP if attempts >= 1 else SYNC_RETRY
         if result.status_code == 404 and _is_incident_not_found(result):
             self._set_error(f"evidence upload dropped: {_result_error_text(result)}")
             return SYNC_DROP
@@ -434,6 +412,50 @@ class NodeRuntime:
         if result.status_code:
             self._set_error(f"evidence upload failed ({result.status_code}): {_result_error_text(result)}")
         return SYNC_RETRY
+
+    def _upload_manifest_live(self, manifest: IncidentManifest) -> bool:
+        payload = {"manifest_payload": manifest.to_dict()}
+        return self._attempt_live_upload(
+            incident_id=manifest.incident_id,
+            item_type="manifest",
+            upload_fn=lambda attempt: self._sync_manifest(payload),
+        )
+
+    def _upload_asset_live(self, manifest: IncidentManifest, asset: dict) -> bool:
+        payload = _asset_queue_payload(asset, manifest=manifest)
+        return self._attempt_live_upload(
+            incident_id=manifest.incident_id,
+            item_type=str(asset.get("asset_type") or "asset"),
+            upload_fn=lambda attempt: self._upload_asset_payload(payload, attempts=attempt - 1),
+        )
+
+    def _attempt_live_upload(self, *, incident_id: str, item_type: str, upload_fn) -> bool:
+        last_error = ""
+        for attempt in (1, 2):
+            try:
+                disposition = upload_fn(attempt)
+            except Exception as exc:  # pragma: no cover - runtime network safety
+                disposition = SYNC_RETRY
+                self._set_error(f"{item_type} upload failed: {exc}")
+            with self._lock:
+                last_error = self._last_error
+            if disposition == SYNC_OK:
+                return True
+            if disposition == SYNC_DROP:
+                break
+            if attempt == 1:
+                self.logger.warning(
+                    "upload attempt failed, retrying immediately: incident=%s type=%s reason=%s",
+                    incident_id,
+                    item_type,
+                    last_error or "unknown upload failure",
+                )
+        self._record_dropped_upload(
+            incident_id=incident_id,
+            item_type=item_type,
+            reason=last_error or "upload failed after two attempts",
+        )
+        return False
 
     def _run_session(self, session: SessionSpec) -> None:
         try:
@@ -449,7 +471,7 @@ class NodeRuntime:
         finally:
             with self._lock:
                 if self._status != "error":
-                    self._status = "idle"
+                    self._status = "completed" if not self._session_stop.is_set() else "idle"
                 self._session_thread = None
             self._clear_sync_backlog("session thread completed")
             self._sync_wake.clear()
@@ -577,28 +599,14 @@ class NodeRuntime:
                 manifest.session_id,
             )
             return
-        self.sync_queue.enqueue(
-            "manifest",
-            manifest.incident_id,
-            self.config.node_id,
-            {"manifest_payload": manifest.to_dict()},
-        )
+        with self._lock:
+            self._remember_incident_locked(manifest.incident_id)
+        if not self._upload_manifest_live(manifest):
+            return
         for asset in sorted(assets, key=_asset_sync_priority):
             if asset["asset_type"] == "frame":
                 continue
-            self.sync_queue.enqueue(
-                "asset",
-                manifest.incident_id,
-                self.config.node_id,
-                _asset_queue_payload(
-                    asset,
-                    manifest=manifest,
-                ),
-            )
-
-        with self._lock:
-            self._remember_incident_locked(manifest.incident_id)
-        self._sync_wake.set()
+            self._upload_asset_live(manifest, asset)
 
     def record_detected_incident(self, manifest: IncidentManifest) -> None:
         if not self._incident_matches_active_session(manifest):
@@ -608,15 +616,9 @@ class NodeRuntime:
                 manifest.session_id,
             )
             return
-        self.sync_queue.enqueue(
-            "manifest",
-            manifest.incident_id,
-            self.config.node_id,
-            {"manifest_payload": manifest.to_dict()},
-        )
         with self._lock:
             self._remember_incident_locked(manifest.incident_id)
-        self._sync_wake.set()
+        self._upload_manifest_live(manifest)
 
     def _remember_incident_locked(self, incident_id: str) -> None:
         if not incident_id or incident_id in self._incident_ids:
@@ -715,6 +717,16 @@ class NodeRuntime:
         with self._lock:
             self._last_error = str(message)
 
+    def _record_dropped_upload(self, *, incident_id: str, item_type: str, reason: str) -> None:
+        message = f"{item_type} upload dropped for incident {incident_id}: {reason}"
+        now_iso = utc_now_iso()
+        with self._lock:
+            self._dropped_upload_count += 1
+            self._last_dropped_upload_at = now_iso
+            self._last_dropped_upload_error = message
+            self._last_error = message
+        self.logger.warning(message)
+
     def _active_sync_session_id(self) -> str:
         with self._lock:
             if self._session and self._status in ACTIVE_SYNC_STATES:
@@ -774,8 +786,10 @@ def _queue_item_manifest_status(item: SyncQueueItem) -> str:
 
 def _asset_sync_priority(asset: dict) -> int:
     asset_type = str(asset.get("asset_type") or "").lower()
-    if asset_type == "poster":
+    if asset_type == "gif":
         return 0
+    if asset_type == "poster":
+        return 1
     return 2
 
 

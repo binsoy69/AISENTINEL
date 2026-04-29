@@ -5,4 +5,4 @@ from _launcher_common import run_node_agent
 
 
 if __name__ == "__main__":
-    run_node_agent("node_mid_video.ini", require_video=True, choose_video=True)
+    run_node_agent("mid_node.ini", require_video=True, choose_video=True)

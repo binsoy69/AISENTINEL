@@ -21,6 +21,8 @@ venv/
 env/
 .env
 .env.*
+config/*.ini
+!config/*.ini.example
 
 # Logs and temporary files
 *.log
@@ -58,4 +60,3 @@ models/archive/*.zip
 
 *.pdf
 programs/generate_*
-

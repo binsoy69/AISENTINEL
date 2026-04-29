@@ -5,5 +5,4 @@ from _launcher_common import run_node_webcam_calibration
 
 
 if __name__ == "__main__":
-    run_node_webcam_calibration("node_mid.ini")
-
+    run_node_webcam_calibration("mid_node.ini")

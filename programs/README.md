@@ -6,7 +6,7 @@ double-click workflows, and beginner-friendly terminal usage.
 ## Central Dashboard
 
 - `run_central_dashboard.py`: starts the central Flask dashboard using
-  `runtime/central_dashboard/central_service.ini`.
+  `config/central.ini`.
 - `build_central_dashboard_exe.py`: builds the Windows one-folder central
   dashboard EXE with PyInstaller.
 - `central_service_exe.ini`: editable config template copied beside the EXE.
@@ -19,11 +19,10 @@ double-click workflows, and beginner-friendly terminal usage.
 - `run_mid_node_video.py`: mid node video replay using a file picker.
 
 Video replay opens a file picker, saves the selected file to
-`[video_source] default_video` in the matching runtime INI, then starts the
-node:
+`[video_source] default_video` in the matching node INI, then starts the node:
 
-- `runtime/central_dashboard/node_front_runtime.ini`
-- `runtime/central_dashboard/node_mid_runtime.ini`
+- `config/front_node.ini`
+- `config/mid_node.ini`
 
 ## Calibration
 
@@ -61,4 +60,5 @@ Logs are appended under:
 runtime/central_dashboard/data/logs/
 ```
 
-Config changes apply on the next launcher run.
+Config changes apply on the next launcher run. Real local configs live under
+`config/*.ini`; tracked examples live beside them as `*.ini.example`.

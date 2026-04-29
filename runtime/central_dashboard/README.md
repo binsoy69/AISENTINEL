@@ -2,8 +2,8 @@
 
 This folder contains the dual-node monitoring stack used by the shared central
 dashboard. The central service runs on a laptop or host PC. Each Raspberry Pi
-node agent runs local detection, serves raw/annotated MJPEG streams, queues
-evidence, and syncs incidents back to the central service.
+node agent runs local detection, serves raw/annotated MJPEG streams, and uploads
+incidents/evidence live to the central service.
 
 ## Recommended Programs
 
@@ -48,13 +48,10 @@ python programs/test_sound_sensor.py
 - `central_service/`: Flask dashboard, SQLite persistence, evidence storage,
   browser UI, and node stream proxy.
 - `node_agent/`: Raspberry Pi agent API, local runtime controller, preview
-  stream, sync queue, and detector backend selection.
-- `node_front.ini` / `node_mid.ini`: webcam deployment node-agent configs.
-- `node_front_video.ini` / `node_mid_video.ini`: video replay node-agent
-  configs.
-- `node_front_runtime.ini` / `node_mid_runtime.ini`: Hailo detector runtime
-  configs for models, thresholds, evidence roots, sound sensor, and setup
-  profiles.
+  stream, live uploads, and detector backend selection.
+- `../../config/*.ini.example`: tracked operator config examples. Copy these to
+  `.ini` files under `config/` and edit local values; real `.ini` files are
+  intentionally ignored.
 - `shared/`: DTOs, JSON helpers, and HTTP client helpers shared by both apps.
 - `scripts/`: lower-level argparse entrypoints still available for advanced
   manual use.
@@ -66,7 +63,7 @@ python programs/test_sound_sensor.py
 Central service:
 
 ```text
-runtime/central_dashboard/central_service.ini
+config/central.ini
 ```
 
 Important fields:
@@ -81,10 +78,8 @@ Important fields:
 Node agents:
 
 ```text
-runtime/central_dashboard/node_front.ini
-runtime/central_dashboard/node_mid.ini
-runtime/central_dashboard/node_front_video.ini
-runtime/central_dashboard/node_mid_video.ini
+config/front_node.ini
+config/mid_node.ini
 ```
 
 Important fields:
@@ -92,19 +87,7 @@ Important fields:
 - `[agent] host`
 - `[agent] port`
 - `[agent] central_base_url`
-- `[agent] clear_sync_backlog_on_session_start`
 - `[capture] source_mode`
-- `[detector] runtime_config_path`
-
-Detector runtime:
-
-```text
-runtime/central_dashboard/node_front_runtime.ini
-runtime/central_dashboard/node_mid_runtime.ini
-```
-
-Important fields:
-
 - `[models] pose`
 - `[models] hand`
 - `[models] object`
@@ -149,16 +132,16 @@ With that setup:
 Use `127.0.0.1` only when the central service and node agent are on the same
 machine for local testing.
 
-## Sync Backlog
+## Live Uploads
 
-The node agent stores unsynced incident manifests and evidence in
-`[agent] local_db_path`. The dashboard "Backlog" number is the count of items
-still waiting in that local queue.
+The node agent no longer keeps a durable evidence backlog. Each incident
+manifest and evidence asset is uploaded immediately, retried once immediately
+on failure, then dropped and counted if central is still unavailable. Startup
+and new-session startup clear stale local queue rows from older versions.
 
-Set `[agent] clear_sync_backlog_on_session_start = true` when each new session
-should drop old unsynced items from other sessions before monitoring starts.
-This keeps new sessions at backlog 0, but it also discards any evidence that
-was not uploaded from earlier sessions.
+Dashboard system status exposes `Dropped Uploads`, `Last Drop`, and the latest
+drop reason per node. Valid evidence already stored on central remains until an
+operator clears records, deletes a session, or deletes a subject.
 
 ## Alert And GIF Timing
 
@@ -166,9 +149,10 @@ The central dashboard shows an alert as soon as a node confirms a behavior
 event and starts recording evidence. The Records tab shows that row as
 `Evidence processing` until media arrives.
 
-Full GIFs still wait for the configured post-event frames and GIF encoding.
-After final evidence is ready, the node uploads `evidence.gif` before the
-poster snapshot so the Records tab can switch to `View GIF` as soon as possible.
+Visual incidents save `poster.jpg` plus a compact `evidence.gif` with exactly
+five frames: two pre-event frames, the event frame, and two post-event frames.
+The GIF is capped at 640px wide and encoded at 4 FPS. Noise incidents remain
+poster-only.
 
 ## Calibration
 
@@ -179,22 +163,17 @@ python programs/calibrate_front_webcam.py
 python programs/calibrate_mid_webcam.py
 ```
 
-Video calibration uses each node runtime INI `[video_source] default_video`:
+Video calibration uses each node INI `[video_source] default_video`:
 
 ```bash
 python programs/calibrate_front_video.py
 python programs/calibrate_mid_video.py
 ```
 
-Calibration saves setup profiles and updates the matching runtime INI default
+Calibration saves setup profiles and updates the matching node INI default
 profile path.
 
 ## Video Replay
-
-The video node launchers use:
-
-- `node_front_video.ini` -> `node_front_runtime.ini`
-- `node_mid_video.ini` -> `node_mid_runtime.ini`
 
 Set:
 
@@ -237,7 +216,7 @@ runtime/central_dashboard/data/logs/
 ```
 
 Config changes apply on the next launch because the scripts always read the
-current repo INI files.
+current local `config/*.ini` files.
 
 If Raspberry Pi Desktop asks whether to trust or execute the launcher, choose
 `Allow Launching`.

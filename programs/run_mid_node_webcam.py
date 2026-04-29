@@ -5,5 +5,4 @@ from _launcher_common import run_node_agent
 
 
 if __name__ == "__main__":
-    run_node_agent("node_mid.ini")
-
+    run_node_agent("mid_node.ini", source_mode="webcam")

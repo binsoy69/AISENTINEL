@@ -2,7 +2,7 @@
 
 AISENTINEL is a dual-node exam monitoring system. A central dashboard runs on a
 laptop or host PC, and two Raspberry Pi nodes stream camera feeds, run local
-detection, save evidence, and sync incidents back to the dashboard.
+detection, save evidence, and upload incidents live to the dashboard.
 
 ## What To Run
 
@@ -45,10 +45,8 @@ python programs/run_front_node_video.py
 python programs/run_mid_node_video.py
 ```
 
-The video launchers read these fields:
-
-- `runtime/central_dashboard/node_front_runtime.ini` -> `[video_source] default_video`
-- `runtime/central_dashboard/node_mid_runtime.ini` -> `[video_source] default_video`
+The video launchers read `[video_source] default_video` from
+`config/front_node.ini` and `config/mid_node.ini`.
 
 ## Main Program Groups
 
@@ -66,16 +64,15 @@ The video launchers read these fields:
 
 ## Important Config Files
 
-- `runtime/central_dashboard/central_service.ini`: dashboard host, port,
+- `config/central.ini`: dashboard host, port,
   browser login, known node API keys, central database/evidence paths.
-- `runtime/central_dashboard/node_front.ini`: front Pi webcam node agent.
-- `runtime/central_dashboard/node_mid.ini`: mid Pi webcam node agent.
-- `runtime/central_dashboard/node_front_video.ini`: front Pi video node agent.
-- `runtime/central_dashboard/node_mid_video.ini`: mid Pi video node agent.
-- `runtime/central_dashboard/node_front_runtime.ini`: front node models,
+- `config/front_node.ini`: front Pi node agent, capture source, models,
   thresholds, webcam setup profile, video default, evidence path, sound sensor.
-- `runtime/central_dashboard/node_mid_runtime.ini`: mid node models,
+- `config/mid_node.ini`: mid Pi node agent, capture source, models,
   thresholds, webcam setup profile, video default, evidence path.
+
+Only examples are tracked: `config/*.ini.example`. Copy them to `.ini` files
+and edit local values; real `config/*.ini` files are ignored.
 
 For real multi-machine deployment, keep each process `host = 0.0.0.0`, then set
 each node `central_base_url` to the central dashboard machine IP, for example:
@@ -105,7 +102,8 @@ root, keeps the terminal open after errors, and writes logs to:
 runtime/central_dashboard/data/logs/
 ```
 
-Changing the INI config files takes effect the next time you run the launcher.
+Changing the local `config/*.ini` files takes effect the next time you run the
+launcher.
 
 If a copied `.desktop` file still does not open, right-click it and choose
 `Allow Launching` if Raspberry Pi Desktop offers that option.
