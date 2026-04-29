@@ -2344,7 +2344,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), hands_mod.COL_HAND, 2)
                     hands_mod.draw_label(
                         annotated,
-                        f"hand {det['confidence']:.0%}",
+                        f"{hands_mod.CLASS_HAND} {det['confidence']:.0%}",
                         x1,
                         y1 - 2,
                         hands_mod.COL_HAND,
@@ -3388,7 +3388,7 @@ Examples:
     print("=" * 78)
     print("  AISENTINEL - All Behavior Detection")
     print("  Pose model      : shared YOLOv8 pose HEF")
-    print("  Hand model      : sentinel-yolo11n-min.hef")
+    print("  Hand model      : hand-latest.hef")
     print("  Object model    : object-updated.hef")
     print("  Detects         : head tilt | shoulder turn | passing papers")
     print("                    hands under table | phone | cheat_sheet")

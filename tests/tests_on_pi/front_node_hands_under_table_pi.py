@@ -10,12 +10,12 @@ hands are hidden under the table.
 
 Inference runs on the Hailo-8 NPU using two models:
   - Pose model (yolo_pose_model.hef) for person detection & tracking
-  - Hand detection model (hand_model.hef); this
-    script uses only its 'hand' class
+  - Hand detection model (hand-latest.hef); this
+    script uses only its 'Hand' class
 
 Algorithm:
   1. Detect persons via pose model, IoU-track for persistent IDs
-  2. Detect hands via the shared sentinel model (only 'hand' class used)
+  2. Detect hands via the hand model (only 'Hand' class used)
   3. Associate each detected hand to the nearest tracked student
   4. Define one student-side table-edge trigger line per assigned student
   5. If the last visible hand was near that line, arm an under-table candidate
@@ -86,18 +86,12 @@ from front_node_test_config import (
 EVIDENCE_DIR = SCRIPT_DIR / "evidence_hands"
 
 # ── Detection classes ────────────────────────────────────────
-# Hand model order for models/hand_model.hef:
-#   {0: 'calculator', 1: 'cellphone', 2: 'cheat_sheet',
-#    3: 'hand', 4: 'paper', 5: 'student'}
+# Hand model order for models/hand-latest.hef:
+#   {0: 'Hand'}
 HAND_MODEL_CLASS_NAMES = {
-    0: "calculator",
-    1: "cellphone",
-    2: "cheat_sheet",
-    3: "hand",
-    4: "paper",
-    5: "student",
+    0: "Hand",
 }
-CLASS_HAND = "hand"
+CLASS_HAND = "Hand"
 
 HAND_CONFIDENCE = 0.3
 PERSON_CONFIDENCE = 0.5
@@ -1509,7 +1503,7 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
                 hand_detections.append(det['bbox'])
                 x1, y1, x2, y2 = det['bbox']
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), COL_HAND, 2)
-                draw_label(annotated, f"hand {det['confidence']:.0%}",
+                draw_label(annotated, f"{CLASS_HAND} {det['confidence']:.0%}",
                            x1, y1 - 2, COL_HAND)
 
             # ──────────────────────────────────────────────────────
@@ -1768,7 +1762,7 @@ def main():
 Examples:
   python3 front_node_hands_under_table_pi.py
   python3 front_node_hands_under_table_pi.py --pose-model /path/to/yolo_pose_model.hef
-  python3 front_node_hands_under_table_pi.py --hand-model /path/to/hand_model.hef
+  python3 front_node_hands_under_table_pi.py --hand-model /path/to/hand-latest.hef
   python3 front_node_hands_under_table_pi.py --port 9090
         """,
     )
@@ -1793,7 +1787,7 @@ Examples:
     print("=" * 60)
     print("  AISENTINEL - Hands Under Table Detection (Pi + Hailo)")
     print("  Person detection : pose model (IoU tracked)")
-    print("  Hand detection   : shared sentinel model (hand class only)")
+    print("  Hand detection   : hand-latest.hef (Hand class only)")
     print("  Trigger logic    : hands disappear near the calibrated table-edge line")
     print(f"  Sustained threshold: {HANDS_MISSING_SUSTAIN_SEC:.1f}s")
     print("  Severity         : 1 visible hand -> warning | 0 visible hands -> alert")
@@ -1850,7 +1844,7 @@ Examples:
         vdevice=shared_vdevice,
     )
 
-    # Shared sentinel model; only the 'hand' class is used by this script.
+    # Hand model; only the 'Hand' class is used by this script.
     hand_detector = HailoObjectDetector(
         str(hand_path),
         class_names=HAND_MODEL_CLASS_NAMES,

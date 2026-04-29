@@ -8,7 +8,7 @@ from front_node_cellphone_cheat_pi.py.
 
 Models used:
   - yolo_pose_model.hef for person detection / tracking
-  - hand_model.hef for hand detection
+  - hand-latest.hef for hand detection
   - cheat-sheet_phone_model.hef for phone / cheat_sheet detection
 
 Workflow:
@@ -375,7 +375,7 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                 x1, y1, x2, y2 = det["bbox"]
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), hands_mod.COL_HAND, 2)
                 hands_mod.draw_label(
-                    annotated, f"hand {det['confidence']:.0%}", x1, y1 - 2,
+                    annotated, f"{hands_mod.CLASS_HAND} {det['confidence']:.0%}", x1, y1 - 2,
                     hands_mod.COL_HAND
                 )
 
@@ -917,7 +917,7 @@ Examples:
     print("=" * 72)
     print("  AISENTINEL - Combined Pi Detection")
     print("  Person detection : pose model (IoU tracked)")
-    print("  Hand detection   : hand_model.hef (hand class)")
+    print("  Hand detection   : hand-latest.hef (Hand class)")
     print("  Object detection : object-updated.hef (phone + cheat_sheet)")
     print("  Calibration flow : ROI -> assignment -> desk polygons -> table-edge lines")
     print("=" * 72)

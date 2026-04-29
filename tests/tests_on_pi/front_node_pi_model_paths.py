@@ -26,6 +26,7 @@ POSE_MODEL_CANDIDATES = (
 )
 
 HAND_MODEL_CANDIDATES = (
+    MODELS_DIR / "hand-latest.hef",
     MODELS_DIR / "hand_model.hef",
     MODELS_DIR / "sentinel-yolo11n-min.hef",
 )

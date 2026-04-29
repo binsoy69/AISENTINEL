@@ -53,6 +53,7 @@ tests/tests_on_pc/evidence*
 # Local experiments and generated conversion outputs
 model_conversion/*
 notebooks/*
+models/archive/*.zip
 
 
 *.pdf

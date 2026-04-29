@@ -43,11 +43,19 @@ FRONT_NODE_OBJECT_MODEL_CANDIDATES = (
     REPO_ROOT / "models" / "archive" / "front_node" / "train" / "weights" / "best.pt",
 )
 
+HAND_LATEST_MODEL_CANDIDATES = (
+    REPO_ROOT / "models" / "archive" / "hand-latest" / "hand-latest.pt",
+)
+
 # Final/combined front-node PC flow uses three model roles:
 #   pose   -> person/keypoint tracking
 #   hand   -> hand-only detection for hands-under-table
 #   object -> phone/cheat_sheet detection
-HAND_MODEL_CANDIDATES = FRONT_NODE_OBJECT_MODEL_CANDIDATES + SENTINEL_MODEL_CANDIDATES
+HAND_MODEL_CANDIDATES = (
+    HAND_LATEST_MODEL_CANDIDATES
+    + FRONT_NODE_OBJECT_MODEL_CANDIDATES
+    + SENTINEL_MODEL_CANDIDATES
+)
 OBJECT_MODEL_CANDIDATES = SENTINEL_MODEL_CANDIDATES
 CV_WINDOW_PORT_HINT = " press Q/Esc to stop"
 

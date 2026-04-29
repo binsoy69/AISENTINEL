@@ -84,6 +84,7 @@ COCO_LABELS = [
 
 OBJECT_UPDATED_LABELS = ["cheat_sheet", "phone"]
 LEGACY_OBJECT_LABELS = ["cheat_sheet", "hand", "phone"]
+HAND_LATEST_LABELS = ["Hand"]
 
 np.random.seed(42)
 COLORS = np.random.randint(0, 255, size=(len(COCO_LABELS), 3), dtype=np.uint8)
@@ -124,6 +125,8 @@ def nms(boxes, scores, iou_threshold=0.45):
 
 def labels_for_model(model_path):
     basename = os.path.basename(str(model_path))
+    if basename == "hand-latest.hef":
+        return HAND_LATEST_LABELS
     if basename == "object-updated.hef":
         return OBJECT_UPDATED_LABELS
     if basename in (OBJECT_MODEL_PATH.name, "cheat-sheet_phone_model.hef", "sentinel-yolov11n_new.hef"):

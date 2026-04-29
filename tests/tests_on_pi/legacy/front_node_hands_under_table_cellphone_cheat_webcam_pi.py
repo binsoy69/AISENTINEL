@@ -17,7 +17,7 @@ This script keeps the same calibration flow as the video-based test:
 
 It reuses the same models and logic:
   - yolo_pose_model.hef for person detection / tracking
-  - hand_model.hef for hand detection
+  - hand-latest.hef for hand detection
   - cheat-sheet_phone_model.hef for phone / cheat_sheet detection
 """
 
@@ -502,7 +502,7 @@ def run_detection_webcam(cap, person_detector, hand_detector, object_detector,
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), hands_mod.COL_HAND, 2)
                 hands_mod.draw_label(
                     annotated,
-                    f"hand {det['confidence']:.0%}",
+                    f"{hands_mod.CLASS_HAND} {det['confidence']:.0%}",
                     x1,
                     y1 - 2,
                     hands_mod.COL_HAND,
@@ -1113,7 +1113,7 @@ Examples:
     print("=" * 72)
     print("  AISENTINEL - Combined Pi Detection (Webcam)")
     print("  Person detection : pose model (IoU tracked)")
-    print("  Hand detection   : hand_model.hef (hand class)")
+    print("  Hand detection   : hand-latest.hef (Hand class)")
     print("  Object detection : object-updated.hef (phone + cheat_sheet)")
     print("  Calibration flow : ROI -> assignment -> desk polygons -> table-edge lines")
     print("  Source           : live webcam")

@@ -274,7 +274,7 @@ def load_runtime_config(
                 parser,
                 ["models"],
                 "hand",
-                "models/sentinel-yolo11n-min.hef",
+                "models/hand-latest.hef",
             )
         ),
         object_model=resolve_repo_path(
