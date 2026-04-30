@@ -360,7 +360,11 @@ def sample_window(bus, settings) -> dict[str, float]:
 
     ref_quiet = getattr(settings, "ref_quiet_rms_mv", None)
     ref_loud = getattr(settings, "ref_loud_rms_mv", None)
-    if ref_quiet is not None and ref_loud is not None:
+    if (
+        ref_quiet is not None
+        and ref_loud is not None
+        and float(ref_loud) > float(ref_quiet)
+    ):
         result["estimated_db"] = estimate_db(
             rms_mv=result["rms_mv"],
             ref_quiet_rms_mv=float(ref_quiet),

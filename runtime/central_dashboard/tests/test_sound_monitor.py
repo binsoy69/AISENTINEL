@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from contextlib import redirect_stdout
+import argparse
 import configparser
 import importlib.util
 import io
@@ -58,6 +59,33 @@ class SoundMonitorTests(unittest.TestCase):
                 loud_db=55.0,
                 ref_quiet_rms_mv=None,
                 ref_loud_rms_mv=None,
+            ),
+        )
+
+        self.assertIn("rms_mv", result)
+        self.assertNotIn("estimated_db", result)
+
+    def test_sample_window_skips_estimated_db_for_inverted_references(self):
+        class FakeBus:
+            def __init__(self):
+                self.code = 100
+
+            def read_i2c_block_data(self, _address, _register, _length):
+                self.code += 8
+                raw = self.code << 4
+                return [(raw >> 8) & 0xFF, raw & 0xFF]
+
+        result = sound_monitor.sample_window(
+            FakeBus(),
+            SimpleNamespace(
+                address=0x48,
+                full_scale=4.096,
+                window_seconds=0.003,
+                sample_interval=0.001,
+                quiet_db=45.0,
+                loud_db=55.0,
+                ref_quiet_rms_mv=30.0,
+                ref_loud_rms_mv=20.0,
             ),
         )
 
@@ -356,6 +384,101 @@ calibration_config =
         )
         self.assertEqual(updated.get("sound_sensor", "i2c_address"), "0x49")
         self.assertEqual(updated.getint("sound_sensor", "adc_channel"), 2)
+
+    def test_save_config_file_rejects_inverted_reference_pair_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            config_path = Path(tmpdir_str) / "ky037.json"
+            config_path.write_text("old-json\n", encoding="utf-8")
+
+            output = io.StringIO()
+            with self.assertRaises(SystemExit), redirect_stdout(output):
+                calibrate_sound_sensor.save_config_file(
+                    config_path,
+                    calibrate_sound_sensor.CalibrationSettings(
+                        config_file=config_path,
+                        bus=1,
+                        address=0x48,
+                        channel=0,
+                        full_scale=4.096,
+                        data_rate=1600,
+                        sample_interval=0.002,
+                        window_seconds=1.0,
+                        quiet_db=45.0,
+                        loud_db=55.0,
+                        ref_quiet_rms_mv=31.0,
+                        ref_loud_rms_mv=22.0,
+                        alert_threshold_db=55.0,
+                        incident_cooldown_sec=10.0,
+                    ),
+                )
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), "old-json\n")
+            self.assertIn("quiet RMS must be lower than loud RMS", output.getvalue())
+
+    def test_invalid_saved_reference_pair_does_not_block_show_config_resolution(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            config_path = Path(tmpdir_str) / "ky037.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "bus": 1,
+                        "address": "0x48",
+                        "channel": 0,
+                        "full_scale": 4.096,
+                        "data_rate": 1600,
+                        "sample_interval": 0.002,
+                        "window_seconds": 1.0,
+                        "quiet_db": 45.0,
+                        "loud_db": 55.0,
+                        "ref_quiet_rms_mv": 31.0,
+                        "ref_loud_rms_mv": 22.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parser = configparser.ConfigParser()
+            parser.read_string(
+                """
+[sound_sensor]
+i2c_bus = 1
+i2c_address = 0x48
+adc_channel = 0
+full_scale = 4.096
+data_rate = 1600
+sample_interval = 0.002
+window_seconds = 1.0
+alert_threshold_db = 55.0
+incident_cooldown_sec = 10.0
+""".strip()
+            )
+            settings = calibrate_sound_sensor.resolve_settings(
+                SimpleNamespace(
+                    quiet_db=None,
+                    loud_db=None,
+                    alert_threshold_db=None,
+                    bus=None,
+                    address=None,
+                    channel=None,
+                    full_scale=None,
+                    data_rate=None,
+                    sample_interval=None,
+                    window_seconds=None,
+                    ref_quiet_rms_mv=None,
+                    ref_loud_rms_mv=None,
+                    incident_cooldown_sec=None,
+                    debug=False,
+                ),
+                parser,
+                config_path,
+            )
+
+            calibrate_sound_sensor.validate_settings(
+                argparse.ArgumentParser(),
+                settings,
+            )
+
+        self.assertEqual(settings.ref_quiet_rms_mv, 31.0)
+        self.assertEqual(settings.ref_loud_rms_mv, 22.0)
 
 
 if __name__ == "__main__":

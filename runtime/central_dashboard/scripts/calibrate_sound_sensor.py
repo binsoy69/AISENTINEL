@@ -343,12 +343,32 @@ def validate_settings(parser: argparse.ArgumentParser, settings: CalibrationSett
         parser.error("--alert-threshold-db must be > 0")
     if settings.incident_cooldown_sec < 0:
         parser.error("--incident-cooldown-sec must be >= 0")
-    if (
-        settings.ref_quiet_rms_mv is not None
-        and settings.ref_loud_rms_mv is not None
-        and settings.ref_loud_rms_mv <= settings.ref_quiet_rms_mv
-    ):
-        parser.error("--ref-loud-rms-mv must be greater than --ref-quiet-rms-mv")
+
+
+def calibration_pair_is_complete(settings: CalibrationSettings) -> bool:
+    return settings.ref_quiet_rms_mv is not None and settings.ref_loud_rms_mv is not None
+
+
+def calibration_pair_is_consistent(settings: CalibrationSettings) -> bool:
+    if not calibration_pair_is_complete(settings):
+        return True
+    return float(settings.ref_loud_rms_mv) > float(settings.ref_quiet_rms_mv)
+
+
+def calibration_pair_error(settings: CalibrationSettings) -> str:
+    return (
+        "Invalid sound calibration: quiet RMS must be lower than loud RMS "
+        f"(quiet={settings.ref_quiet_rms_mv:.2f}mV, "
+        f"loud={settings.ref_loud_rms_mv:.2f}mV)."
+    )
+
+
+def ensure_calibration_pair_consistent(settings: CalibrationSettings) -> None:
+    if calibration_pair_is_consistent(settings):
+        return
+    print(f"[ERROR] {calibration_pair_error(settings)}")
+    print("[ERROR] Calibration JSON was not saved. Re-run and capture quiet first, then loud.")
+    raise SystemExit(1)
 
 
 def make_config_payload(settings: CalibrationSettings) -> dict:
@@ -371,6 +391,7 @@ def make_config_payload(settings: CalibrationSettings) -> dict:
 
 
 def save_config_file(config_file: Path, settings: CalibrationSettings) -> None:
+    ensure_calibration_pair_consistent(settings)
     config_file.parent.mkdir(parents=True, exist_ok=True)
     config_file.write_text(
         json.dumps(make_config_payload(settings), indent=2) + "\n",
@@ -379,7 +400,7 @@ def save_config_file(config_file: Path, settings: CalibrationSettings) -> None:
 
 
 def calibration_is_complete(settings: CalibrationSettings) -> bool:
-    return settings.ref_quiet_rms_mv is not None and settings.ref_loud_rms_mv is not None
+    return calibration_pair_is_complete(settings) and calibration_pair_is_consistent(settings)
 
 
 def update_node_ini(
@@ -471,6 +492,9 @@ def run_interactive_calibration(settings: CalibrationSettings) -> None:
     print("Use a phone SPL app or sound level meter beside the sensor.")
     print("The script saves the measured RMS values to JSON and updates the node INI.")
     print()
+
+    settings.ref_quiet_rms_mv = None
+    settings.ref_loud_rms_mv = None
 
     wait_for_enter(
         f"Set the room to about {settings.quiet_db:.1f} dB, then press Enter to capture quiet reference..."

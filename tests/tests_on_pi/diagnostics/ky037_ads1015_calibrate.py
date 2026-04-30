@@ -95,6 +95,9 @@ def run_interactive_calibration(settings: argparse.Namespace) -> None:
     print("The script will save the measured RMS values to the JSON file.")
     print()
 
+    settings.ref_quiet_rms_mv = None
+    settings.ref_loud_rms_mv = None
+
     wait_for_enter(
         f"Set the room to about {settings.quiet_db:.1f} dB, then press Enter to capture quiet reference..."
     )

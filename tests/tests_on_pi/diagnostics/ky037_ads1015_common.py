@@ -117,6 +117,7 @@ def make_config_payload(settings: argparse.Namespace) -> dict:
 
 def save_config_file(config_path: Path, settings: argparse.Namespace) -> None:
     """Write the current settings and calibration values to a JSON file."""
+    ensure_calibration_pair_consistent(settings)
     payload = make_config_payload(settings)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -167,21 +168,54 @@ def validate_settings(
         parser.error("--window-seconds must be > 0")
     if settings.loud_db <= settings.quiet_db:
         parser.error("--loud-db must be greater than --quiet-db")
-    if (
+
+
+def calibration_pair_is_complete(settings: argparse.Namespace) -> bool:
+    """Return whether both quiet and loud references are present."""
+    return (
         settings.ref_quiet_rms_mv is not None
         and settings.ref_loud_rms_mv is not None
-        and settings.ref_loud_rms_mv <= settings.ref_quiet_rms_mv
-    ):
-        parser.error("--ref-loud-rms-mv must be greater than --ref-quiet-rms-mv")
+    )
+
+
+def calibration_pair_is_consistent(settings: argparse.Namespace) -> bool:
+    """Return whether the saved references can be used for dB estimation."""
+    if not calibration_pair_is_complete(settings):
+        return True
+    return float(settings.ref_loud_rms_mv) > float(settings.ref_quiet_rms_mv)
+
+
+def calibration_pair_error(settings: argparse.Namespace) -> str:
+    """Return the operator-facing validation error for an inverted pair."""
+    return (
+        "Invalid sound calibration: quiet RMS must be lower than loud RMS "
+        f"(quiet={float(settings.ref_quiet_rms_mv):.2f}mV, "
+        f"loud={float(settings.ref_loud_rms_mv):.2f}mV)."
+    )
+
+
+def ensure_calibration_pair_consistent(settings: argparse.Namespace) -> None:
+    """Exit before saving a complete but inverted calibration pair."""
+    if calibration_pair_is_consistent(settings):
+        return
+    print(f"[ERROR] {calibration_pair_error(settings)}")
+    print("[ERROR] Calibration JSON was not saved. Re-run and capture quiet first, then loud.")
+    sys.exit(1)
 
 
 def require_calibration(settings: argparse.Namespace) -> None:
     """Exit if the saved or provided config does not contain both references."""
-    if (
-        settings.ref_quiet_rms_mv is not None
-        and settings.ref_loud_rms_mv is not None
-    ):
+    if calibration_pair_is_complete(settings) and calibration_pair_is_consistent(settings):
         return
+
+    if calibration_pair_is_complete(settings):
+        print(f"[ERROR] {calibration_pair_error(settings)}")
+        print(
+            "Run `python3 tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py` "
+            "again to replace the bad quiet/loud references."
+        )
+        print(f"Expected config file: {settings.config_file}")
+        sys.exit(1)
 
     print("[ERROR] Calibration is incomplete.")
     print(
