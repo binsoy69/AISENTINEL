@@ -63,7 +63,7 @@ def discover_videos():
     found = []
     roots = (
         REPO_ROOT / "test-videos",
-        REPO_ROOT / "runtime" / "front_node_pi" / "data" / "session_uploads",
+        REPO_ROOT / "runtime" / "edge_node_runtime" / "data" / "session_uploads",
         SCRIPT_DIR,
         REPO_ROOT / "tests",
         REPO_ROOT,

@@ -63,13 +63,13 @@ If `ADDR` is tied to `GND`, `i2cdetect -y 1` should normally show `48`.
 
 This setup now uses two scripts plus one shared runtime module:
 
-- shared runtime helpers: `runtime/front_node_pi/sound_monitor.py`
+- shared runtime helpers: `runtime/edge_node_runtime/sound_monitor.py`
 - calibration script: `tests/tests_on_pi/diagnostics/ky037_ads1015_calibrate.py`
 - test script: `tests/tests_on_pi/diagnostics/ky037_sound_threshold_test.py`
 - default config file: `tests/tests_on_pi/diagnostics/ky037_ads1015_config.json`
 
 The two Pi helper scripts now import the ADS1015 sampling and dB estimation
-logic from `runtime/front_node_pi/sound_monitor.py`, so the runtime and the
+logic from `runtime/edge_node_runtime/sound_monitor.py`, so the runtime and the
 setup scripts use the same implementation.
 
 ## Runtime Integration

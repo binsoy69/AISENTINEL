@@ -25,15 +25,11 @@ from central_dashboard.node_agent.front_runtime import (
 from central_dashboard.node_agent.state import NodeRuntime
 from central_dashboard.shared.dto import IncidentManifest
 from central_dashboard.shared.http import HttpResult
+from edge_node_runtime import front_node_all_behavior_pi as combined_runtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_ROOT = ROOT.parents[1] / "config"
-FRONT_NODE_ROOT = ROOT.parent / "front_node_pi"
-if str(FRONT_NODE_ROOT) not in sys.path:
-    sys.path.insert(0, str(FRONT_NODE_ROOT))
-
-import front_node_all_behavior_pi as combined_runtime  # type: ignore
 
 
 class FakeHttpClient:
@@ -42,6 +38,20 @@ class FakeHttpClient:
 
     def post_json(self, url: str, payload: dict, *, headers=None, timeout=5.0):
         self.requests.append((url, payload, timeout))
+        return HttpResult(200, {"ok": True}, '{"ok": true}')
+
+    def post_file(
+        self,
+        url: str,
+        fields: dict,
+        *,
+        file_field: str,
+        file_path,
+        filename: str,
+        headers=None,
+        timeout=5.0,
+    ):
+        self.requests.append((url, {**fields, "filename": filename}, timeout))
         return HttpResult(200, {"ok": True}, '{"ok": true}')
 
 
@@ -95,9 +105,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 central_base_url="http://central.test:8090",
                 registration_interval_sec=10.0,
                 heartbeat_interval_sec=10.0,
-                sync_interval_sec=10.0,
                 http_timeout_sec=5.0,
-                local_db_path=tmpdir / "queue.sqlite3",
                 source_mode="webcam",
                 camera_index=0,
                 video_path=None,
@@ -172,6 +180,13 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             )
             self.assertTrue(ack.ok)
             self.assertTrue(runner_ready.wait(timeout=2.0))
+            self.assertTrue(runtime.upload_worker.wait_until_idle(timeout=2.0))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                heartbeat = runtime.heartbeat()
+                if heartbeat.extra["stream"]["has_annotated_frame"]:
+                    break
+                time.sleep(0.01)
 
             heartbeat = runtime.heartbeat()
             self.assertEqual(heartbeat.extra["detector_mode"], "front_runtime")
@@ -207,9 +222,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 central_base_url="http://central.test:8090",
                 registration_interval_sec=10.0,
                 heartbeat_interval_sec=10.0,
-                sync_interval_sec=10.0,
                 http_timeout_sec=5.0,
-                local_db_path=tmpdir / "queue.sqlite3",
                 source_mode="webcam",
                 camera_index=0,
                 video_path=None,
@@ -287,6 +300,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             )
             self.assertTrue(ack.ok)
             self.assertTrue(runner_ready.wait(timeout=2.0))
+            self.assertTrue(runtime.upload_worker.wait_until_idle(timeout=2.0))
 
             heartbeat = runtime.heartbeat()
             self.assertTrue(heartbeat.extra["sound"]["enabled"])

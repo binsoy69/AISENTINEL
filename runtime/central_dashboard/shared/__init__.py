@@ -8,7 +8,6 @@ from .dto import (
     NodeHeartbeat,
     SessionCommand,
     SessionSpec,
-    SyncQueueItem,
 )
 from .http import HttpResult, StdlibHttpClient
 
@@ -22,6 +21,4 @@ __all__ = [
     "SessionCommand",
     "SessionSpec",
     "StdlibHttpClient",
-    "SyncQueueItem",
 ]
-

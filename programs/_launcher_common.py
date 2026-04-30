@@ -17,7 +17,6 @@ PROGRAMS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = PROGRAMS_DIR.parent
 RUNTIME_ROOT = REPO_ROOT / "runtime"
 CENTRAL_DASHBOARD_ROOT = RUNTIME_ROOT / "central_dashboard"
-FRONT_NODE_RUNTIME_ROOT = RUNTIME_ROOT / "front_node_pi"
 CONFIG_ROOT = REPO_ROOT / "config"
 VIDEO_FILE_TYPES = (
     ("Video files", "*.mp4 *.avi *.mov *.mkv *.m4v *.wmv"),
@@ -40,7 +39,7 @@ def configure_runtime_logging() -> None:
 def configure_repo_environment() -> None:
     """Make launchers work from IDEs, double-clicks, and arbitrary cwd values."""
     os.chdir(REPO_ROOT)
-    for path in (RUNTIME_ROOT, FRONT_NODE_RUNTIME_ROOT):
+    for path in (RUNTIME_ROOT,):
         path_text = str(path)
         if path_text not in sys.path:
             sys.path.insert(0, path_text)

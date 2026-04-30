@@ -10,7 +10,7 @@ import sys
 
 TEST_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TEST_DIR.parent.parent
-RUNTIME_CONFIG_PATH = REPO_ROOT / "runtime" / "front_node_pi" / "runtime_config.py"
+RUNTIME_CONFIG_PATH = REPO_ROOT / "runtime" / "edge_node_runtime" / "runtime_config.py"
 
 DEFAULT_CONFIG_PATH = TEST_DIR / "config.ini"
 DEFAULT_VIDEO_CONFIG_PATH = TEST_DIR / "config_video.ini"

@@ -30,7 +30,6 @@ Notes:
 import json
 import os
 import re
-import sys
 import time
 import socket
 import threading
@@ -45,16 +44,14 @@ import numpy as np
 from PIL import Image
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
 
-import front_node_head_behavior_pi as head_mod
-import front_node_passing_papers_pi as pass_mod
-import front_node_hands_under_table_pi as hands_mod
-import front_node_cellphone_cheat_pi as obj_mod
-import front_node_all_behavior_setup_io as setup_io
-from runtime_config import resolve_cli_path
-from sound_monitor import build_noise_summary
+from . import front_node_head_behavior_pi as head_mod
+from . import front_node_passing_papers_pi as pass_mod
+from . import front_node_hands_under_table_pi as hands_mod
+from . import front_node_cellphone_cheat_pi as obj_mod
+from . import front_node_all_behavior_setup_io as setup_io
+from .runtime_config import resolve_cli_path
+from .sound_monitor import build_noise_summary
 
 # ── Paths ────────────────────────────────────────────────────
 POSE_MODEL_PATH = head_mod.POSE_MODEL_PATH
@@ -2089,7 +2086,8 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                   source_fps=None, frame_publish_callback=None,
                   incident_finalize_callback=None,
                   incident_detected_callback=None,
-                  should_stop_callback=None):
+                  should_stop_callback=None,
+                  publish_local_preview=True):
     """Run all behavior detectors in a single Pi-side loop."""
     video_name = Path(str(source_label)).stem
     fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
@@ -3245,9 +3243,12 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
             now_perf = time.perf_counter()
             if (
-                frame_idx == 1
-                or stream_publish_interval <= 0
-                or (now_perf - last_stream_publish_at) >= stream_publish_interval
+                publish_local_preview
+                and (
+                    frame_idx == 1
+                    or stream_publish_interval <= 0
+                    or (now_perf - last_stream_publish_at) >= stream_publish_interval
+                )
             ):
                 if _publish_dashboard_frame(live_preview_frame):
                     last_stream_publish_at = time.perf_counter()

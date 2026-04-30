@@ -402,13 +402,17 @@ class CentralServiceManager:
         asset.asset_type = _normalize_asset_type(asset.asset_type, asset.filename)
         asset.filename = _normalize_asset_filename(asset.asset_type, asset.filename)
 
-        if not asset.session_id or not asset.filename or not asset.content_base64:
+        content = payload.get("_content_bytes")
+        if content is not None and not isinstance(content, bytes):
+            return {"ok": False, "error": "Invalid evidence content.", "status_code": 400}
+        if not asset.session_id or not asset.filename or (content is None and not asset.content_base64):
             return {"ok": False, "error": "Missing required evidence fields.", "status_code": 400}
 
-        try:
-            content = base64.b64decode(asset.content_base64.encode("ascii"), validate=True)
-        except (binascii.Error, ValueError) as exc:
-            return {"ok": False, "error": f"Invalid evidence content: {exc}", "status_code": 400}
+        if content is None:
+            try:
+                content = base64.b64decode(asset.content_base64.encode("ascii"), validate=True)
+            except (binascii.Error, ValueError) as exc:
+                return {"ok": False, "error": f"Invalid evidence content: {exc}", "status_code": 400}
 
         relative_path = posixpath.join(
             asset.session_id,

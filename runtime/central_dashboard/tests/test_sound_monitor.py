@@ -11,12 +11,15 @@ import unittest
 import sys
 
 TEST_ROOT = Path(__file__).resolve().parents[2]
-FRONT_RUNTIME_DIR = TEST_ROOT / "front_node_pi"
-if str(FRONT_RUNTIME_DIR) not in sys.path:
-    sys.path.insert(0, str(FRONT_RUNTIME_DIR))
+if str(TEST_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_ROOT))
 
-import sound_monitor
-from sound_monitor import SoundMonitorService, ThresholdCrossingGate, build_settings_from_sound_config
+from edge_node_runtime import sound_monitor
+from edge_node_runtime.sound_monitor import (
+    SoundMonitorService,
+    ThresholdCrossingGate,
+    build_settings_from_sound_config,
+)
 
 
 class SoundMonitorTests(unittest.TestCase):

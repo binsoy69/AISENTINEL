@@ -14,13 +14,13 @@ import cv2
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-RUNTIME_DIR = REPO_ROOT / "runtime" / "front_node_pi"
+RUNTIME_ROOT = REPO_ROOT / "runtime"
 
-if str(RUNTIME_DIR) not in sys.path:
-    sys.path.insert(0, str(RUNTIME_DIR))
+if str(RUNTIME_ROOT) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_ROOT))
 
-from runtime_config import DEFAULT_WEBCAM_CONFIG_PATH, load_runtime_config
-from runtime_support import (
+from edge_node_runtime.runtime_config import DEFAULT_WEBCAM_CONFIG_PATH, load_runtime_config
+from edge_node_runtime.runtime_support import (
     describe_webcam_capture,
     get_webcam_source_label,
     open_webcam_capture,
@@ -56,7 +56,7 @@ Examples:
   python tests/camera_test.py
   python tests/camera_test.py --camera 1
   python tests/camera_test.py --width 1920 --height 1080 --fps 30
-  python tests/camera_test.py --config runtime/front_node_pi/config_webcam.ini
+  python tests/camera_test.py --config config/front_node.ini
         """,
     )
     parser.add_argument(

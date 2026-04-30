@@ -37,9 +37,7 @@ class NodeAgentConfig:
     central_base_url: str
     registration_interval_sec: float
     heartbeat_interval_sec: float
-    sync_interval_sec: float
     http_timeout_sec: float
-    local_db_path: Path
     source_mode: str
     camera_index: int
     video_path: Path | None
@@ -58,7 +56,6 @@ class NodeAgentConfig:
     gif_frame_count: int = 5
     gif_max_width: int = 640
     gif_fps: float = 4.0
-    clear_sync_backlog_on_session_start: bool = False
 
 
 def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConfig:
@@ -98,28 +95,16 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
             1.0,
             parser.getfloat("agent", "heartbeat_interval_sec", fallback=3.0),
         ),
-        sync_interval_sec=max(
-            1.0,
-            parser.getfloat("agent", "sync_interval_sec", fallback=2.0),
-        ),
         http_timeout_sec=max(
             1.0,
             parser.getfloat("agent", "http_timeout_sec", fallback=5.0),
         ),
-        local_db_path=_resolve_path(
-            parser.get("agent", "local_db_path", fallback="runtime/central_dashboard/data/node_front/queue.sqlite3")
-        ) or (REPO_ROOT / "runtime/central_dashboard/data/node_front/queue.sqlite3"),
-        clear_sync_backlog_on_session_start=parser.getboolean(
-            "agent",
-            "clear_sync_backlog_on_session_start",
-            fallback=False,
-        ),
         source_mode=parser.get("capture", "source_mode", fallback="webcam").strip() or "webcam",
         camera_index=parser.getint("capture", "camera_index", fallback=0),
         video_path=_resolve_path(parser.get("capture", "video_path", fallback="")),
-        preview_width=max(320, parser.getint("preview", "width", fallback=960)),
-        preview_fps=max(1.0, parser.getfloat("preview", "fps", fallback=10.0)),
-        jpeg_quality=max(20, min(95, parser.getint("preview", "jpeg_quality", fallback=72))),
+        preview_width=max(320, parser.getint("preview", "width", fallback=640)),
+        preview_fps=max(1.0, parser.getfloat("preview", "fps", fallback=6.0)),
+        jpeg_quality=max(20, min(95, parser.getint("preview", "jpeg_quality", fallback=60))),
         detector_mode=detector_mode,
         runtime_config_path=runtime_config_path,
         motion_threshold=max(1.0, parser.getfloat("detector", "motion_threshold", fallback=24.0)),

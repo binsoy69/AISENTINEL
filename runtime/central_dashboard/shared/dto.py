@@ -254,31 +254,3 @@ class CommandAck:
             message=str(payload.get("message", "")).strip(),
             state=str(payload.get("state", "")).strip(),
         )
-
-
-@dataclass(slots=True)
-class SyncQueueItem:
-    item_id: str
-    item_type: str
-    incident_id: str
-    node_id: str
-    payload: dict
-    attempts: int = 0
-    next_retry_at: str = ""
-    last_error: str = ""
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, payload: dict) -> "SyncQueueItem":
-        return cls(
-            item_id=str(payload.get("item_id", "")).strip() or make_id("queue"),
-            item_type=str(payload.get("item_type", "")).strip(),
-            incident_id=str(payload.get("incident_id", "")).strip(),
-            node_id=str(payload.get("node_id", "")).strip(),
-            payload=dict(payload.get("payload") or {}),
-            attempts=int(payload.get("attempts") or 0),
-            next_retry_at=str(payload.get("next_retry_at", "")).strip(),
-            last_error=str(payload.get("last_error", "")).strip(),
-        )

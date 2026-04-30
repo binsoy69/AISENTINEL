@@ -10,11 +10,11 @@ import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-FRONT_RUNTIME_DIR = REPO_ROOT / "runtime" / "front_node_pi"
-if str(FRONT_RUNTIME_DIR) not in sys.path:
-    sys.path.insert(0, str(FRONT_RUNTIME_DIR))
+RUNTIME_ROOT = REPO_ROOT / "runtime"
+if str(RUNTIME_ROOT) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_ROOT))
 
-from sound_monitor import (  # noqa: E402
+from edge_node_runtime.sound_monitor import (  # noqa: E402
     CHANNEL_TO_MUX_BITS,
     DATA_RATE_TO_BITS,
     DEFAULT_CHANNEL,

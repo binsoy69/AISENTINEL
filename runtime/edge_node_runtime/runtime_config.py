@@ -11,12 +11,13 @@ from pathlib import Path
 
 RUNTIME_DIR = Path(__file__).resolve().parent
 REPO_ROOT = RUNTIME_DIR.parent.parent
-DEFAULT_CONFIG_PATH = RUNTIME_DIR / "config.ini"
+CONFIG_ROOT = REPO_ROOT / "config"
+DEFAULT_CONFIG_PATH = CONFIG_ROOT / "front_node.ini.example"
 DEFAULT_EVIDENCE_ROOT = RUNTIME_DIR / "data" / "evidence_combined"
 DEFAULT_SETUP_PROFILE_DIR = RUNTIME_DIR / "data" / "setup_profiles"
 CONFIG_ENV_VAR = "AISENTINEL_FRONT_NODE_CONFIG"
-DEFAULT_VIDEO_CONFIG_PATH = RUNTIME_DIR / "config_video.ini"
-DEFAULT_WEBCAM_CONFIG_PATH = RUNTIME_DIR / "config_webcam.ini"
+DEFAULT_VIDEO_CONFIG_PATH = DEFAULT_CONFIG_PATH
+DEFAULT_WEBCAM_CONFIG_PATH = DEFAULT_CONFIG_PATH
 
 
 @dataclass(frozen=True)

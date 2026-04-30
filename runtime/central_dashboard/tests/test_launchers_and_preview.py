@@ -14,9 +14,8 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOT = REPO_ROOT / "runtime"
-FRONT_RUNTIME_ROOT = RUNTIME_ROOT / "front_node_pi"
 
-for path in (REPO_ROOT, RUNTIME_ROOT, FRONT_RUNTIME_ROOT):
+for path in (REPO_ROOT, RUNTIME_ROOT):
     path_text = str(path)
     if path_text not in sys.path:
         sys.path.insert(0, path_text)
@@ -30,7 +29,7 @@ from programs._launcher_common import (
     select_video_file,
     validate_node_video_config,
 )
-import front_node_all_behavior_pi as combined_runtime
+from edge_node_runtime import front_node_all_behavior_pi as combined_runtime
 
 
 class LauncherAndPreviewTests(unittest.TestCase):

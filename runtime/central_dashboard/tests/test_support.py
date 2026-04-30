@@ -34,6 +34,33 @@ class InProcessHttpClient:
         text = response.get_data(as_text=True)
         return HttpResult(response.status_code, response.get_json(silent=True), text)
 
+    def post_file(
+        self,
+        url: str,
+        fields: dict,
+        *,
+        file_field: str,
+        file_path: str | Path,
+        filename: str,
+        headers=None,
+        timeout=5.0,
+    ) -> HttpResult:
+        client = self._client_for(url)
+        parsed = urlparse(url)
+        with Path(file_path).open("rb") as stream:
+            data = {
+                **fields,
+                file_field: (BytesIO(stream.read()), filename),
+            }
+        response = client.post(
+            parsed.path,
+            data=data,
+            headers=headers or {},
+            content_type="multipart/form-data",
+        )
+        text = response.get_data(as_text=True)
+        return HttpResult(response.status_code, response.get_json(silent=True), text)
+
     def get_json(self, url: str, *, headers=None, timeout=5.0) -> HttpResult:
         client = self._client_for(url)
         parsed = urlparse(url)

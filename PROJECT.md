@@ -11,7 +11,7 @@ dashboard.
 - Central dashboard: `runtime/central_dashboard/central_service/`
 - Node agent: `runtime/central_dashboard/node_agent/`
 - Shared DTOs/HTTP helpers: `runtime/central_dashboard/shared/`
-- Real Hailo-backed detector runtime: `runtime/front_node_pi/`
+- Real Hailo-backed detector runtime: `runtime/edge_node_runtime/`
 - User-facing launchers: `programs/`
 - Legacy/reference scripts: `tests/tests_on_pi/` and `tests/tests_on_pc/`
 

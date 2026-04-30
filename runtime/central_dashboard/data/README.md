@@ -4,9 +4,8 @@ Suggested layout at runtime:
 
 - `central_service/central.sqlite3`
 - `central_service/evidence/`
-- `node_front/queue.sqlite3`
 - `node_front/evidence/`
-- `node_mid/queue.sqlite3`
 - `node_mid/evidence/`
 
-These files are intentionally isolated from the legacy front-node runtime.
+Node evidence upload uses an in-memory bounded queue only; no SQLite upload
+queue is created or resumed.

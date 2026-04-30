@@ -4,16 +4,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib.util
+import importlib
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import time
 
 import cv2
 
-from runtime_config import FrontNodeRuntimeConfig, RUNTIME_DIR
+from .runtime_config import FrontNodeRuntimeConfig, RUNTIME_DIR
 
 
 @dataclass(frozen=True)
@@ -45,20 +44,11 @@ WEBCAM_FALLBACK_CAPTURE_PROFILES = (
 
 
 def load_runtime_modules() -> FrontNodeRuntimeModules:
-    """Import the self-contained front-node Pi runtime modules."""
-    if str(RUNTIME_DIR) not in sys.path:
-        sys.path.insert(0, str(RUNTIME_DIR))
+    """Import the edge runtime modules through the package namespace."""
+    package_name = __package__ or "edge_node_runtime"
 
     def _load_local_module(module_name: str):
-        module_path = RUNTIME_DIR / f"{module_name}.py"
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot create import spec for {module_path}")
-
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
+        return importlib.import_module(f"{package_name}.{module_name}")
 
     return FrontNodeRuntimeModules(
         head_mod=_load_local_module("front_node_head_behavior_pi"),

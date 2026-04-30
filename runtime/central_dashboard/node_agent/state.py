@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import base64
-import json
 import logging
-from pathlib import Path
+from queue import Empty, Full, Queue
+import shutil
 import socket
 import threading
 import time
@@ -15,24 +14,20 @@ import cv2
 
 from central_dashboard.node_agent.detector import EvidenceBuilder, MotionDetector, annotate_frame
 from central_dashboard.node_agent.front_runtime import run_front_runtime_session
-from central_dashboard.node_agent.sync import LocalSyncQueue
+from central_dashboard.node_agent.upload_worker import IncidentUploadJob, IncidentUploadWorker
 from central_dashboard.shared.dto import (
     CommandAck,
     IncidentManifest,
     NodeDescriptor,
     NodeHeartbeat,
     SessionSpec,
-    SyncQueueItem,
     utc_now_iso,
 )
 from central_dashboard.shared.http import StdlibHttpClient
-from sound_monitor import DEFAULT_SOUND_SNAPSHOT
+from edge_node_runtime.sound_monitor import DEFAULT_SOUND_SNAPSHOT
 
 
-SYNC_OK = "ok"
-SYNC_RETRY = "retry"
-SYNC_DROP = "drop"
-ACTIVE_SYNC_STATES = {"starting", "running"}
+ACTIVE_UPLOAD_STATES = {"starting", "running"}
 
 
 class NodeRuntime:
@@ -43,17 +38,16 @@ class NodeRuntime:
         self.logger = logging.getLogger(f"central_dashboard.node_agent.{config.node_id}")
         self.http_client = http_client or StdlibHttpClient()
         self.front_runtime_runner = front_runtime_runner or run_front_runtime_session
-        self.sync_queue = LocalSyncQueue(config.local_db_path)
         self._closed = False
         self.config.evidence_root.mkdir(parents=True, exist_ok=True)
-        self._clear_sync_backlog("node runtime startup")
+        self._cleanup_local_evidence_storage("node startup")
 
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._session_stop = threading.Event()
-        self._sync_wake = threading.Event()
         self._background_started = False
         self._session_thread: threading.Thread | None = None
+        self._preview_queue: Queue[tuple[object, object] | None] = Queue(maxsize=1)
 
         self._raw_jpeg = None
         self._annotated_jpeg = None
@@ -75,6 +69,23 @@ class NodeRuntime:
         self._banner_expires = 0.0
         self._registration_ok = False
         self._sound_state = dict(DEFAULT_SOUND_SNAPSHOT)
+        self.upload_worker = IncidentUploadWorker(
+            node_id=self.config.node_id,
+            central_base_url=self.config.central_base_url,
+            http_client=self.http_client,
+            auth_headers=self._auth_headers,
+            is_active_session=self._is_active_session_id,
+            set_error=self._set_error,
+            record_drop=self._record_dropped_upload,
+            timeout_sec=self.config.http_timeout_sec,
+            logger=self.logger,
+        )
+        self._preview_thread = threading.Thread(
+            target=self._preview_loop,
+            daemon=True,
+            name=f"node-preview-{self.config.node_id}",
+        )
+        self._preview_thread.start()
 
     def start_background(self) -> None:
         if self._background_started:
@@ -88,7 +99,6 @@ class NodeRuntime:
         for target, name in (
             (self._registration_loop, "node-register"),
             (self._heartbeat_loop, "node-heartbeat"),
-            (self._sync_loop, "node-sync"),
         ):
             thread = threading.Thread(target=target, daemon=True, name=name)
             thread.start()
@@ -96,15 +106,24 @@ class NodeRuntime:
     def shutdown(self) -> None:
         self.logger.info("shutdown requested")
         self._shutdown.set()
-        self._sync_wake.set()
         self.stop_session()
+        self._clear_preview_queue()
+        try:
+            self._preview_queue.put_nowait(None)
+        except Full:
+            self._clear_preview_queue()
+            try:
+                self._preview_queue.put_nowait(None)
+            except Full:
+                pass
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         self.shutdown()
-        self.sync_queue.close()
+        self.upload_worker.stop()
+        self._preview_thread.join(timeout=2.0)
 
     def advertised_base_url(self) -> str:
         host = self.config.host
@@ -162,7 +181,7 @@ class NodeRuntime:
             state=state,
             session_id=session_id,
             fps=fps,
-            sync_backlog=self.sync_queue.backlog_count(),
+            sync_backlog=self.upload_worker.backlog_count(),
             incident_count=incident_count,
             last_error=last_error,
             extra={
@@ -192,9 +211,8 @@ class NodeRuntime:
                     state=self._status,
                     message="Session is already running.",
                 )
-        self._clear_sync_backlog(
-            f"session start accepted for {session.session_id}"
-        )
+        self._clear_upload_backlog(f"session start accepted for {session.session_id}")
+        self._cleanup_local_evidence_storage(f"session start accepted for {session.session_id}")
         with self._lock:
             self._session = session
             self._session_stop = threading.Event()
@@ -234,8 +252,7 @@ class NodeRuntime:
             self._session = None
             self._fps = 0.0
             self._clear_frames_locked()
-        self._clear_sync_backlog("session stopped")
-        self._sync_wake.clear()
+        self._clear_upload_backlog("session stopped")
         return CommandAck(
             ok=True,
             node_id=self.config.node_id,
@@ -258,12 +275,6 @@ class NodeRuntime:
         while not self._shutdown.is_set():
             self.heartbeat_once()
             self._shutdown.wait(self.config.heartbeat_interval_sec)
-
-    def _sync_loop(self) -> None:
-        while not self._shutdown.is_set():
-            self._sync_wake.clear()
-            self.sync_once()
-            self._sync_wake.wait(self.config.sync_interval_sec)
 
     def register_once(self) -> bool:
         was_registered = self._registration_ok
@@ -324,138 +335,8 @@ class NodeRuntime:
             return False
 
     def sync_once(self) -> int:
-        self._clear_sync_backlog("persistent sync queue is disabled")
+        self.upload_worker.wait_until_idle(timeout=0.1)
         return 0
-
-    def _prioritized_due_items(self) -> list[SyncQueueItem]:
-        active_session_id = self._active_sync_session_id()
-
-        items = self.sync_queue.due_items(limit=32)
-        if not active_session_id:
-            return items[:8]
-
-        def item_priority(item: SyncQueueItem) -> tuple[int, str]:
-            return (
-                0 if _queue_item_session_id(item) == active_session_id else 1,
-                item.next_retry_at,
-            )
-
-        return sorted(items, key=item_priority)[:8]
-
-    def _sync_manifest(self, payload: dict) -> str:
-        manifest = payload.get("manifest_payload")
-        if not isinstance(manifest, dict):
-            manifest_path = Path(payload["manifest_path"])
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        result = self.http_client.post_json(
-            f"{self.config.central_base_url}/api/v1/incidents",
-            manifest,
-            headers=self._auth_headers(),
-            timeout=self.config.http_timeout_sec,
-        )
-        if result.ok:
-            return SYNC_OK
-        if result.status_code == 409 and _is_stale_session_rejection(result):
-            self._set_error(f"manifest upload dropped: {_result_error_text(result)}")
-            return SYNC_DROP
-        if result.status_code:
-            self._set_error(f"manifest upload failed ({result.status_code}): {_result_error_text(result)}")
-        return SYNC_RETRY
-
-    def _sync_asset(self, item: SyncQueueItem) -> str:
-        return self._upload_asset_payload(item.payload, attempts=item.attempts)
-
-    def _upload_asset_payload(self, payload: dict, *, attempts: int = 0) -> str:
-        asset_type = _asset_payload_type(payload)
-        file_path = Path(payload["file_path"])
-        if not file_path.exists():
-            self._set_error(f"evidence upload dropped: missing file {file_path}")
-            return SYNC_DROP
-        content = file_path.read_bytes()
-        asset_payload = {
-            "incident_id": payload["incident_id"],
-            "session_id": payload["session_id"],
-            "node_id": self.config.node_id,
-            "asset_type": asset_type,
-            "filename": payload["filename"],
-            "content_base64": base64.b64encode(content).decode("ascii"),
-            "content_sha256": "",
-            "size_bytes": len(content),
-        }
-        timeout_sec = _asset_upload_timeout_sec(
-            base_timeout_sec=self.config.http_timeout_sec,
-            asset_type=asset_type,
-            size_bytes=len(content),
-        )
-        result = self.http_client.post_json(
-            f"{self.config.central_base_url}/api/v1/evidence/upload",
-            asset_payload,
-            headers=self._auth_headers(),
-            timeout=timeout_sec,
-        )
-        if result.ok:
-            return SYNC_OK
-        if result.status_code == 0:
-            error_text = _result_error_text(result) or "network timeout or dashboard unavailable"
-            self._set_error(f"evidence upload retrying: {error_text}")
-            return SYNC_RETRY
-        if result.status_code == 400:
-            error_text = _result_error_text(result) or "bad evidence upload request"
-            self._set_error(f"evidence upload failed: {error_text}")
-            return SYNC_DROP if attempts >= 1 else SYNC_RETRY
-        if result.status_code == 404 and _is_incident_not_found(result):
-            self._set_error(f"evidence upload dropped: {_result_error_text(result)}")
-            return SYNC_DROP
-        if result.status_code == 409 and _is_stale_session_rejection(result):
-            self._set_error(f"evidence upload dropped: {_result_error_text(result)}")
-            return SYNC_DROP
-        if result.status_code:
-            self._set_error(f"evidence upload failed ({result.status_code}): {_result_error_text(result)}")
-        return SYNC_RETRY
-
-    def _upload_manifest_live(self, manifest: IncidentManifest) -> bool:
-        payload = {"manifest_payload": manifest.to_dict()}
-        return self._attempt_live_upload(
-            incident_id=manifest.incident_id,
-            item_type="manifest",
-            upload_fn=lambda attempt: self._sync_manifest(payload),
-        )
-
-    def _upload_asset_live(self, manifest: IncidentManifest, asset: dict) -> bool:
-        payload = _asset_queue_payload(asset, manifest=manifest)
-        return self._attempt_live_upload(
-            incident_id=manifest.incident_id,
-            item_type=str(asset.get("asset_type") or "asset"),
-            upload_fn=lambda attempt: self._upload_asset_payload(payload, attempts=attempt - 1),
-        )
-
-    def _attempt_live_upload(self, *, incident_id: str, item_type: str, upload_fn) -> bool:
-        last_error = ""
-        for attempt in (1, 2):
-            try:
-                disposition = upload_fn(attempt)
-            except Exception as exc:  # pragma: no cover - runtime network safety
-                disposition = SYNC_RETRY
-                self._set_error(f"{item_type} upload failed: {exc}")
-            with self._lock:
-                last_error = self._last_error
-            if disposition == SYNC_OK:
-                return True
-            if disposition == SYNC_DROP:
-                break
-            if attempt == 1:
-                self.logger.warning(
-                    "upload attempt failed, retrying immediately: incident=%s type=%s reason=%s",
-                    incident_id,
-                    item_type,
-                    last_error or "unknown upload failure",
-                )
-        self._record_dropped_upload(
-            incident_id=incident_id,
-            item_type=item_type,
-            reason=last_error or "upload failed after two attempts",
-        )
-        return False
 
     def _run_session(self, session: SessionSpec) -> None:
         try:
@@ -469,12 +350,13 @@ class NodeRuntime:
             with self._lock:
                 self._status = "error"
         finally:
+            if not self._session_stop.is_set():
+                self.upload_worker.wait_until_idle(timeout=2.0)
             with self._lock:
                 if self._status != "error":
                     self._status = "completed" if not self._session_stop.is_set() else "idle"
                 self._session_thread = None
-            self._clear_sync_backlog("session thread completed")
-            self._sync_wake.clear()
+            self._clear_upload_backlog("session thread completed")
 
     def _run_motion_session(self, session: SessionSpec) -> None:
         builder = EvidenceBuilder(self.config)
@@ -601,12 +483,12 @@ class NodeRuntime:
             return
         with self._lock:
             self._remember_incident_locked(manifest.incident_id)
-        if not self._upload_manifest_live(manifest):
-            return
-        for asset in sorted(assets, key=_asset_sync_priority):
-            if asset["asset_type"] == "frame":
-                continue
-            self._upload_asset_live(manifest, asset)
+        self.upload_worker.enqueue(
+            IncidentUploadJob(
+                manifest=manifest,
+                assets=tuple(asset for asset in assets if asset.get("asset_type") != "frame"),
+            )
+        )
 
     def record_detected_incident(self, manifest: IncidentManifest) -> None:
         if not self._incident_matches_active_session(manifest):
@@ -618,7 +500,7 @@ class NodeRuntime:
             return
         with self._lock:
             self._remember_incident_locked(manifest.incident_id)
-        self._upload_manifest_live(manifest)
+        self.upload_worker.enqueue(IncidentUploadJob(manifest=manifest, assets=()))
 
     def _remember_incident_locked(self, incident_id: str) -> None:
         if not incident_id or incident_id in self._incident_ids:
@@ -639,14 +521,53 @@ class NodeRuntime:
             return
         self._last_publish_monotonic = now
 
-        raw_jpeg = self._encode_frame(raw_frame)
-        annotated_jpeg = self._encode_frame(annotated_frame)
-        with self._lock:
-            self._raw_jpeg = raw_jpeg
-            self._annotated_jpeg = annotated_jpeg
-            self._raw_seq += 1
-            self._annotated_seq += 1
-            self._last_frame_at = utc_now_iso()
+        self._queue_preview_frames(raw_frame, annotated_frame)
+
+    def _queue_preview_frames(self, raw_frame, annotated_frame) -> None:
+        item = (raw_frame, annotated_frame)
+        try:
+            self._preview_queue.put_nowait(item)
+        except Full:
+            try:
+                self._preview_queue.get_nowait()
+                self._preview_queue.task_done()
+            except Empty:
+                pass
+            try:
+                self._preview_queue.put_nowait(item)
+            except Full:
+                pass
+
+    def _preview_loop(self) -> None:
+        while not self._shutdown.is_set():
+            try:
+                item = self._preview_queue.get(timeout=0.1)
+            except Empty:
+                continue
+            try:
+                if item is None:
+                    return
+                raw_frame, annotated_frame = item
+                raw_jpeg = self._encode_frame(raw_frame)
+                annotated_jpeg = self._encode_frame(annotated_frame)
+                with self._lock:
+                    self._raw_jpeg = raw_jpeg
+                    self._annotated_jpeg = annotated_jpeg
+                    self._raw_seq += 1
+                    self._annotated_seq += 1
+                    self._last_frame_at = utc_now_iso()
+            finally:
+                self._preview_queue.task_done()
+
+    def _clear_preview_queue(self) -> int:
+        cleared = 0
+        while True:
+            try:
+                self._preview_queue.get_nowait()
+            except Empty:
+                return cleared
+            self._preview_queue.task_done()
+            cleared += 1
 
     def _clear_frames_locked(self) -> None:
         self._raw_jpeg = None
@@ -717,7 +638,7 @@ class NodeRuntime:
         with self._lock:
             self._last_error = str(message)
 
-    def _record_dropped_upload(self, *, incident_id: str, item_type: str, reason: str) -> None:
+    def _record_dropped_upload(self, incident_id: str, item_type: str, reason: str) -> None:
         message = f"{item_type} upload dropped for incident {incident_id}: {reason}"
         now_iso = utc_now_iso()
         with self._lock:
@@ -727,101 +648,47 @@ class NodeRuntime:
             self._last_error = message
         self.logger.warning(message)
 
-    def _active_sync_session_id(self) -> str:
+    def _active_upload_session_id(self) -> str:
         with self._lock:
-            if self._session and self._status in ACTIVE_SYNC_STATES:
+            if self._session and self._status in ACTIVE_UPLOAD_STATES:
                 return self._session.session_id
         return ""
 
+    def _is_active_session_id(self, session_id: str) -> bool:
+        return bool(session_id and session_id == self._active_upload_session_id())
+
     def _incident_matches_active_session(self, manifest: IncidentManifest) -> bool:
-        active_session_id = self._active_sync_session_id()
+        active_session_id = self._active_upload_session_id()
         return bool(active_session_id and manifest.session_id == active_session_id)
 
-    def _clear_sync_backlog(self, reason: str) -> int:
-        purged = self.sync_queue.clear()
+    def _clear_upload_backlog(self, reason: str) -> int:
+        purged = self.upload_worker.clear()
         if purged:
             self.logger.info(
-                "cleared %s sync queue item(s): %s",
+                "cleared %s pending upload job(s): %s",
                 purged,
                 reason,
             )
         return purged
 
-
-def _is_incident_not_found(result) -> bool:
-    payload = result.json_data
-    if isinstance(payload, dict):
-        error_text = str(payload.get("error") or payload.get("message") or "")
-    else:
-        error_text = result.text
-    return "incident not found" in error_text.lower()
-
-
-def _is_stale_session_rejection(result) -> bool:
-    error_text = _result_error_text(result).lower()
-    return (
-        "stale" in error_text
-        or "active running session" in error_text
-        or "not accepting node uploads" in error_text
-    )
-
-
-def _queue_item_session_id(item: SyncQueueItem) -> str:
-    payload = item.payload
-    if item.item_type == "manifest":
-        manifest = payload.get("manifest_payload")
-        if isinstance(manifest, dict):
-            return str(manifest.get("session_id", "")).strip()
-    return str(payload.get("session_id", "")).strip()
-
-
-def _queue_item_manifest_status(item: SyncQueueItem) -> str:
-    if item.item_type != "manifest":
-        return ""
-    manifest = item.payload.get("manifest_payload")
-    if not isinstance(manifest, dict):
-        return ""
-    return str(manifest.get("sync_status") or "").strip().lower()
-
-
-def _asset_sync_priority(asset: dict) -> int:
-    asset_type = str(asset.get("asset_type") or "").lower()
-    if asset_type == "gif":
-        return 0
-    if asset_type == "poster":
-        return 1
-    return 2
-
-
-def _asset_queue_payload(asset: dict, *, manifest: IncidentManifest) -> dict:
-    payload = {
-        "incident_id": manifest.incident_id,
-        "session_id": manifest.session_id,
-        "asset_type": asset["asset_type"],
-        "file_path": str(asset["file_path"]),
-        "filename": asset["filename"],
-    }
-    if "frame_paths" in asset:
-        payload["frame_paths"] = [str(path) for path in (asset.get("frame_paths") or [])]
-    return payload
-
-
-def _asset_payload_type(payload: dict) -> str:
-    return str(payload.get("asset_type") or "").strip().lower()
-
-
-def _asset_upload_timeout_sec(
-    *,
-    base_timeout_sec: float,
-    asset_type: str,
-    size_bytes: int,
-) -> float:
-    timeout_sec = max(1.0, float(base_timeout_sec))
-    return timeout_sec
-
-
-def _result_error_text(result) -> str:
-    payload = result.json_data
-    if isinstance(payload, dict):
-        return str(payload.get("error") or payload.get("message") or result.text or "").strip()
-    return str(result.text or "").strip()
+    def _cleanup_local_evidence_storage(self, reason: str) -> int:
+        root = self.config.evidence_root
+        if not root.exists():
+            return 0
+        removed = 0
+        for child in root.iterdir():
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+                removed += 1
+            except OSError as exc:
+                self.logger.warning("could not clean local evidence path %s: %s", child, exc)
+        if removed:
+            self.logger.info(
+                "cleaned %s local evidence item(s): %s",
+                removed,
+                reason,
+            )
+        return removed

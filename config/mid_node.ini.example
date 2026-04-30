@@ -9,9 +9,7 @@ api_key = CHANGE_ME_MID_NODE_API_KEY
 central_base_url = http://CENTRAL_DASHBOARD_HOST_OR_IP:8090
 registration_interval_sec = 10
 heartbeat_interval_sec = 3
-sync_interval_sec = 2
 http_timeout_sec = 5
-local_db_path = runtime/central_dashboard/data/node_mid/queue.sqlite3
 
 [capture]
 ; Launchers choose webcam or video mode without requiring a second INI.
@@ -20,9 +18,9 @@ camera_index = 0
 video_path =
 
 [preview]
-width = 960
-fps = 10
-jpeg_quality = 72
+width = 640
+fps = 6
+jpeg_quality = 60
 
 [detector]
 mode = front_runtime

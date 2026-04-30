@@ -45,11 +45,9 @@ def _evidence_payload_from_request() -> dict:
         or request.files.get("evidence")
     )
     if uploaded is not None:
-        import base64
-
         content = uploaded.read()
         payload.setdefault("filename", uploaded.filename or "")
-        payload.setdefault("content_base64", base64.b64encode(content).decode("ascii"))
+        payload.setdefault("_content_bytes", content)
         payload.setdefault("size_bytes", len(content))
     return payload
 

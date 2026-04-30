@@ -254,9 +254,9 @@ Restart the EXE after config changes.
 
 `front_runtime`
 
-- Uses the real Hailo-backed all-behavior pipeline from `runtime/front_node_pi`.
+- Uses the real Hailo-backed all-behavior pipeline from `runtime/edge_node_runtime`.
 - Produces student-number incidents, evidence frames/GIFs, and live previews.
-- On the front node, can report KY-037 classroom-noise telemetry and sync noise
+- On the front node, can report KY-037 classroom-noise telemetry and upload noise
   incidents when `[sound_sensor] enabled = true`.
 
 `motion`
