@@ -26,6 +26,7 @@ VIDEO_FILE_TYPES = (
     ("MKV files", "*.mkv"),
     ("All files", "*.*"),
 )
+PLACEHOLDER_TOKENS = ("CHANGE_ME", "SOUND_CALIBRATION")
 
 
 def configure_runtime_logging() -> None:
@@ -86,6 +87,10 @@ def _resolve_config_path(raw_value: str, *, label: str) -> Path:
     if not value:
         raise SystemExit(f"{label} is not configured.")
     return repo_path(value)
+
+
+def _is_placeholder_value(raw_value: str) -> bool:
+    return any(token in raw_value for token in PLACEHOLDER_TOKENS)
 
 
 def _repo_relative(path: Path) -> str:
@@ -322,6 +327,44 @@ def run_node_video_calibration(config_name: str) -> None:
         str(config_path),
         "--video",
         str(video_path),
+    )
+
+
+def run_node_sound_calibration(config_name: str) -> None:
+    config_path = require_operator_config(config_name)
+    run_script(
+        CENTRAL_DASHBOARD_ROOT / "scripts" / "calibrate_sound_sensor.py",
+        "--config",
+        str(config_path),
+    )
+
+
+def run_sound_sensor_test(config_name: str = "front_node.ini") -> None:
+    config_path = require_operator_config(config_name)
+    parser = _read_ini(config_path)
+    calibration_value = parser.get("sound_sensor", "calibration_config", fallback="").strip()
+    calibration_launcher = (
+        "calibrate_mid_sound_sensor.py"
+        if "mid" in config_name.lower()
+        else "calibrate_front_sound_sensor.py"
+    )
+    if not calibration_value or _is_placeholder_value(calibration_value):
+        raise SystemExit(
+            "Sound calibration is not configured. Run "
+            f"`python programs/{calibration_launcher}` first, or update "
+            f"[sound_sensor] calibration_config in {config_path}."
+        )
+    calibration_path = repo_path(calibration_value)
+    if not calibration_path.exists():
+        raise SystemExit(
+            f"Sound calibration JSON was not found: {calibration_path}\n"
+            f"Run `python programs/{calibration_launcher}` to create it."
+        )
+
+    run_script(
+        REPO_ROOT / "tests" / "tests_on_pi" / "diagnostics" / "ky037_sound_threshold_test.py",
+        "--config-file",
+        str(calibration_path),
     )
 
 

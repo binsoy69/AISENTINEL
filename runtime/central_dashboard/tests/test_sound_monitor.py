@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from contextlib import redirect_stdout
+import configparser
+import importlib.util
 import io
 import json
 import tempfile
@@ -21,8 +23,47 @@ from edge_node_runtime.sound_monitor import (
     build_settings_from_sound_config,
 )
 
+CALIBRATION_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1] / "scripts" / "calibrate_sound_sensor.py"
+)
+CALIBRATION_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "calibrate_sound_sensor",
+    CALIBRATION_SCRIPT_PATH,
+)
+calibrate_sound_sensor = importlib.util.module_from_spec(CALIBRATION_SCRIPT_SPEC)
+assert CALIBRATION_SCRIPT_SPEC.loader is not None
+sys.modules[CALIBRATION_SCRIPT_SPEC.name] = calibrate_sound_sensor
+CALIBRATION_SCRIPT_SPEC.loader.exec_module(calibrate_sound_sensor)
+
 
 class SoundMonitorTests(unittest.TestCase):
+    def test_sample_window_allows_uncalibrated_reference_capture(self):
+        class FakeBus:
+            def __init__(self):
+                self.code = 100
+
+            def read_i2c_block_data(self, _address, _register, _length):
+                self.code += 8
+                raw = self.code << 4
+                return [(raw >> 8) & 0xFF, raw & 0xFF]
+
+        result = sound_monitor.sample_window(
+            FakeBus(),
+            SimpleNamespace(
+                address=0x48,
+                full_scale=4.096,
+                window_seconds=0.003,
+                sample_interval=0.001,
+                quiet_db=45.0,
+                loud_db=55.0,
+                ref_quiet_rms_mv=None,
+                ref_loud_rms_mv=None,
+            ),
+        )
+
+        self.assertIn("rms_mv", result)
+        self.assertNotIn("estimated_db", result)
+
     def test_build_settings_from_sound_config_reads_calibration_file(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -234,6 +275,87 @@ class SoundMonitorTests(unittest.TestCase):
             self.assertEqual(threshold_events[0]["threshold_db"], 55.0)
             self.assertEqual(snapshot["status"], "error")
             self.assertEqual(snapshot["last_error"], "done")
+
+
+class SoundCalibrationScriptTests(unittest.TestCase):
+    def test_default_calibration_path_replaces_placeholder_with_node_data_path(self):
+        parser = configparser.ConfigParser()
+        parser.read_string(
+            """
+[agent]
+node_id = front
+
+[sound_sensor]
+calibration_config = CHANGE_ME_SOUND_CALIBRATION.json
+""".strip()
+        )
+
+        path = calibrate_sound_sensor.default_calibration_path(
+            parser,
+            Path("config/front_node.ini"),
+        )
+
+        self.assertEqual(
+            path,
+            (
+                calibrate_sound_sensor.REPO_ROOT
+                / "runtime/central_dashboard/data/node_front/sound/ky037_ads1015_config.json"
+            ).resolve(strict=False),
+        )
+
+    def test_update_node_ini_writes_sound_path_and_enables_complete_calibration(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config_path = tmpdir / "front_node.ini"
+            config_path.write_text(
+                """
+[agent]
+node_id = front
+
+[sound_sensor]
+enabled = false
+calibration_config =
+""".strip(),
+                encoding="utf-8",
+            )
+            parser = calibrate_sound_sensor.read_node_ini(config_path)
+            calibration_path = (
+                calibrate_sound_sensor.REPO_ROOT
+                / "runtime/central_dashboard/data/node_front/sound/ky037_ads1015_config.json"
+            )
+
+            calibrate_sound_sensor.update_node_ini(
+                config_path,
+                parser,
+                calibrate_sound_sensor.CalibrationSettings(
+                    config_file=calibration_path,
+                    bus=1,
+                    address=0x49,
+                    channel=2,
+                    full_scale=4.096,
+                    data_rate=1600,
+                    sample_interval=0.002,
+                    window_seconds=1.0,
+                    quiet_db=45.0,
+                    loud_db=55.0,
+                    ref_quiet_rms_mv=12.3,
+                    ref_loud_rms_mv=30.5,
+                    alert_threshold_db=55.0,
+                    incident_cooldown_sec=10.0,
+                ),
+                enable_complete_calibration=True,
+            )
+
+            updated = configparser.ConfigParser()
+            updated.read(config_path, encoding="utf-8")
+
+        self.assertTrue(updated.getboolean("sound_sensor", "enabled"))
+        self.assertEqual(
+            updated.get("sound_sensor", "calibration_config"),
+            "runtime/central_dashboard/data/node_front/sound/ky037_ads1015_config.json",
+        )
+        self.assertEqual(updated.get("sound_sensor", "i2c_address"), "0x49")
+        self.assertEqual(updated.getint("sound_sensor", "adc_channel"), 2)
 
 
 if __name__ == "__main__":

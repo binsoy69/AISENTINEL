@@ -173,6 +173,18 @@ python programs/calibrate_mid_video.py
 Calibration saves setup profiles and updates the matching node INI default
 profile path.
 
+Sound calibration for KY-037 + ADS1015:
+
+```bash
+python programs/calibrate_front_sound_sensor.py
+python programs/calibrate_mid_sound_sensor.py
+```
+
+The sound calibrator captures quiet and loud references, writes the JSON under
+`runtime/central_dashboard/data/node_<id>/sound/`, updates `[sound_sensor]
+calibration_config` in the matching node INI, and enables sound monitoring once
+both references are present.
+
 ## Video Replay
 
 Set:

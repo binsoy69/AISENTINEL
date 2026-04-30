@@ -43,12 +43,15 @@ class ConfigTests(unittest.TestCase):
         config = front_runtime_config.load_runtime_config(
             str(CONFIG_ROOT / "front_node.ini.example")
         )
-        self.assertTrue(config.sound_sensor.enabled)
+        self.assertFalse(config.sound_sensor.enabled)
         self.assertEqual(config.sound_sensor.i2c_address, 0x48)
         self.assertEqual(config.sound_sensor.alert_threshold_db, 55.0)
         self.assertEqual(
             config.sound_sensor.calibration_config,
-            (ROOT.parents[1] / "CHANGE_ME_SOUND_CALIBRATION.json").resolve(strict=False),
+            (
+                ROOT.parents[1]
+                / "runtime/central_dashboard/data/node_front/sound/ky037_ads1015_config.json"
+            ).resolve(strict=False),
         )
 
     def test_dashboard_js_renders_evidence_processing_snapshot_state(self):

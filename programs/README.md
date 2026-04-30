@@ -31,6 +31,10 @@ Video replay opens a file picker, saves the selected file to
 - `calibrate_front_video.py`: pick a front video and save/update its setup
   profile.
 - `calibrate_mid_video.py`: pick a mid video and save/update its setup profile.
+- `calibrate_front_sound_sensor.py`: capture KY-037 quiet/loud references,
+  save the front sound JSON, and update `config/front_node.ini`.
+- `calibrate_mid_sound_sensor.py`: capture KY-037 quiet/loud references,
+  save the mid sound JSON, and update `config/mid_node.ini`.
 
 ## Testing
 
@@ -38,7 +42,8 @@ Video replay opens a file picker, saves the selected file to
 - `test_camera_preview.py`: opens the webcam using the runtime capture path,
   without AI models.
 - `test_hailo_detection.py`: runs the standalone Hailo object-detection test.
-- `test_sound_sensor.py`: runs the KY-037 ADS1015 sound-threshold test.
+- `test_sound_sensor.py`: runs the KY-037 ADS1015 sound-threshold test using
+  the calibration JSON configured in `config/front_node.ini`.
 
 ## Raspberry Pi Double-Click Files
 

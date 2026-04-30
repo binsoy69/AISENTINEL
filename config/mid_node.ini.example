@@ -120,7 +120,7 @@ clear_required_sec = 3.0
 
 [sound_sensor]
 enabled = false
-calibration_config = CHANGE_ME_SOUND_CALIBRATION.json
+calibration_config = runtime/central_dashboard/data/node_mid/sound/ky037_ads1015_config.json
 alert_threshold_db = 55.0
 incident_cooldown_sec = 10.0
 i2c_bus = 1

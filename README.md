@@ -54,7 +54,9 @@ The video launchers read `[video_source] default_video` from
   `programs/run_front_node_webcam.py`, `programs/run_mid_node_webcam.py`
 - Calibration: `programs/calibrate_front_webcam.py`,
   `programs/calibrate_mid_webcam.py`, `programs/calibrate_front_video.py`,
-  `programs/calibrate_mid_video.py`
+  `programs/calibrate_mid_video.py`,
+  `programs/calibrate_front_sound_sensor.py`,
+  `programs/calibrate_mid_sound_sensor.py`
 - Video replay: `programs/run_front_node_video.py`,
   `programs/run_mid_node_video.py`
 - Testing: `programs/test_central_dashboard.py`,
@@ -166,3 +168,7 @@ python programs/test_camera_preview.py
 python programs/test_hailo_detection.py
 python programs/test_sound_sensor.py
 ```
+
+Run `python programs/calibrate_front_sound_sensor.py` first on the Pi with the
+KY-037 attached; it creates the calibration JSON and updates the node INI path
+used by `test_sound_sensor.py`.

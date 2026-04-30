@@ -358,13 +358,16 @@ def sample_window(bus, settings) -> dict[str, float]:
         "sample_count": float(len(samples)),
     }
 
-    result["estimated_db"] = estimate_db(
-        rms_mv=result["rms_mv"],
-        ref_quiet_rms_mv=settings.ref_quiet_rms_mv,
-        ref_loud_rms_mv=settings.ref_loud_rms_mv,
-        quiet_db=settings.quiet_db,
-        loud_db=settings.loud_db,
-    )
+    ref_quiet = getattr(settings, "ref_quiet_rms_mv", None)
+    ref_loud = getattr(settings, "ref_loud_rms_mv", None)
+    if ref_quiet is not None and ref_loud is not None:
+        result["estimated_db"] = estimate_db(
+            rms_mv=result["rms_mv"],
+            ref_quiet_rms_mv=float(ref_quiet),
+            ref_loud_rms_mv=float(ref_loud),
+            quiet_db=settings.quiet_db,
+            loud_db=settings.loud_db,
+        )
     return result
 
 

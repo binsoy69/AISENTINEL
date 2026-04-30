@@ -176,6 +176,49 @@ default_setup_profile = runtime/central_dashboard/data/node_front/setup_profiles
         args = run_script_mock.call_args.args
         self.assertEqual(args[1:], ("--config", str(selected_config), "--video", str(selected_video)))
 
+    def test_run_node_sound_calibration_passes_node_config_to_script(self):
+        selected_config = Path("config/front_node.ini")
+
+        with (
+            mock.patch.object(
+                launcher_common,
+                "require_operator_config",
+                return_value=selected_config,
+            ),
+            mock.patch.object(launcher_common, "run_script") as run_script_mock,
+        ):
+            launcher_common.run_node_sound_calibration("front_node.ini")
+
+        args = run_script_mock.call_args.args
+        self.assertEqual(args[1:], ("--config", str(selected_config)))
+
+    def test_run_sound_sensor_test_passes_configured_calibration_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            calibration_path = tmpdir / "ky037.json"
+            calibration_path.write_text("{}", encoding="utf-8")
+            node_config = tmpdir / "front_node.ini"
+            node_config.write_text(
+                f"""
+[sound_sensor]
+calibration_config = {calibration_path}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(
+                    launcher_common,
+                    "require_operator_config",
+                    return_value=node_config,
+                ),
+                mock.patch.object(launcher_common, "run_script") as run_script_mock,
+            ):
+                launcher_common.run_sound_sensor_test("front_node.ini")
+
+        args = run_script_mock.call_args.args
+        self.assertEqual(args[1:], ("--config-file", str(calibration_path.resolve(strict=False))))
+
     def test_run_script_includes_launched_script_directory_for_sibling_imports(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)

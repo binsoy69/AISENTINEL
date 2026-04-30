@@ -93,7 +93,18 @@ write_launcher \
     "Create or update the mid node video setup profile" \
     "programs/pi/calibrate_mid_video.sh"
 
+write_launcher \
+    "AISENTINEL Calibrate Front Sound.desktop" \
+    "AISENTINEL Calibrate Front Sound" \
+    "Create or update the front node KY-037 sound calibration" \
+    "programs/pi/calibrate_front_sound_sensor.sh"
+
+write_launcher \
+    "AISENTINEL Calibrate Mid Sound.desktop" \
+    "AISENTINEL Calibrate Mid Sound" \
+    "Create or update the mid node KY-037 sound calibration" \
+    "programs/pi/calibrate_mid_sound_sensor.sh"
+
 echo
 echo "Desktop launchers installed."
 echo "If Raspberry Pi Desktop asks whether to trust/execute them, choose Allow Launching."
-
