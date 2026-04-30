@@ -26,6 +26,7 @@ from central_dashboard.node_agent.state import NodeRuntime
 from central_dashboard.shared.dto import IncidentManifest
 from central_dashboard.shared.http import HttpResult
 from edge_node_runtime import front_node_all_behavior_pi as combined_runtime
+from edge_node_runtime import runtime_support
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,12 @@ class FakeHttpClient:
 
 
 class FrontRuntimeBackendTests(unittest.TestCase):
+    def test_webcam_backend_attempt_builder_uses_current_platform(self):
+        attempts = runtime_support._build_webcam_backend_attempts()
+
+        self.assertTrue(attempts)
+        self.assertTrue(any(backend_name == "default" for backend_name, *_ in attempts))
+
     def test_head_tilt_and_shoulder_turn_share_public_head_tilt_label(self):
         self.assertEqual(
             combined_runtime._sequence_type_label(
