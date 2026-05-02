@@ -27,6 +27,7 @@ from central_dashboard.shared.dto import IncidentManifest
 from central_dashboard.shared.http import HttpResult
 from edge_node_runtime import front_node_all_behavior_pi as combined_runtime
 from edge_node_runtime import runtime_support
+from edge_node_runtime.session_runner import _apply_node_config_overrides
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -493,6 +494,34 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 head_mod,
             )
             self.assertEqual(path, auto_profile)
+
+    def test_node_config_overrides_front_runtime_evidence_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            runtime_cfg = front_runtime_config.load_runtime_config(
+                str(CONFIG_ROOT / "front_node.ini.example")
+            )
+            node_config = SimpleNamespace(
+                source_mode="webcam",
+                camera_index=9,
+                video_path=None,
+                evidence_root=tmpdir / "node-evidence",
+                pre_event_frames=4,
+                post_event_frames=3,
+                gif_frame_count=2,
+                gif_max_width=320,
+                gif_fps=8.0,
+            )
+
+            updated = _apply_node_config_overrides(node_config, runtime_cfg)
+
+        self.assertEqual(updated.webcam_source.camera_index, 9)
+        self.assertEqual(updated.evidence_root, node_config.evidence_root)
+        self.assertEqual(updated.evidence.pre_event_frames, 4)
+        self.assertEqual(updated.evidence.post_event_frames, 3)
+        self.assertEqual(updated.evidence.gif_frame_count, 2)
+        self.assertEqual(updated.evidence.gif_max_width, 320)
+        self.assertEqual(updated.evidence.gif_fps, 8.0)
 
 
 if __name__ == "__main__":

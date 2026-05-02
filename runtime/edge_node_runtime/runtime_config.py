@@ -212,6 +212,19 @@ def _get_value(
     return fallback
 
 
+def _get_first_value(
+    parser: configparser.ConfigParser,
+    candidates: list[tuple[str, str]],
+    fallback,
+    getter_name: str = "get",
+):
+    for section, option in candidates:
+        if parser.has_option(section, option):
+            getter = getattr(parser, getter_name)
+            return getter(section, option)
+    return fallback
+
+
 def load_runtime_config(
     config_arg: str | None = None,
     default_config_path: Path | None = None,
@@ -314,10 +327,9 @@ def load_runtime_config(
         default_setup_profile=default_setup_profile,
         auto_use_saved_setup=auto_use_saved_setup,
         evidence_root=resolve_repo_path(
-            _get_value(
+            _get_first_value(
                 parser,
-                ["outputs"],
-                "evidence_root",
+                [("evidence", "root"), ("outputs", "evidence_root")],
                 str(DEFAULT_EVIDENCE_ROOT.relative_to(REPO_ROOT)),
             )
         ),
@@ -335,10 +347,9 @@ def load_runtime_config(
             auto_use_saved_setup=auto_use_saved_setup,
         ),
         webcam_source=WebcamSourceConfig(
-            camera_index=_get_value(
+            camera_index=_get_first_value(
                 parser,
-                ["webcam_source"],
-                "camera_index",
+                [("capture", "camera_index"), ("webcam_source", "camera_index")],
                 0,
                 getter_name="getint",
             ),
@@ -600,26 +611,35 @@ def load_runtime_config(
             ),
         ),
         evidence=EvidenceConfig(
-            pre_event_frames=_get_value(
-                parser,
-                ["evidence"],
-                "pre_event_frames",
-                2,
-                getter_name="getint",
+            pre_event_frames=max(
+                1,
+                _get_value(
+                    parser,
+                    ["evidence"],
+                    "pre_event_frames",
+                    2,
+                    getter_name="getint",
+                ),
             ),
-            post_event_frames=_get_value(
-                parser,
-                ["evidence"],
-                "post_event_frames",
-                2,
-                getter_name="getint",
+            post_event_frames=max(
+                1,
+                _get_value(
+                    parser,
+                    ["evidence"],
+                    "post_event_frames",
+                    2,
+                    getter_name="getint",
+                ),
             ),
-            gif_frame_count=_get_value(
-                parser,
-                ["evidence"],
-                "gif_frame_count",
-                5,
-                getter_name="getint",
+            gif_frame_count=max(
+                1,
+                _get_value(
+                    parser,
+                    ["evidence"],
+                    "gif_frame_count",
+                    5,
+                    getter_name="getint",
+                ),
             ),
             gif_max_width=_get_value(
                 parser,

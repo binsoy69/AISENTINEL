@@ -419,6 +419,130 @@ api_key = front-key
             finally:
                 combined_runtime.HEAD_EVIDENCE_DIR = old_head_dir
 
+    def test_evidence_sequence_uses_configured_pre_post_and_gif_cap(self):
+        def snapshot(name, value):
+            return {
+                "name": name,
+                "raw_frame": np.full((8, 8, 3), value, dtype=np.uint8),
+            }
+
+        class TaskSink:
+            def __init__(self):
+                self.tasks = []
+
+            def put(self, task):
+                self.tasks.append(task)
+
+        old_pre = combined_runtime.EVIDENCE_PRE_EVENT_FRAMES
+        old_post = combined_runtime.EVIDENCE_POST_EVENT_FRAMES
+        old_gif = combined_runtime.EVIDENCE_GIF_FRAME_COUNT
+        old_head_dir = combined_runtime.HEAD_EVIDENCE_DIR
+        try:
+            combined_runtime.EVIDENCE_PRE_EVENT_FRAMES = 3
+            combined_runtime.EVIDENCE_POST_EVENT_FRAMES = 1
+            combined_runtime.EVIDENCE_GIF_FRAME_COUNT = 4
+            with tempfile.TemporaryDirectory() as tmpdir_str:
+                combined_runtime.HEAD_EVIDENCE_DIR = Path(tmpdir_str) / "head_behavior"
+                recent_frames = [
+                    snapshot(f"recent-{idx}", idx)
+                    for idx in range(5)
+                ]
+                sequence_queue = []
+                task_sink = TaskSink()
+
+                sequence = combined_runtime.queue_evidence_sequence(
+                    task_sink,
+                    sequence_queue,
+                    recent_frames,
+                    "head",
+                    1.25,
+                    student_num=5,
+                    behavior="head_tilt",
+                )
+
+                self.assertEqual(
+                    [item["name"] for item in sequence["pre_event_snapshots"]],
+                    ["recent-2", "recent-3", "recent-4"],
+                )
+                remaining = combined_runtime.flush_evidence_sequences(
+                    task_sink,
+                    sequence_queue,
+                    snapshot("event", 200),
+                )
+                self.assertEqual(remaining, [sequence])
+                self.assertEqual(task_sink.tasks, [])
+
+                remaining = combined_runtime.flush_evidence_sequences(
+                    task_sink,
+                    sequence_queue,
+                    snapshot("post", 240),
+                )
+
+                self.assertEqual(remaining, [])
+                self.assertEqual(task_sink.tasks[0]["type"], "finalize")
+                snapshots, event_index = combined_runtime._sequence_gif_snapshots(sequence)
+                self.assertEqual(
+                    [item["name"] for item in snapshots],
+                    ["recent-3", "recent-4", "event", "post"],
+                )
+                self.assertEqual(event_index, 2)
+        finally:
+            combined_runtime.EVIDENCE_PRE_EVENT_FRAMES = old_pre
+            combined_runtime.EVIDENCE_POST_EVENT_FRAMES = old_post
+            combined_runtime.EVIDENCE_GIF_FRAME_COUNT = old_gif
+            combined_runtime.HEAD_EVIDENCE_DIR = old_head_dir
+
+    def test_single_frame_gif_count_keeps_event_snapshot_as_poster(self):
+        old_pre = combined_runtime.EVIDENCE_PRE_EVENT_FRAMES
+        old_post = combined_runtime.EVIDENCE_POST_EVENT_FRAMES
+        old_gif = combined_runtime.EVIDENCE_GIF_FRAME_COUNT
+        old_evidence_dir = combined_runtime.EVIDENCE_DIR
+        try:
+            combined_runtime.EVIDENCE_PRE_EVENT_FRAMES = 3
+            combined_runtime.EVIDENCE_POST_EVENT_FRAMES = 2
+            combined_runtime.EVIDENCE_GIF_FRAME_COUNT = 1
+            with tempfile.TemporaryDirectory() as tmpdir_str:
+                evidence_dir = Path(tmpdir_str)
+                combined_runtime.EVIDENCE_DIR = evidence_dir
+                sequence = {
+                    "behavior_type": "head",
+                    "student_num": 5,
+                    "event_dir": evidence_dir,
+                    "frame_paths": [],
+                    "frame_count": 0,
+                    "poster_relpath": "",
+                    "gif_relpath": "",
+                    "pre_event_snapshots": [
+                        {"raw_frame": np.full((8, 8, 3), 10, dtype=np.uint8)},
+                        {"raw_frame": np.full((8, 8, 3), 20, dtype=np.uint8)},
+                        {"raw_frame": np.full((8, 8, 3), 30, dtype=np.uint8)},
+                    ],
+                    "event_snapshot": {
+                        "raw_frame": np.full((8, 8, 3), 200, dtype=np.uint8)
+                    },
+                    "post_event_snapshots": [
+                        {"raw_frame": np.full((8, 8, 3), 40, dtype=np.uint8)},
+                        {"raw_frame": np.full((8, 8, 3), 50, dtype=np.uint8)},
+                    ],
+                }
+                poster_frames = []
+
+                def capture_imwrite(_path, frame):
+                    poster_frames.append(frame.copy())
+                    return True
+
+                with mock.patch.object(combined_runtime.cv2, "imwrite", side_effect=capture_imwrite), \
+                     mock.patch.object(combined_runtime, "_save_evidence_gif", return_value=True):
+                    combined_runtime._save_grouped_evidence_media(sequence)
+
+                self.assertEqual(sequence["frame_count"], 1)
+                self.assertEqual(int(poster_frames[0][0, 0, 0]), 200)
+        finally:
+            combined_runtime.EVIDENCE_PRE_EVENT_FRAMES = old_pre
+            combined_runtime.EVIDENCE_POST_EVENT_FRAMES = old_post
+            combined_runtime.EVIDENCE_GIF_FRAME_COUNT = old_gif
+            combined_runtime.EVIDENCE_DIR = old_evidence_dir
+
 
 if __name__ == "__main__":
     unittest.main()

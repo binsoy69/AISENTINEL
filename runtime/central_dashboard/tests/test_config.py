@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 import sys
+import tempfile
 
 TEST_ROOT = Path(__file__).resolve().parents[2]
 if str(TEST_ROOT) not in sys.path:
@@ -76,6 +77,82 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.evidence.gif_frame_count, 5)
             self.assertEqual(config.evidence.gif_max_width, 640)
             self.assertEqual(config.evidence.gif_fps, 4.0)
+
+    def test_runtime_config_prefers_agent_camera_and_evidence_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            canonical_evidence = tmpdir / "canonical-evidence"
+            legacy_evidence = tmpdir / "legacy-evidence"
+            config_path = tmpdir / "front_node.ini"
+            config_path.write_text(
+                f"""
+[capture]
+camera_index = 7
+
+[webcam_source]
+camera_index = 2
+
+[evidence]
+root = {canonical_evidence.as_posix()}
+
+[outputs]
+evidence_root = {legacy_evidence.as_posix()}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = front_runtime_config.load_runtime_config(str(config_path))
+
+        self.assertEqual(config.webcam_source.camera_index, 7)
+        self.assertEqual(config.evidence_root, canonical_evidence.resolve(strict=False))
+
+    def test_runtime_config_keeps_legacy_camera_and_evidence_fallbacks(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            legacy_evidence = tmpdir / "legacy-evidence"
+            config_path = tmpdir / "front_node.ini"
+            config_path.write_text(
+                f"""
+[webcam_source]
+camera_index = 4
+
+[outputs]
+evidence_root = {legacy_evidence.as_posix()}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = front_runtime_config.load_runtime_config(str(config_path))
+
+        self.assertEqual(config.webcam_source.camera_index, 4)
+        self.assertEqual(config.evidence_root, legacy_evidence.resolve(strict=False))
+
+    def test_node_agent_config_keeps_legacy_camera_and_evidence_fallbacks(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            legacy_evidence = tmpdir / "legacy-evidence"
+            config_path = tmpdir / "front_node.ini"
+            config_path.write_text(
+                f"""
+[agent]
+node_id = front
+
+[capture]
+source_mode = webcam
+
+[webcam_source]
+camera_index = 6
+
+[outputs]
+evidence_root = {legacy_evidence.as_posix()}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = load_node_agent_config(config_path)
+
+        self.assertEqual(config.camera_index, 6)
+        self.assertEqual(config.evidence_root, legacy_evidence.resolve(strict=False))
 
     def test_central_dashboard_records_export_controls_are_removed(self):
         script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(

@@ -88,14 +88,14 @@ Important fields:
 - `[agent] port`
 - `[agent] central_base_url`
 - `[capture] source_mode`
+- `[capture] camera_index`
 - `[models] pose`
 - `[models] hand`
 - `[models] object`
-- `[webcam_source] camera_index`
 - `[webcam_source] default_setup_profile`
 - `[video_source] default_video`
 - `[video_source] default_setup_profile`
-- `[outputs] evidence_root`
+- `[evidence] root`
 
 ## Network Setup
 

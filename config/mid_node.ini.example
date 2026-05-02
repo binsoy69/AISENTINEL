@@ -53,7 +53,6 @@ default_setup_profile =
 auto_use_saved_setup = true
 
 [webcam_source]
-camera_index = 0
 camera_name = mid_webcam
 capture_width = 1280
 capture_height = 720
@@ -63,7 +62,6 @@ default_setup_profile = runtime/central_dashboard/data/node_mid/setup_profiles/m
 auto_use_saved_setup = true
 
 [outputs]
-evidence_root = runtime/central_dashboard/data/node_mid/evidence
 setup_profile_dir = runtime/central_dashboard/data/node_mid/setup_profiles
 
 [tracking]

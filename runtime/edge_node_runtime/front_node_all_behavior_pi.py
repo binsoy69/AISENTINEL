@@ -1260,31 +1260,71 @@ def _copy_evidence_snapshot(snapshot):
     return copied
 
 
-def _sequence_gif_snapshots(sequence) -> list:
-    pre = list(sequence.get("pre_event_snapshots") or [])[-2:]
+def _configured_frame_count(value) -> int:
+    return max(1, int(value))
+
+
+def _evidence_pre_frame_count() -> int:
+    return _configured_frame_count(EVIDENCE_PRE_EVENT_FRAMES)
+
+
+def _evidence_post_frame_count() -> int:
+    return _configured_frame_count(EVIDENCE_POST_EVENT_FRAMES)
+
+
+def _evidence_gif_frame_count() -> int:
+    return _configured_frame_count(EVIDENCE_GIF_FRAME_COUNT)
+
+
+def _trim_snapshots_to_gif_count(frames: list, event_index: int) -> tuple[list, int]:
+    max_count = _evidence_gif_frame_count()
+    while len(frames) > max_count:
+        pre_distance = event_index
+        post_distance = len(frames) - event_index - 1
+        if pre_distance >= post_distance and event_index > 0:
+            del frames[0]
+            event_index -= 1
+        elif post_distance > 0:
+            frames.pop()
+        else:
+            break
+    return frames, event_index
+
+
+def _sequence_gif_snapshots(sequence) -> tuple[list, int]:
+    pre_count = _evidence_pre_frame_count()
+    post_count = _evidence_post_frame_count()
+    pre = list(sequence.get("pre_event_snapshots") or [])[-pre_count:]
     event = sequence.get("event_snapshot")
-    post = list(sequence.get("post_event_snapshots") or [])[:2]
+    post = list(sequence.get("post_event_snapshots") or [])[:post_count]
     fallback = event or (pre[-1] if pre else None) or (post[0] if post else None)
     if fallback is None:
-        return []
-    while len(pre) < 2:
-        pre.insert(0, fallback)
-    while len(post) < 2:
-        post.append(post[-1] if post else fallback)
-    frames = pre[-2:] + [event or fallback] + post[:2]
-    return frames[:5]
+        return [], -1
+    event = event or fallback
+    if pre:
+        while len(pre) < pre_count:
+            pre.insert(0, pre[0])
+    else:
+        pre = [event] * pre_count
+    if post:
+        while len(post) < post_count:
+            post.append(post[-1])
+    else:
+        post = [event] * post_count
+    frames = pre + [event] + post
+    return _trim_snapshots_to_gif_count(frames, len(pre))
 
 
 def _save_grouped_evidence_media(sequence) -> None:
     _ensure_sequence_storage(sequence)
-    snapshots = _sequence_gif_snapshots(sequence)
+    snapshots, event_index = _sequence_gif_snapshots(sequence)
     if not snapshots:
         sequence["frame_count"] = 0
         return
     evidence_frames = [build_evidence_frame(sequence, snapshot) for snapshot in snapshots]
     poster_path = sequence["event_dir"] / "poster.jpg"
     gif_path = sequence["event_dir"] / "evidence.gif"
-    event_index = min(2, len(evidence_frames) - 1)
+    event_index = max(0, min(event_index, len(evidence_frames) - 1))
     cv2.imwrite(str(poster_path), evidence_frames[event_index])
     sequence["frame_paths"] = [poster_path]
     sequence["poster_relpath"] = _relative_evidence_path(poster_path)
@@ -1446,8 +1486,8 @@ def save_evidence_sequence_frame(sequence, snapshot, frame_tag):
     """Save one evidence frame for the given alert sequence."""
     sequence["event_snapshot"] = _copy_evidence_snapshot(snapshot)
     sequence["post_event_snapshots"] = [
-        _copy_evidence_snapshot(snapshot),
-        _copy_evidence_snapshot(snapshot),
+        _copy_evidence_snapshot(snapshot)
+        for _ in range(_evidence_post_frame_count())
     ]
     _save_grouped_evidence_media(sequence)
 
@@ -1519,7 +1559,7 @@ def _stop_evidence_writer(task_queue: Queue | None, thread: threading.Thread | N
 def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_type,
                             event_ts_sec, incident_finalize_callback=None,
                             incident_detected_callback=None, **payload):
-    """Create a compact 5-frame evidence sequence for the current alert."""
+    """Create a configured evidence sequence for the current alert."""
     with _dashboard_lock:
         camera_label = _dashboard_state["source_label"]
         session_details = dict(_dashboard_state["session_details"])
@@ -1541,7 +1581,7 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
         "event_dir": None,
         "pre_event_snapshots": [
             _copy_evidence_snapshot(snapshot)
-            for snapshot in list(recent_frames)[-2:]
+            for snapshot in list(recent_frames)[-_evidence_pre_frame_count():]
         ],
         "event_snapshot": None,
         "post_event_snapshots": [],
@@ -1564,6 +1604,7 @@ def queue_evidence_sequence(task_queue, sequence_queue, recent_frames, behavior_
 
 def flush_evidence_sequences(task_queue, sequence_queue, snapshot):
     """Advance pending evidence sequences and finalize once post frames exist."""
+    post_count = _evidence_post_frame_count()
     remaining = []
     for seq in sequence_queue:
         if seq.get("event_snapshot") is None:
@@ -1572,10 +1613,10 @@ def flush_evidence_sequences(task_queue, sequence_queue, snapshot):
             continue
 
         post_event_snapshots = seq.setdefault("post_event_snapshots", [])
-        if len(post_event_snapshots) < 2:
+        if len(post_event_snapshots) < post_count:
             post_event_snapshots.append(_copy_evidence_snapshot(snapshot))
 
-        if len(post_event_snapshots) >= 2:
+        if len(post_event_snapshots) >= post_count:
             _queue_evidence_finalize(task_queue, seq)
         else:
             remaining.append(seq)
@@ -2167,7 +2208,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     )
     print(
         f"  Evidence       : {EVIDENCE_DIR} | "
-        "poster.jpg + 5-frame evidence.gif"
+        f"poster.jpg + up to {_evidence_gif_frame_count()}-frame evidence.gif"
     )
     print(
         f"  Suppression    : {DUPLICATE_SUPPRESSION_SEC:.1f}s duplicate window | "

@@ -245,7 +245,21 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             object_detector.close()
 
 
-def _apply_node_capture_overrides(node_config, runtime_cfg):
+def _apply_node_config_overrides(node_config, runtime_cfg):
+    evidence = replace(
+        runtime_cfg.evidence,
+        pre_event_frames=node_config.pre_event_frames,
+        post_event_frames=node_config.post_event_frames,
+        gif_frame_count=node_config.gif_frame_count,
+        gif_max_width=node_config.gif_max_width,
+        gif_fps=node_config.gif_fps,
+    )
+    runtime_cfg = replace(
+        runtime_cfg,
+        evidence_root=node_config.evidence_root,
+        evidence=evidence,
+    )
+
     if node_config.source_mode == "webcam":
         webcam_source = replace(
             runtime_cfg.webcam_source,
@@ -274,7 +288,7 @@ def load_front_runtime_context(node_config):
     runtime_cfg = front_runtime_config.load_runtime_config(
         str(node_config.runtime_config_path)
     )
-    runtime_cfg = _apply_node_capture_overrides(node_config, runtime_cfg)
+    runtime_cfg = _apply_node_config_overrides(node_config, runtime_cfg)
     modules = front_runtime_support.load_runtime_modules()
     front_runtime_support.configure_runtime_paths(modules, runtime_cfg)
     front_runtime_support.apply_behavior_config(modules, runtime_cfg)

@@ -24,6 +24,19 @@ def _resolve_path(raw_value: str | None) -> Path | None:
     return path.resolve(strict=False)
 
 
+def _get_first_value(
+    parser: configparser.ConfigParser,
+    candidates: tuple[tuple[str, str], ...],
+    fallback,
+    getter_name: str = "get",
+):
+    for section, option in candidates:
+        if parser.has_option(section, option):
+            getter = getattr(parser, getter_name)
+            return getter(section, option)
+    return fallback
+
+
 @dataclass(frozen=True, slots=True)
 class NodeAgentConfig:
     config_path: Path
@@ -77,6 +90,14 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         runtime_config_path = path
     _warn_on_placeholder_values(path, parser)
 
+    evidence_root = _resolve_path(
+        _get_first_value(
+            parser,
+            (("evidence", "root"), ("outputs", "evidence_root")),
+            "runtime/central_dashboard/data/node_front/evidence",
+        )
+    ) or (REPO_ROOT / "runtime/central_dashboard/data/node_front/evidence")
+
     return NodeAgentConfig(
         config_path=path,
         node_id=parser.get("agent", "node_id", fallback="front").strip() or "front",
@@ -100,7 +121,12 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
             parser.getfloat("agent", "http_timeout_sec", fallback=5.0),
         ),
         source_mode=parser.get("capture", "source_mode", fallback="webcam").strip() or "webcam",
-        camera_index=parser.getint("capture", "camera_index", fallback=0),
+        camera_index=_get_first_value(
+            parser,
+            (("capture", "camera_index"), ("webcam_source", "camera_index")),
+            0,
+            getter_name="getint",
+        ),
         video_path=_resolve_path(parser.get("capture", "video_path", fallback="")),
         preview_width=max(320, parser.getint("preview", "width", fallback=640)),
         preview_fps=max(1.0, parser.getfloat("preview", "fps", fallback=6.0)),
@@ -111,9 +137,7 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         motion_min_area_ratio=max(0.001, parser.getfloat("detector", "motion_min_area_ratio", fallback=0.012)),
         motion_cooldown_sec=max(1.0, parser.getfloat("detector", "motion_cooldown_sec", fallback=8.0)),
         annotated_banner_ttl_sec=max(1.0, parser.getfloat("detector", "annotated_banner_ttl_sec", fallback=4.0)),
-        evidence_root=_resolve_path(
-            parser.get("evidence", "root", fallback="runtime/central_dashboard/data/node_front/evidence")
-        ) or (REPO_ROOT / "runtime/central_dashboard/data/node_front/evidence"),
+        evidence_root=evidence_root,
         pre_event_frames=max(1, parser.getint("evidence", "pre_event_frames", fallback=8)),
         post_event_frames=max(1, parser.getint("evidence", "post_event_frames", fallback=8)),
         gif_frame_count=max(1, parser.getint("evidence", "gif_frame_count", fallback=5)),
