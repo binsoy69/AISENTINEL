@@ -258,7 +258,7 @@ def create_app(config: CentralServiceConfig, *, http_client=None) -> Flask:
     @app.route("/api/v1/streams/<node_id>/<mode>")
     @browser_login_required
     def proxy_stream(node_id: str, mode: str):
-        if mode not in {"raw", "annotated"}:
+        if mode not in {"raw", "annotated", "debug"}:
             abort(404)
         try:
             upstream = manager.open_node_stream(node_id, mode)

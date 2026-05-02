@@ -309,6 +309,88 @@ api_key = front-key
         self.assertTrue(np.array_equal(preview[10, 70], raw_frame[10, 70]))
         self.assertTrue(np.array_equal(preview[22, 80], raw_frame[22, 80]))
 
+    def test_debug_preview_uses_diagnostic_overlay_without_mutating_clean_preview(self):
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        keypoints = np.zeros((17, 3), dtype=np.float32)
+        points = {
+            combined_runtime.head_mod.KP_NOSE: (30, 18),
+            combined_runtime.head_mod.KP_LEFT_EAR: (22, 20),
+            combined_runtime.head_mod.KP_RIGHT_EAR: (38, 20),
+            combined_runtime.head_mod.KP_LEFT_SHOULDER: (18, 42),
+            combined_runtime.head_mod.KP_RIGHT_SHOULDER: (52, 42),
+            combined_runtime.pass_mod.KP_LEFT_WRIST: (20, 76),
+            combined_runtime.pass_mod.KP_RIGHT_WRIST: (50, 76),
+        }
+        for idx, (x, y) in points.items():
+            keypoints[idx] = (x, y, 0.95)
+
+        class OneFrameCapture:
+            def __init__(self, source_frame):
+                self.source_frame = source_frame
+                self.read_count = 0
+
+            def read(self):
+                if self.read_count:
+                    return False, None
+                self.read_count += 1
+                return True, self.source_frame.copy()
+
+            def get(self, prop):
+                if prop == combined_runtime.cv2.CAP_PROP_FRAME_WIDTH:
+                    return self.source_frame.shape[1]
+                if prop == combined_runtime.cv2.CAP_PROP_FRAME_HEIGHT:
+                    return self.source_frame.shape[0]
+                if prop == combined_runtime.cv2.CAP_PROP_FPS:
+                    return 30.0
+                if prop == combined_runtime.cv2.CAP_PROP_FRAME_COUNT:
+                    return 1
+                return 0
+
+            def set(self, _prop, _value):
+                return None
+
+        class PoseEstimator:
+            def detect_pose(self, _frame):
+                return [{"bbox": (12, 12, 58, 86), "confidence": 0.9, "keypoints": keypoints.copy()}]
+
+        class EmptyDetector:
+            def detect(self, _frame):
+                return []
+
+        class Tracker:
+            def update(self, detections):
+                return [1 for _ in detections]
+
+        published = {}
+
+        def publish_callback(raw_frame, annotated_frame, metrics, *, debug_frame=None):
+            published["raw"] = raw_frame.copy()
+            published["annotated"] = annotated_frame.copy()
+            published["debug"] = debug_frame.copy()
+            published["metrics"] = dict(metrics)
+
+        combined_runtime.run_detection(
+            OneFrameCapture(frame),
+            PoseEstimator(),
+            EmptyDetector(),
+            EmptyDetector(),
+            Tracker(),
+            {1: 5},
+            {1: 0.0},
+            [{"track_id": 1, "student_num": 5, "bbox": (12, 12, 58, 86)}],
+            [None],
+            "unit-test.mp4",
+            0,
+            source_mode="video",
+            source_fps=30.0,
+            frame_publish_callback=publish_callback,
+            publish_local_preview=False,
+        )
+
+        self.assertTrue(np.array_equal(published["annotated"], frame))
+        self.assertTrue(np.any(published["debug"] != frame))
+        self.assertIn("processing_fps", published["metrics"])
+
     def test_evidence_sequence_reports_recording_incident_immediately(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             old_head_dir = combined_runtime.HEAD_EVIDENCE_DIR

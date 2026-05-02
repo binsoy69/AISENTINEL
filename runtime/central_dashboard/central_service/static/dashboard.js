@@ -342,14 +342,18 @@ function nodeStreamInfo(node) {
 
 function nodeHasStreamFrame(node, mode = "annotated") {
     const stream = nodeStreamInfo(node);
-    const flagName = mode === "raw" ? "has_raw_frame" : "has_annotated_frame";
-    const seqName = mode === "raw" ? "raw_seq" : "annotated_seq";
+    const streamKeys = {
+        raw: ["has_raw_frame", "raw_seq"],
+        annotated: ["has_annotated_frame", "annotated_seq"],
+        debug: ["has_debug_frame", "debug_seq"],
+    };
+    const [flagName, seqName] = streamKeys[mode] || streamKeys.annotated;
     if (Object.prototype.hasOwnProperty.call(stream, flagName)) return Boolean(stream[flagName]);
     return Number(stream[seqName] || 0) > 0;
 }
 
 function nodeHasAnyStreamFrame(node) {
-    return nodeHasStreamFrame(node, "raw") || nodeHasStreamFrame(node, "annotated");
+    return nodeHasStreamFrame(node, "raw") || nodeHasStreamFrame(node, "annotated") || nodeHasStreamFrame(node, "debug");
 }
 
 function streamEmptyMessage(node) {
@@ -659,6 +663,7 @@ function ensureFeedCard(node) {
                         <select class="feed-select" data-feed-mode="${escapeHtml(node.node_id)}">
                             <option value="annotated">Annotated</option>
                             <option value="raw">Raw</option>
+                            <option value="debug">Debug</option>
                         </select>
                     </label>
                 </div>

@@ -177,13 +177,20 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
         )
         sound_service.start()
 
-        def frame_publish_callback(raw_frame, annotated_frame, metrics: dict) -> None:
+        def frame_publish_callback(
+            raw_frame,
+            annotated_frame,
+            metrics: dict,
+            *,
+            debug_frame=None,
+        ) -> None:
             with latest_raw_frame_lock:
                 latest_raw_frame["frame"] = raw_frame
             runtime.publish_detector_frames(
                 raw_frame,
                 annotated_frame,
                 processing_fps=metrics.get("processing_fps"),
+                debug_frame=debug_frame,
             )
 
         def incident_finalize_callback(front_manifest: dict) -> None:

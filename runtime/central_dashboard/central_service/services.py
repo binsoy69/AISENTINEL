@@ -222,7 +222,11 @@ class CentralServiceManager:
             heartbeat.session_id or "-",
             heartbeat.fps,
             heartbeat.sync_backlog,
-            "ready" if stream.get("has_annotated_frame") or stream.get("has_raw_frame") else "waiting",
+            "ready" if (
+                stream.get("has_annotated_frame")
+                or stream.get("has_raw_frame")
+                or stream.get("has_debug_frame")
+            ) else "waiting",
             heartbeat.last_error or "-",
         )
         return {"ok": True, "heartbeat": heartbeat.to_dict()}
@@ -446,6 +450,7 @@ class CentralServiceManager:
             node["stream_urls"] = {
                 "raw": f"/api/v1/streams/{node['node_id']}/raw",
                 "annotated": f"/api/v1/streams/{node['node_id']}/annotated",
+                "debug": f"/api/v1/streams/{node['node_id']}/debug",
             }
         active_session_id = str(active_session.get("session_id") or "").strip() if active_session else ""
         incidents = (

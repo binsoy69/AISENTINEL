@@ -68,4 +68,12 @@ def create_app(
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
+    @app.route("/agent/v1/stream/debug")
+    @agent_api_required
+    def debug_stream():
+        return Response(
+            runtime.stream_generator("debug"),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
+
     return app

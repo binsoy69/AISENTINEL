@@ -47,12 +47,16 @@ class NodeRuntime:
         self._session_stop = threading.Event()
         self._background_started = False
         self._session_thread: threading.Thread | None = None
-        self._preview_queue: Queue[tuple[object, object] | None] = Queue(maxsize=1)
+        self._preview_queue: Queue[tuple[object, object, object] | None] = Queue(
+            maxsize=1
+        )
 
         self._raw_jpeg = None
         self._annotated_jpeg = None
+        self._debug_jpeg = None
         self._raw_seq = 0
         self._annotated_seq = 0
+        self._debug_seq = 0
         self._last_publish_monotonic = 0.0
         self._last_frame_at = ""
 
@@ -171,8 +175,10 @@ class NodeRuntime:
             stream_state = {
                 "raw_seq": self._raw_seq,
                 "annotated_seq": self._annotated_seq,
+                "debug_seq": self._debug_seq,
                 "has_raw_frame": self._raw_jpeg is not None,
                 "has_annotated_frame": self._annotated_jpeg is not None,
+                "has_debug_frame": self._debug_jpeg is not None,
                 "last_frame_at": self._last_frame_at,
                 "preview_fps": self.config.preview_fps,
             }
@@ -323,7 +329,11 @@ class NodeRuntime:
                     heartbeat.session_id or "-",
                     heartbeat.fps,
                     heartbeat.sync_backlog,
-                    "ready" if stream.get("has_annotated_frame") or stream.get("has_raw_frame") else "waiting",
+                    "ready" if (
+                        stream.get("has_annotated_frame")
+                        or stream.get("has_raw_frame")
+                        or stream.get("has_debug_frame")
+                    ) else "waiting",
                 )
             else:
                 self._set_error(f"heartbeat failed: {result.text}")
@@ -459,15 +469,26 @@ class NodeRuntime:
         annotated_frame,
         *,
         processing_fps: float | None = None,
+        debug_frame=None,
     ) -> None:
         with self._lock:
             self._status = "running"
             if processing_fps is not None:
                 self._fps = float(processing_fps)
-        self._publish_frames(raw_frame, annotated_frame)
+        self._publish_frames(raw_frame, annotated_frame, debug_frame)
 
-    def publish_preview_frames(self, raw_frame, annotated_frame=None) -> None:
-        self._publish_frames(raw_frame, annotated_frame if annotated_frame is not None else raw_frame)
+    def publish_preview_frames(
+        self,
+        raw_frame,
+        annotated_frame=None,
+        debug_frame=None,
+    ) -> None:
+        display_frame = annotated_frame if annotated_frame is not None else raw_frame
+        self._publish_frames(
+            raw_frame,
+            display_frame,
+            debug_frame if debug_frame is not None else display_frame,
+        )
 
     def record_finalized_incident(
         self,
@@ -514,17 +535,25 @@ class NodeRuntime:
                 payload = {"updated_at": utc_now_iso(), **payload}
             self._sound_state.update(payload)
 
-    def _publish_frames(self, raw_frame, annotated_frame) -> None:
+    def _publish_frames(self, raw_frame, annotated_frame, debug_frame=None) -> None:
         publish_interval = 1.0 / self.config.preview_fps
         now = time.monotonic()
         if now - self._last_publish_monotonic < publish_interval:
             return
         self._last_publish_monotonic = now
 
-        self._queue_preview_frames(raw_frame, annotated_frame)
+        self._queue_preview_frames(
+            raw_frame,
+            annotated_frame,
+            debug_frame if debug_frame is not None else annotated_frame,
+        )
 
-    def _queue_preview_frames(self, raw_frame, annotated_frame) -> None:
-        item = (raw_frame, annotated_frame)
+    def _queue_preview_frames(self, raw_frame, annotated_frame, debug_frame=None) -> None:
+        item = (
+            raw_frame,
+            annotated_frame,
+            debug_frame if debug_frame is not None else annotated_frame,
+        )
         try:
             self._preview_queue.put_nowait(item)
         except Full:
@@ -547,14 +576,17 @@ class NodeRuntime:
             try:
                 if item is None:
                     return
-                raw_frame, annotated_frame = item
+                raw_frame, annotated_frame, debug_frame = item
                 raw_jpeg = self._encode_frame(raw_frame)
                 annotated_jpeg = self._encode_frame(annotated_frame)
+                debug_jpeg = self._encode_frame(debug_frame)
                 with self._lock:
                     self._raw_jpeg = raw_jpeg
                     self._annotated_jpeg = annotated_jpeg
+                    self._debug_jpeg = debug_jpeg
                     self._raw_seq += 1
                     self._annotated_seq += 1
+                    self._debug_seq += 1
                     self._last_frame_at = utc_now_iso()
             finally:
                 self._preview_queue.task_done()
@@ -572,8 +604,10 @@ class NodeRuntime:
     def _clear_frames_locked(self) -> None:
         self._raw_jpeg = None
         self._annotated_jpeg = None
+        self._debug_jpeg = None
         self._raw_seq += 1
         self._annotated_seq += 1
+        self._debug_seq += 1
         self._last_frame_at = ""
 
     def _encode_frame(self, frame):
@@ -600,6 +634,9 @@ class NodeRuntime:
                 if mode == "raw":
                     jpeg_bytes = self._raw_jpeg
                     seq = self._raw_seq
+                elif mode == "debug":
+                    jpeg_bytes = self._debug_jpeg
+                    seq = self._debug_seq
                 else:
                     jpeg_bytes = self._annotated_jpeg
                     seq = self._annotated_seq

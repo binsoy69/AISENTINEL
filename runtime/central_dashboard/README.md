@@ -199,10 +199,11 @@ message naming the field to edit.
 
 ## Live Preview
 
-Each node exposes raw and annotated streams. For `front_runtime`, the annotated
-stream is evidence-style: it only boxes confirmed incident students and
-phone/cheat_sheet objects. It does not show skeletons, hand boxes, ROI lines,
-desk lines, FPS HUD, or diagnostic labels.
+Each node exposes raw, annotated, and debug streams. For `front_runtime`, the
+annotated stream is evidence-style: it only boxes confirmed incident students
+and phone/cheat_sheet objects. The debug stream shows the full diagnostic
+overlay, including skeletons, detection boxes, ROI lines, desk lines, FPS HUD,
+and diagnostic labels.
 
 ## Raspberry Pi Double-Click Launchers
 

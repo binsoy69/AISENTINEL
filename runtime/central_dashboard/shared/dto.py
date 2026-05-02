@@ -23,7 +23,7 @@ class NodeDescriptor:
     base_url: str
     agent_base_url: str
     registered_at: str = field(default_factory=utc_now_iso)
-    capabilities: list[str] = field(default_factory=lambda: ["raw", "annotated"])
+    capabilities: list[str] = field(default_factory=lambda: ["raw", "annotated", "debug"])
     profile: str = ""
 
     def to_dict(self) -> dict:
@@ -40,7 +40,7 @@ class NodeDescriptor:
                 payload.get("agent_base_url") or payload.get("base_url", "")
             ).rstrip("/"),
             registered_at=str(payload.get("registered_at") or utc_now_iso()),
-            capabilities=list(payload.get("capabilities") or ["raw", "annotated"]),
+            capabilities=list(payload.get("capabilities") or ["raw", "annotated", "debug"]),
             profile=str(payload.get("profile", "")).strip(),
         )
 

@@ -251,7 +251,7 @@ class NodeRuntimePreviewQueueTests(unittest.TestCase):
             runtime._queue_preview_frames(first, first)
             runtime._queue_preview_frames(latest, latest)
 
-            queued_raw, _queued_annotated = runtime._preview_queue.get_nowait()
+            queued_raw, _queued_annotated, _queued_debug = runtime._preview_queue.get_nowait()
             self.assertTrue(np.array_equal(queued_raw, latest))
             runtime._preview_queue.task_done()
             runtime.close()

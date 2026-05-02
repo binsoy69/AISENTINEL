@@ -135,6 +135,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             def fake_runner(runtime: NodeRuntime, session) -> None:
                 raw = np.zeros((72, 128, 3), dtype=np.uint8)
                 annotated = np.full((72, 128, 3), 200, dtype=np.uint8)
+                debug = np.full((72, 128, 3), 80, dtype=np.uint8)
                 poster_path = tmpdir / "evidence" / "frames" / "poster.jpg"
                 poster_path.parent.mkdir(parents=True, exist_ok=True)
                 poster_path.write_bytes(b"jpeg-data")
@@ -144,6 +145,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                     raw,
                     annotated,
                     processing_fps=14.5,
+                    debug_frame=debug,
                 )
                 runtime.record_finalized_incident(
                     IncidentManifest(
@@ -191,13 +193,15 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
                 heartbeat = runtime.heartbeat()
-                if heartbeat.extra["stream"]["has_annotated_frame"]:
+                if heartbeat.extra["stream"]["has_annotated_frame"] and heartbeat.extra["stream"]["has_debug_frame"]:
                     break
                 time.sleep(0.01)
 
             heartbeat = runtime.heartbeat()
             self.assertEqual(heartbeat.extra["detector_mode"], "front_runtime")
             self.assertTrue(heartbeat.extra["stream"]["has_annotated_frame"])
+            self.assertTrue(heartbeat.extra["stream"]["has_debug_frame"])
+            self.assertGreater(heartbeat.extra["stream"]["debug_seq"], 0)
             self.assertTrue(heartbeat.extra["stream"]["last_frame_at"])
             self.assertGreaterEqual(heartbeat.incident_count, 1)
 
@@ -212,6 +216,8 @@ class FrontRuntimeBackendTests(unittest.TestCase):
 
             chunk = next(runtime.stream_generator("annotated"))
             self.assertIn(b"Content-Type: image/jpeg", chunk)
+            debug_chunk = next(runtime.stream_generator("debug"))
+            self.assertIn(b"Content-Type: image/jpeg", debug_chunk)
             runtime.close()
 
     def test_node_runtime_heartbeat_exposes_sound_and_noise_incident_queues_snapshot(self):

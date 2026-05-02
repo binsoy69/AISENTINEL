@@ -113,8 +113,8 @@ STREAM_JPEG_QUALITY = 68
 STREAM_MAX_WIDTH = 960
 STREAM_MAX_FPS = 12.0
 PROCESSING_FPS_EMA_ALPHA = 0.18
-# Central dashboard streams use evidence-style previews, so the full diagnostic
-# overlay is disabled unless a developer needs local visual debugging.
+# The central dashboard keeps the annotated preview evidence-style, and exposes
+# the full diagnostic overlay separately as its Debug stream.
 DIAGNOSTIC_OVERLAY_ENABLED = False
 DEFAULT_EVIDENCE_REVIEW_STATUS = "unverified"
 EVIDENCE_REVIEW_STATUS_CHOICES = {
@@ -2206,7 +2206,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     last_stream_publish_at = 0.0
     smoothed_processing_fps = 0.0
     evidence_task_queue, evidence_worker = _start_evidence_writer()
-    diagnostic_overlay_enabled = DIAGNOSTIC_OVERLAY_ENABLED
+    diagnostic_overlay_enabled = DIAGNOSTIC_OVERLAY_ENABLED or frame_publish_callback is not None
 
     try:
         while True:
@@ -3312,6 +3312,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                             "source_fps": fps,
                             "inference_ms": inference_ms,
                         },
+                        debug_frame=annotated if diagnostic_overlay_enabled else live_preview_frame,
                     )
                 except Exception as exc:  # pragma: no cover - runtime safety
                     head_mod.log_info(f"Frame publish callback error: {exc}")

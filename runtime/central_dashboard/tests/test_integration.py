@@ -605,6 +605,12 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             self.assertEqual(dashboard_response.status_code, 200)
             payload = dashboard_response.get_json()
             self.assertEqual(len(payload["nodes"]), 2)
+            for node in payload["nodes"]:
+                self.assertIn("debug", node["stream_urls"])
+                self.assertEqual(
+                    node["stream_urls"]["debug"],
+                    f"/api/v1/streams/{node['node_id']}/debug",
+                )
             self.assertGreaterEqual(len(payload["incidents"]), 2)
             self.assertTrue(payload["nodes"][0]["extra"]["sound"]["enabled"] or payload["nodes"][1]["extra"]["sound"]["enabled"])
             noise_incident = next(item for item in payload["incidents"] if item["behavior_type"] == "noise")
@@ -654,6 +660,15 @@ class CentralNodeIntegrationTests(unittest.TestCase):
             stream_response = central_client.get("/api/v1/streams/front/annotated")
             self.assertEqual(stream_response.status_code, 200)
             self.assertIn(b"stream-bytes", stream_response.data)
+            http_client.set_stream_payload(
+                "http://front.test:8091/agent/v1/stream/debug",
+                b"--frame\r\nContent-Type: image/jpeg\r\n\r\ndebug-stream-bytes\r\n",
+            )
+            debug_stream_response = central_client.get("/api/v1/streams/front/debug")
+            self.assertEqual(debug_stream_response.status_code, 200)
+            self.assertIn(b"debug-stream-bytes", debug_stream_response.data)
+            invalid_stream_response = central_client.get("/api/v1/streams/front/diagnostic")
+            self.assertEqual(invalid_stream_response.status_code, 404)
 
             front_runtime.close()
             mid_runtime.close()
