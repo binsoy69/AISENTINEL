@@ -84,7 +84,7 @@ Examples:
     print("=" * 78)
     print("  AISENTINEL - All Behavior Detection (Pi webcam + Hailo)")
     print("  Detects: head tilt | shoulder turn | passing papers")
-    print("           hands under table | phone | cheat_sheet")
+    print("           hands under the table | phone | cheat_sheet")
     print("=" * 78)
     print()
 

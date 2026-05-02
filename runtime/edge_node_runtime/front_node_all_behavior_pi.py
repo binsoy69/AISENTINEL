@@ -9,7 +9,7 @@ Detections:
   - Head tilt
   - Shoulder turn
   - Passing papers
-  - Hands under table
+  - Hands under the table
   - Phone
   - Cheat sheet
 
@@ -24,7 +24,7 @@ Workflow:
 Notes:
   - Reuses the stable Pi helpers from the existing behavior-specific scripts.
   - Runs one pose pass per frame for head / passing analysis, plus dedicated
-    hand and object passes for hands-under-table and phone / cheat-sheet.
+    hand and object passes for hands-under-the-table and phone / cheat-sheet.
 """
 
 import json
@@ -1153,7 +1153,7 @@ def _sequence_type_label(sequence) -> str:
     if sequence["behavior_type"] == "passing":
         return "Passing Paper"
     if sequence["behavior_type"] == "hands":
-        return "Hands Missing"
+        return "Hands Under the Table"
     mapping = {
         "phone": "Using Phone",
         "cheat_sheet": "Cheat Sheet",
@@ -2196,10 +2196,10 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     )
     print(f"  ROI            : {roi_text}")
     print("  Detecting      : head tilt | shoulder turn | passing papers")
-    print("                    hands under table | phone | cheat_sheet")
+    print("                    hands under the table | phone | cheat_sheet")
     print(
         f"  Head sustain   : {head_mod.SUSTAINED_SEC:.1f}s | "
-        f"Hands sustain: {hands_mod.HANDS_MISSING_SUSTAIN_SEC:.1f}s | "
+        f"Hands-under-table sustain: {hands_mod.HANDS_MISSING_SUSTAIN_SEC:.1f}s | "
         f"Passing sustain: {pass_mod.MIN_INTERACTION_SEC:.2f}s"
     )
     print(
@@ -3059,7 +3059,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
                 for line_idx, student_num in frame_hand_alerts:
                     text = (
-                        f"ALERT: Student #{student_num} hands missing near "
+                        f"ALERT: Student #{student_num} hands under the table near "
                         f"Line #{line_idx + 1}"
                     )
                     cv2.putText(
@@ -3086,7 +3086,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
 
                 for line_idx, student_num in frame_hand_warnings:
                     text = (
-                        f"WARNING: Student #{student_num} long hands-missing event "
+                        f"WARNING: Student #{student_num} prolonged hands under the table "
                         f"near Line #{line_idx + 1}"
                     )
                     cv2.putText(
@@ -3524,7 +3524,7 @@ Examples:
     print("  Hand model      : hand-latest.hef")
     print("  Object model    : object-updated.hef")
     print("  Detects         : head tilt | shoulder turn | passing papers")
-    print("                    hands under table | phone | cheat_sheet")
+    print("                    hands under the table | phone | cheat_sheet")
     print("  Calibration flow: ROI -> assignment -> table-edge lines")
     print("  Overlay         : unified stream with processing FPS")
     print("=" * 78)

@@ -6,7 +6,7 @@ Runs YOLOv11n-pose with ByteTrack on video files to detect three
 pose-based cheating behaviors from the Front Node perspective:
 
   1. Head tilting      — ear-to-ear angle > 25° sustained for 3s
-  2. Hands under table — wrists below manually-calibrated desk edge lines,
+  2. Hands under the table — wrists below manually-calibrated desk edge lines,
                          sustained 5s
   3. Passing papers    — wrist extends far beyond shoulder width laterally
                          toward a same-row neighbor (immediate flag)
@@ -665,7 +665,7 @@ def process_video(video_path, model, tracker_cfg, *,
                 else:
                     state.head_tilt_start = -1.0
 
-                # ── 2. Hands Under Table ────────────────────
+                # ── 2. Hands Under the Table ────────────────
                 if use_desk_lines:
                     is_under, detail, dy = detect_hands_under_lines(
                         kp_xy, kp_conf, bbox, desk_lines)
@@ -830,7 +830,7 @@ def parse_args():
         epilog="""
 Detected Behaviors:
   1. Head tilting       - ear-to-ear angle exceeds threshold, sustained
-  2. Hands under table  - wrists below desk edge (calibrated or ratio), sustained
+  2. Hands under the table - wrists below desk edge (calibrated or ratio), sustained
   3. Passing papers     - wrist reach beyond shoulder width toward neighbor
 
 Desk Zone Modes:
@@ -865,7 +865,7 @@ Examples:
     p.add_argument("--head-sustain", type=float, default=HEAD_TILT_SUSTAIN_SEC,
                    help=f"Head tilt sustain seconds (default: {HEAD_TILT_SUSTAIN_SEC})")
     p.add_argument("--hands-sustain", type=float, default=HANDS_UNDER_SUSTAIN_SEC,
-                   help=f"Hands under table sustain seconds (default: {HANDS_UNDER_SUSTAIN_SEC})")
+                   help=f"Hands under the table sustain seconds (default: {HANDS_UNDER_SUSTAIN_SEC})")
     p.add_argument("--reach-multiplier", type=float, default=PASSING_REACH_MULTIPLIER,
                    help=f"Passing papers: wrist reach as multiple of shoulder width (default: {PASSING_REACH_MULTIPLIER})")
 
@@ -933,11 +933,11 @@ def main():
     print(f"  Tracker           : ByteTrack ({BYTETRACK_CONFIG.name})")
     print(f"  Head tilt         : >{args.head_angle}deg for {args.head_sustain}s")
     if desk_lines:
-        print(f"  Hands under table : {len(desk_lines)} calibrated desk lines, sustain {args.hands_sustain}s")
+        print(f"  Hands under the table: {len(desk_lines)} calibrated desk lines, sustain {args.hands_sustain}s")
     elif args.desk_ratio is not None:
-        print(f"  Hands under table : ratio {desk_ratio:.0%} (fallback), sustain {args.hands_sustain}s")
+        print(f"  Hands under the table: ratio {desk_ratio:.0%} (fallback), sustain {args.hands_sustain}s")
     else:
-        print(f"  Hands under table : calibration on first frame, sustain {args.hands_sustain}s")
+        print(f"  Hands under the table: calibration on first frame, sustain {args.hands_sustain}s")
     print(f"  Passing papers    : reach >{args.reach_multiplier}x shoulder width (immediate)")
     print(f"  Event cooldown    : {EVENT_COOLDOWN_SEC}s")
     print()

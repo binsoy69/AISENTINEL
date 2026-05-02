@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PC runner for the updated Pi hands-under-table logic using Ultralytics .pt models."""
+"""PC runner for the updated Pi hands-under-the-table logic using Ultralytics .pt models."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="AISENTINEL - Hands Under Table Detection (PC + Ultralytics)",
+        description="AISENTINEL - Hands Under the Table Detection (PC + Ultralytics)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -61,7 +61,7 @@ Examples:
 
     print()
     print("=" * 70)
-    print("  AISENTINEL - Hands Under Table Detection (PC + Ultralytics)")
+    print("  AISENTINEL - Hands Under the Table Detection (PC + Ultralytics)")
     print("  Logic      : tests_on_pi front_node_hands_under_table_pi")
     print("  Hardware   : PC only, no Hailo")
     print("=" * 70)
@@ -182,7 +182,7 @@ Examples:
         hands_mod.log_info("Table-edge calibration cancelled. Exiting.")
         sys.exit(0)
 
-    window_name = enable_cv_window_stream(hands_mod, "AISENTINEL - Hands Under Table")
+    window_name = enable_cv_window_stream(hands_mod, "AISENTINEL - Hands Under the Table")
     hands_mod.log_info(f"OpenCV window: {window_name} (press Q or Esc to stop)")
     hands_mod.log_info("Starting detection...")
     try:

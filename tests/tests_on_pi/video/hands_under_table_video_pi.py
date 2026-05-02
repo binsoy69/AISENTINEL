@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Video launcher for the Pi hands-under-table test."""
+"""Video launcher for the Pi hands-under-the-table test."""
 
 from pathlib import Path
 import sys

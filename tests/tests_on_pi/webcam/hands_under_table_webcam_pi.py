@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Webcam launcher for the Pi hands-under-table test."""
+"""Webcam launcher for the Pi hands-under-the-table test."""
 
 import argparse
 from pathlib import Path
@@ -31,7 +31,7 @@ from front_node_test_config import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AISENTINEL - Hands Under Table Detection (Pi webcam + Hailo)",
+        description="AISENTINEL - Hands Under the Table Detection (Pi webcam + Hailo)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -59,7 +59,7 @@ Examples:
 
     print()
     print("=" * 70)
-    print("  AISENTINEL - Hands Under Table Detection (Pi webcam + Hailo)")
+    print("  AISENTINEL - Hands Under the Table Detection (Pi webcam + Hailo)")
     print("  Trigger logic: hands disappear near calibrated table-edge lines")
     print("=" * 70)
     print()

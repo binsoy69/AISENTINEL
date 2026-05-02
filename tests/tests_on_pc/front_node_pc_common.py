@@ -49,7 +49,7 @@ HAND_LATEST_MODEL_CANDIDATES = (
 
 # Final/combined front-node PC flow uses three model roles:
 #   pose   -> person/keypoint tracking
-#   hand   -> hand-only detection for hands-under-table
+#   hand   -> hand-only detection for hands-under-the-table
 #   object -> phone/cheat_sheet detection
 HAND_MODEL_CANDIDATES = (
     HAND_LATEST_MODEL_CANDIDATES

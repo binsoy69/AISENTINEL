@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hands Under Table + Phone / Cheat Sheet Detection - Raspberry Pi + Hailo AI HAT
+Hands Under the Table + Phone / Cheat Sheet Detection - Raspberry Pi + Hailo AI HAT
 ===============================================================================
 Webcam variant of front_node_hands_under_table_cellphone_cheat_pi.py.
 
@@ -399,9 +399,9 @@ def run_detection_webcam(cap, person_detector, hand_detector, object_detector,
         if roi_polygon is not None else "No (full frame)"
     )
     print(f"  ROI          : {roi_text}")
-    print("  Detecting    : hands-under-table | phone | cheat_sheet")
+    print("  Detecting    : hands-under-the-table | phone | cheat_sheet")
     print(
-        f"  Hands logic  : {hands_mod.HANDS_MISSING_SUSTAIN_SEC:.1f}s sustain, "
+        f"  Under-table  : {hands_mod.HANDS_MISSING_SUSTAIN_SEC:.1f}s sustain, "
         f"{hands_mod.SMOOTH_WINDOW_FRAMES}f smoothing"
     )
     print(f"  Obj cooldown : {obj_mod.EVENT_COOLDOWN_SEC:.1f}s per student/class")
@@ -892,7 +892,7 @@ def run_detection_webcam(cap, person_detector, hand_detector, object_detector,
                 tid = desk_states[desk_idx].assigned_student_id or 0
                 student_num = student_map.get(tid, tid)
                 txt = (
-                    f"ALERT: Student #{student_num} hands missing from "
+                    f"ALERT: Student #{student_num} hands under the table at "
                     f"Desk #{desk_idx + 1}"
                 )
                 cv2.putText(
@@ -921,7 +921,7 @@ def run_detection_webcam(cap, person_detector, hand_detector, object_detector,
                 tid = desk_states[desk_idx].assigned_student_id or 0
                 student_num = student_map.get(tid, tid)
                 txt = (
-                    f"WARNING: Student #{student_num} long hands-missing event "
+                    f"WARNING: Student #{student_num} prolonged hands under the table "
                     f"at Desk #{desk_idx + 1}"
                 )
                 cv2.putText(
@@ -1036,7 +1036,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         description=(
-            "AISENTINEL - Hands Under Table + Phone / Cheat Sheet Detection "
+            "AISENTINEL - Hands Under the Table + Phone / Cheat Sheet Detection "
             "(Pi + Hailo, Webcam)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

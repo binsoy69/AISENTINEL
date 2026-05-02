@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hands Under Table Detection (Pose Estimation) - Raspberry Pi + Hailo AI HAT
+Hands Under the Table Detection (Pose Estimation) - Raspberry Pi + Hailo AI HAT
 ============================================================================
 Pose-based alternative to front_node_hands_under_table_pi.py.
 
@@ -929,7 +929,7 @@ def run_assignment_phase(first_frame, detections, track_ids, disp_scale):
     input_buffer = ""
 
     fh, fw = first_frame.shape[:2]
-    win_name = "AISENTINEL - Assign Students (Hands Under Table)"
+    win_name = "AISENTINEL - Assign Students (Hands Under the Table)"
 
     def on_mouse(event, mx, my, flags, param):
         nonlocal selected_idx, input_buffer
@@ -1109,7 +1109,7 @@ def find_desk_for_student(student_bbox, desk_polygons, img_shape):
 # ══════════════════════════════════════════════════════════════
 
 class DeskState:
-    """Tracks the hands-missing state for a single desk."""
+    """Tracks the hands-under-the-table state for a single desk."""
 
     def __init__(self, desk_idx: int):
         self.desk_idx = desk_idx
@@ -1191,7 +1191,7 @@ HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AISENTINEL - Hands Under Table Detection (Pose)</title>
+    <title>AISENTINEL - Hands Under the Table Detection (Pose)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -1213,7 +1213,7 @@ HTML_PAGE = """
     </style>
 </head>
 <body>
-    <h1>AISENTINEL - Hands Under Table (Pose)</h1>
+    <h1>AISENTINEL - Hands Under the Table (Pose)</h1>
     <p class="info">Raspberry Pi 5 + Hailo AI HAT | Wrist Keypoint Tracking</p>
     <div class="stream-container">
         <img src="/video_feed" alt="Live Stream">
@@ -1340,7 +1340,7 @@ def run_detection(cap, estimator, tracker, student_map, desk_polygons,
     print()
     print("=" * 60)
     local_ip = get_local_ip()
-    print(f"  AISENTINEL - Hands Under Table Detection (Pose)")
+    print(f"  AISENTINEL - Hands Under the Table Detection (Pose)")
     print(f"  Video        : {Path(video_path).name}")
     print(f"  Resolution   : {w}x{h} | FPS: {fps:.1f} | Duration: {fmt_ts(duration)}")
     print(f"  Total frames : {total_frames}")
@@ -1349,10 +1349,10 @@ def run_detection(cap, estimator, tracker, student_map, desk_polygons,
     print(f"  ROI          : {'Yes (' + str(len(roi_polygon)) + ' vertices)' if roi_polygon is not None else 'No (full frame)'}")
     print(f"  Wrist conf   : >= {KP_CONF_THRESH}")
     print(f"  Min wrists   : {MIN_WRISTS_PRESENT} in desk ROI to count as present")
-    print(f"  Threshold    : hands missing for {HANDS_MISSING_SUSTAIN_SEC}s")
+    print(f"  Threshold    : hands under the table for {HANDS_MISSING_SUSTAIN_SEC}s")
     print(f"  Cooldown     : {EVENT_COOLDOWN_SEC}s")
     print(f"  Smoothing    : {SMOOTH_WINDOW_FRAMES} frames, "
-          f">= {SMOOTH_MISSING_RATIO:.0%} missing to confirm")
+          f">= {SMOOTH_MISSING_RATIO:.0%} hidden to confirm")
     print(f"  Evidence     : {EVIDENCE_DIR}")
     print(f"  Web stream   : http://{local_ip}:{port}")
     print("=" * 60)
@@ -1616,7 +1616,7 @@ def run_detection(cap, estimator, tracker, student_map, desk_polygons,
     if total_alerts > 0:
         print(f"  Evidence saved to: {EVIDENCE_DIR}")
     else:
-        print("  No hands-under-table detected.")
+        print("  No hands-under-the-table detected.")
     print("=" * 60)
 
 
@@ -1629,7 +1629,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="AISENTINEL - Hands Under Table Detection via Pose (Pi + Hailo)",
+        description="AISENTINEL - Hands Under the Table Detection via Pose (Pi + Hailo)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1659,7 +1659,7 @@ Examples:
 
     print()
     print("=" * 60)
-    print("  AISENTINEL - Hands Under Table Detection (Pose)")
+    print("  AISENTINEL - Hands Under the Table Detection (Pose)")
     print("  Uses wrist keypoints instead of hand object detection")
     print(f"  Wrist confidence   : >= {KP_CONF_THRESH}")
     print(f"  Min wrists in desk : {MIN_WRISTS_PRESENT}")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hands Under Table + Phone / Cheat Sheet Detection - Raspberry Pi + Hailo AI HAT
+Hands Under the Table + Phone / Cheat Sheet Detection - Raspberry Pi + Hailo AI HAT
 ===============================================================================
 Combined Pi test that reuses the same calibration flow as
 front_node_hands_under_table_pi.py while also running the object-cheating model
@@ -20,7 +20,7 @@ Workflow:
   6. Web stream starts at http://<pi-ip>:8080 with live annotations
   7. Console alerts + evidence screenshots saved to ./evidence_combined/
 
-This script preserves the hands-under-table logic:
+This script preserves the hands-under-the-table logic:
   - desk polygons
   - student-side edge lines
   - temporal smoothing
@@ -75,7 +75,7 @@ except ImportError:
 
 def save_hand_evidence(annotated_frame, raw_frame, video_name, desk_idx, student_id,
                        ts_sec):
-    """Save annotated + raw evidence for hands-under-table alerts."""
+    """Save annotated + raw evidence for hands-under-the-table alerts."""
     os.makedirs(HANDS_EVIDENCE_DIR, exist_ok=True)
     ts_str = hands_mod.fmt_ts(ts_sec).replace(":", "").replace(".", "_")
 
@@ -154,7 +154,7 @@ HTML_PAGE = """
 <body>
     <h1>AISENTINEL - Combined Detection</h1>
     <p class="info">
-        Raspberry Pi 5 + Hailo AI HAT | Hands Under Table + Phone / Cheat Sheet
+        Raspberry Pi 5 + Hailo AI HAT | Hands Under the Table + Phone / Cheat Sheet
     </p>
     <div class="stream-container">
         <img src="/video_feed" alt="Live Stream">
@@ -277,9 +277,9 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
         if roi_polygon is not None else "No (full frame)"
     )
     print(f"  ROI          : {roi_text}")
-    print("  Detecting    : hands-under-table | phone | cheat_sheet")
+    print("  Detecting    : hands-under-the-table | phone | cheat_sheet")
     print(
-        f"  Hands logic  : {hands_mod.HANDS_MISSING_SUSTAIN_SEC:.1f}s sustain, "
+        f"  Under-table  : {hands_mod.HANDS_MISSING_SUSTAIN_SEC:.1f}s sustain, "
         f"{hands_mod.SMOOTH_WINDOW_FRAMES}f smoothing"
     )
     print(f"  Obj cooldown : {obj_mod.EVENT_COOLDOWN_SEC:.1f}s per student/class")
@@ -451,7 +451,7 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                         cv2.LINE_AA,
                     )
 
-            # 7. Desk-level hands-under-table logic
+            # 7. Desk-level hands-under-the-table logic
             frame_hand_alerts = []
             frame_hand_warnings = []
 
@@ -757,7 +757,7 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                 tid = desk_states[desk_idx].assigned_student_id or 0
                 student_num = student_map.get(tid, tid)
                 txt = (
-                    f"ALERT: Student #{student_num} hands missing from "
+                    f"ALERT: Student #{student_num} hands under the table at "
                     f"Desk #{desk_idx + 1}"
                 )
                 cv2.putText(
@@ -774,7 +774,7 @@ def run_detection(cap, person_detector, hand_detector, object_detector, tracker,
                 tid = desk_states[desk_idx].assigned_student_id or 0
                 student_num = student_map.get(tid, tid)
                 txt = (
-                    f"WARNING: Student #{student_num} long hands-missing event "
+                    f"WARNING: Student #{student_num} prolonged hands under the table "
                     f"at Desk #{desk_idx + 1}"
                 )
                 cv2.putText(
@@ -867,7 +867,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         description=(
-            "AISENTINEL - Hands Under Table + Phone / Cheat Sheet Detection "
+            "AISENTINEL - Hands Under the Table + Phone / Cheat Sheet Detection "
             "(Pi + Hailo)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

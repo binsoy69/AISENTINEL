@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hands Under Table Detection - Raspberry Pi + Hailo AI HAT
+Hands Under the Table Detection - Raspberry Pi + Hailo AI HAT
 ==========================================================
 Pi counterpart of front_node_hands_under_table_pc.py.
 
@@ -917,7 +917,7 @@ def run_assignment_phase(first_frame, detections, track_ids, disp_scale):
     selected_idx = -1
     input_buffer = ""
     fh, fw = first_frame.shape[:2]
-    win_name = "AISENTINEL - Assign Students (Hands Under Table)"
+    win_name = "AISENTINEL - Assign Students (Hands Under the Table)"
 
     def on_mouse(event, mx, my, flags, param):
         nonlocal selected_idx, input_buffer
@@ -1090,7 +1090,7 @@ def hand_distance_to_bbox(hand_center, student_bbox):
 
 class LineMonitorState:
     """
-    Tracks the hands-missing state for a single calibrated line tied to one
+    Tracks the hands-under-the-table state for a single calibrated line tied to one
     assigned student.
     """
 
@@ -1300,7 +1300,7 @@ HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AISENTINEL - Hands Under Table Detection (Pi + Hailo)</title>
+    <title>AISENTINEL - Hands Under the Table Detection (Pi + Hailo)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -1322,7 +1322,7 @@ HTML_PAGE = """
     </style>
 </head>
 <body>
-    <h1>AISENTINEL - Hands Under Table Detection</h1>
+    <h1>AISENTINEL - Hands Under the Table Detection</h1>
     <p class="info">Raspberry Pi 5 + Hailo AI HAT | Student &amp; Hand Detection</p>
     <div class="stream-container">
         <img src="/video_feed" alt="Live Stream">
@@ -1414,7 +1414,7 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
     print()
     print("=" * 60)
     local_ip = get_local_ip()
-    print(f"  AISENTINEL - Hands Under Table Detection (Pi + Hailo)")
+    print(f"  AISENTINEL - Hands Under the Table Detection (Pi + Hailo)")
     source_heading = "Video" if source_mode == "video" else "Webcam"
     print(f"  {source_heading:12s}: {Path(source_label).name}")
     if total_frames > 0:
@@ -1425,11 +1425,11 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
     print(f"  Students     : {len(assigned_students)} monitored")
     print(f"  Line config  : {configured_lines}/{len(student_lines)}")
     print(f"  ROI          : {'Yes (' + str(len(roi_polygon)) + ' vertices)' if roi_polygon is not None else 'No (full frame)'}")
-    print(f"  Threshold    : sustained missing for {HANDS_MISSING_SUSTAIN_SEC:.1f}s")
+    print(f"  Threshold    : hands under the table for {HANDS_MISSING_SUSTAIN_SEC:.1f}s")
     print("  Severity     : 1 visible hand -> warning | 0 visible hands -> alert")
     print(f"  Cooldown     : {EVENT_COOLDOWN_SEC}s")
     print(f"  Smoothing    : {SMOOTH_WINDOW_FRAMES} frames, "
-          f">= {SMOOTH_MISSING_RATIO:.0%} missing to confirm")
+          f">= {SMOOTH_MISSING_RATIO:.0%} hidden to confirm")
     print(f"  Hand margin  : {HAND_ASSOC_MARGIN_PX}px from student bbox")
     print(f"  Edge zone    : {TABLE_EDGE_NEAR_PX}px | Arm window: {EDGE_DISAPPEAR_ARM_SEC:.2f}s")
     print(f"  Evidence     : {EVIDENCE_DIR}")
@@ -1684,7 +1684,7 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
                 for line_idx in frame_alerts:
                     tid = line_states[line_idx].assigned_student_id
                     snum = student_map.get(tid, tid)
-                    txt = f"ALERT: Student #{snum} hands missing near Line #{line_idx + 1}"
+                    txt = f"ALERT: Student #{snum} hands under the table near Line #{line_idx + 1}"
                     cv2.putText(annotated, txt, (10, banner_y),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4,
                                 cv2.LINE_AA)
@@ -1695,7 +1695,7 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
                 for line_idx in frame_warnings:
                     tid = line_states[line_idx].assigned_student_id
                     snum = student_map.get(tid, tid)
-                    txt = f"WARNING: Student #{snum} long hands-missing event near Line #{line_idx + 1}"
+                    txt = f"WARNING: Student #{snum} prolonged hands under the table near Line #{line_idx + 1}"
                     cv2.putText(annotated, txt, (10, banner_y),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4,
                                 cv2.LINE_AA)
@@ -1744,7 +1744,7 @@ def run_detection(cap, person_detector, hand_detector, tracker, student_map,
     if total_alerts > 0:
         print(f"  Evidence saved to: {EVIDENCE_DIR}")
     elif total_warnings == 0:
-        print("  No hands-under-table detected.")
+        print("  No hands-under-the-table detected.")
     print("=" * 60)
 
 
@@ -1756,7 +1756,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="AISENTINEL - Hands Under Table Detection (Pi + Hailo)",
+        description="AISENTINEL - Hands Under the Table Detection (Pi + Hailo)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1785,7 +1785,7 @@ Examples:
 
     print()
     print("=" * 60)
-    print("  AISENTINEL - Hands Under Table Detection (Pi + Hailo)")
+    print("  AISENTINEL - Hands Under the Table Detection (Pi + Hailo)")
     print("  Person detection : pose model (IoU tracked)")
     print("  Hand detection   : hand-latest.hef (Hand class only)")
     print("  Trigger logic    : hands disappear near the calibrated table-edge line")
