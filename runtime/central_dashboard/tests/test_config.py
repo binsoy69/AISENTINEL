@@ -79,6 +79,46 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.evidence.gif_max_width, 640)
             self.assertEqual(config.evidence.gif_fps, 4.0)
 
+        front = front_runtime_config.load_runtime_config(
+            str(CONFIG_ROOT / "front_node.ini.example")
+        )
+        self.assertTrue(front.detector_schedule.adaptive_enabled)
+        self.assertEqual(front.detector_schedule.hand_interval_frames, 2)
+        self.assertEqual(front.detector_schedule.object_interval_frames, 2)
+        self.assertEqual(front.detector_schedule.adaptive_burst_frames, 8)
+        self.assertEqual(front.detector_schedule.debug_overlay, "on_demand")
+
+        mid = front_runtime_config.load_runtime_config(
+            str(CONFIG_ROOT / "mid_node.ini.example")
+        )
+        self.assertFalse(mid.detector_schedule.adaptive_enabled)
+        self.assertEqual(mid.detector_schedule.hand_interval_frames, 1)
+        self.assertEqual(mid.detector_schedule.object_interval_frames, 1)
+        self.assertEqual(mid.detector_schedule.adaptive_burst_frames, 0)
+        self.assertEqual(mid.detector_schedule.debug_overlay, "on_demand")
+
+    def test_runtime_config_detector_schedule_defaults_to_old_detector_cadence(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config_path = tmpdir / "front_node.ini"
+            config_path.write_text(
+                """
+[models]
+pose = models/pose.hef
+hand = models/hand.hef
+object = models/object.hef
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = front_runtime_config.load_runtime_config(str(config_path))
+
+        self.assertFalse(config.detector_schedule.adaptive_enabled)
+        self.assertEqual(config.detector_schedule.hand_interval_frames, 1)
+        self.assertEqual(config.detector_schedule.object_interval_frames, 1)
+        self.assertEqual(config.detector_schedule.adaptive_burst_frames, 0)
+        self.assertEqual(config.detector_schedule.debug_overlay, "on_demand")
+
     def test_runtime_config_prefers_agent_camera_and_evidence_keys(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)

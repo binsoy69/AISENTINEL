@@ -116,6 +116,8 @@ PROCESSING_FPS_EMA_ALPHA = 0.18
 # The central dashboard keeps the annotated preview evidence-style, and exposes
 # the full diagnostic overlay separately as its Debug stream.
 DIAGNOSTIC_OVERLAY_ENABLED = False
+DEBUG_OVERLAY_ALWAYS_VALUES = {"1", "always", "true", "yes", "enabled"}
+DEBUG_OVERLAY_OFF_VALUES = {"0", "off", "false", "no", "disabled"}
 DEFAULT_EVIDENCE_REVIEW_STATUS = "unverified"
 EVIDENCE_REVIEW_STATUS_CHOICES = {
     DEFAULT_EVIDENCE_REVIEW_STATUS,
@@ -153,6 +155,59 @@ _dashboard_state = {
     "current_error": "",
     "session_form_defaults": {},
 }
+
+
+def _schedule_bool(detector_schedule, field_name: str, default: bool = False) -> bool:
+    if detector_schedule is None:
+        return default
+    value = getattr(detector_schedule, field_name, default)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in DEBUG_OVERLAY_ALWAYS_VALUES:
+            return True
+        if text in DEBUG_OVERLAY_OFF_VALUES:
+            return False
+    return bool(value)
+
+
+def _schedule_int(
+    detector_schedule,
+    field_name: str,
+    default: int,
+    minimum: int,
+) -> int:
+    if detector_schedule is None:
+        return default
+    try:
+        value = int(getattr(detector_schedule, field_name, default) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _schedule_text(detector_schedule, field_name: str, default: str) -> str:
+    if detector_schedule is None:
+        return default
+    value = str(getattr(detector_schedule, field_name, default) or default)
+    return value.strip().lower() or default
+
+
+def _debug_overlay_requested(debug_overlay_mode: str, debug_overlay_callback) -> bool:
+    if DIAGNOSTIC_OVERLAY_ENABLED:
+        return True
+
+    mode = str(debug_overlay_mode or "on_demand").strip().lower()
+    if mode in DEBUG_OVERLAY_ALWAYS_VALUES:
+        return True
+    if mode in DEBUG_OVERLAY_OFF_VALUES:
+        return False
+    if debug_overlay_callback is None:
+        return False
+
+    try:
+        return bool(debug_overlay_callback())
+    except Exception:
+        return False
 
 
 def _dashboard_now() -> datetime:
@@ -2128,7 +2183,9 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                   incident_finalize_callback=None,
                   incident_detected_callback=None,
                   should_stop_callback=None,
-                  publish_local_preview=True):
+                  publish_local_preview=True,
+                  detector_schedule=None,
+                  debug_overlay_callback=None):
     """Run all behavior detectors in a single Pi-side loop."""
     video_name = Path(str(source_label)).stem
     fps = source_fps or cap.get(cv2.CAP_PROP_FPS) or 30
@@ -2247,7 +2304,39 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
     last_stream_publish_at = 0.0
     smoothed_processing_fps = 0.0
     evidence_task_queue, evidence_worker = _start_evidence_writer()
-    diagnostic_overlay_enabled = DIAGNOSTIC_OVERLAY_ENABLED or frame_publish_callback is not None
+    hand_interval_frames = _schedule_int(
+        detector_schedule,
+        "hand_interval_frames",
+        default=1,
+        minimum=1,
+    )
+    object_interval_frames = _schedule_int(
+        detector_schedule,
+        "object_interval_frames",
+        default=1,
+        minimum=1,
+    )
+    adaptive_enabled = _schedule_bool(
+        detector_schedule,
+        "adaptive_enabled",
+        default=False,
+    )
+    adaptive_burst_frames = _schedule_int(
+        detector_schedule,
+        "adaptive_burst_frames",
+        default=0,
+        minimum=0,
+    )
+    debug_overlay_mode = _schedule_text(
+        detector_schedule,
+        "debug_overlay",
+        default="on_demand",
+    )
+    cached_hand_dets = []
+    cached_object_dets = []
+    last_hand_detection_frame = 0
+    last_object_detection_frame = 0
+    adaptive_burst_until_frame = 0
 
     try:
         while True:
@@ -2277,25 +2366,49 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             pose_dets = pass_mod.filter_detections_by_roi(pose_dets, roi_polygon)
             track_ids = tracker.update(pose_dets)
 
-            hand_raw = hand_detector.detect(frame)
-            hand_dets = [
-                det for det in hand_raw if det["class_name"] == hands_mod.CLASS_HAND
-            ]
+            adaptive_burst_active = (
+                adaptive_enabled and frame_idx <= adaptive_burst_until_frame
+            )
+            should_run_hand_detector = (
+                frame_idx == 1
+                or adaptive_burst_active
+                or (frame_idx - last_hand_detection_frame) >= hand_interval_frames
+            )
+            should_run_object_detector = (
+                frame_idx == 1
+                or adaptive_burst_active
+                or (frame_idx - last_object_detection_frame) >= object_interval_frames
+            )
 
-            object_raw = object_detector.detect(frame)
-            object_raw = obj_mod.filter_detections_by_roi(object_raw, roi_polygon)
-            object_dets = []
-            for det in object_raw:
-                cls_name = det["class_name"]
-                if cls_name not in obj_mod.OBJECT_CLASSES:
-                    continue
-                min_conf = obj_mod.CONFIDENCE_THRESHOLDS.get(cls_name, 0.25)
-                if det["confidence"] < min_conf:
-                    continue
-                object_dets.append(det)
+            if should_run_hand_detector:
+                hand_raw = hand_detector.detect(frame)
+                cached_hand_dets = [
+                    det for det in hand_raw if det["class_name"] == hands_mod.CLASS_HAND
+                ]
+                last_hand_detection_frame = frame_idx
+            hand_dets = cached_hand_dets
+
+            if should_run_object_detector:
+                object_raw = object_detector.detect(frame)
+                object_raw = obj_mod.filter_detections_by_roi(object_raw, roi_polygon)
+                cached_object_dets = []
+                for det in object_raw:
+                    cls_name = det["class_name"]
+                    if cls_name not in obj_mod.OBJECT_CLASSES:
+                        continue
+                    min_conf = obj_mod.CONFIDENCE_THRESHOLDS.get(cls_name, 0.25)
+                    if det["confidence"] < min_conf:
+                        continue
+                    cached_object_dets.append(det)
+                last_object_detection_frame = frame_idx
+            object_dets = cached_object_dets
 
             inference_ms = (time.perf_counter() - t0) * 1000
 
+            diagnostic_overlay_enabled = _debug_overlay_requested(
+                debug_overlay_mode,
+                debug_overlay_callback,
+            )
             annotated = frame.copy() if diagnostic_overlay_enabled else None
             if diagnostic_overlay_enabled and roi_polygon is not None:
                 cv2.polylines(
@@ -2857,6 +2970,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
             object_associations = obj_mod.associate_objects_to_students(
                 object_dets, student_tracks
             )
+            object_activity_active = False
             for det, assoc_tid in object_associations:
                 cls_name = det["class_name"]
                 conf = det["confidence"]
@@ -2899,6 +3013,7 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                 if assoc_tid == -1 or assoc_tid not in student_map:
                     continue
 
+                object_activity_active = True
                 student_num = student_map[assoc_tid]
                 cooldown_key = (assoc_tid, cls_name)
                 if (
@@ -2919,6 +3034,23 @@ def run_detection(cap, pose_estimator, hand_detector, object_detector, tracker,
                             "student_num": student_num,
                             "confidence": conf,
                         }
+                    )
+
+            if adaptive_enabled and adaptive_burst_frames > 0:
+                hand_watch_active = any(
+                    state.edge_disappear_start >= 0 or state.hands_missing_start >= 0
+                    for state in line_states
+                )
+                if (
+                    object_activity_active
+                    or hand_watch_active
+                    or frame_hand_alerts
+                    or frame_hand_warnings
+                    or frame_object_alerts
+                ):
+                    adaptive_burst_until_frame = max(
+                        adaptive_burst_until_frame,
+                        frame_idx + adaptive_burst_frames,
                     )
 
             # Pass 5: final student boxes and labels.

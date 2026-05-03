@@ -105,6 +105,15 @@ class SpamSuppressionConfig:
 
 
 @dataclass(frozen=True)
+class DetectorScheduleConfig:
+    adaptive_enabled: bool
+    hand_interval_frames: int
+    object_interval_frames: int
+    adaptive_burst_frames: int
+    debug_overlay: str
+
+
+@dataclass(frozen=True)
 class SoundSensorConfig:
     enabled: bool
     calibration_config: Path | None
@@ -150,6 +159,7 @@ class FrontNodeRuntimeConfig:
     object_detection: ObjectDetectionConfig
     evidence: EvidenceConfig
     spam_suppression: SpamSuppressionConfig
+    detector_schedule: DetectorScheduleConfig
     sound_sensor: SoundSensorConfig
     web_dashboard: WebDashboardConfig
 
@@ -676,6 +686,56 @@ def load_runtime_config(
                     3.0,
                     getter_name="getfloat",
                 ),
+            ),
+        ),
+        detector_schedule=DetectorScheduleConfig(
+            adaptive_enabled=_get_value(
+                parser,
+                ["detector_schedule"],
+                "adaptive_enabled",
+                False,
+                getter_name="getboolean",
+            ),
+            hand_interval_frames=max(
+                1,
+                _get_value(
+                    parser,
+                    ["detector_schedule"],
+                    "hand_interval_frames",
+                    1,
+                    getter_name="getint",
+                ),
+            ),
+            object_interval_frames=max(
+                1,
+                _get_value(
+                    parser,
+                    ["detector_schedule"],
+                    "object_interval_frames",
+                    1,
+                    getter_name="getint",
+                ),
+            ),
+            adaptive_burst_frames=max(
+                0,
+                _get_value(
+                    parser,
+                    ["detector_schedule"],
+                    "adaptive_burst_frames",
+                    0,
+                    getter_name="getint",
+                ),
+            ),
+            debug_overlay=(
+                str(
+                    _get_value(
+                        parser,
+                        ["detector_schedule"],
+                        "debug_overlay",
+                        "on_demand",
+                    )
+                ).strip().lower()
+                or "on_demand"
             ),
         ),
         sound_sensor=SoundSensorConfig(

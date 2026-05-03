@@ -30,6 +30,13 @@ motion_cooldown_sec = 8.0
 annotated_banner_ttl_sec = 4.0
 startup_detection_delay_sec = 5.0
 
+[detector_schedule]
+adaptive_enabled = true
+hand_interval_frames = 2
+object_interval_frames = 2
+adaptive_burst_frames = 8
+debug_overlay = on_demand
+
 [models]
 pose = models/CHANGE_ME_POSE_MODEL.hef
 hand = models/CHANGE_ME_HAND_MODEL.hef

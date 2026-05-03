@@ -4,6 +4,7 @@ import configparser
 import builtins
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 import sys
@@ -354,6 +355,134 @@ api_key = front-key
         self.assertTrue(np.array_equal(preview[10, 70], raw_frame[10, 70]))
         self.assertTrue(np.array_equal(preview[22, 80], raw_frame[22, 80]))
 
+    def _fake_pose_keypoints(self):
+        keypoints = np.zeros((17, 3), dtype=np.float32)
+        points = {
+            combined_runtime.head_mod.KP_NOSE: (30, 18),
+            combined_runtime.head_mod.KP_LEFT_EAR: (22, 20),
+            combined_runtime.head_mod.KP_RIGHT_EAR: (38, 20),
+            combined_runtime.head_mod.KP_LEFT_SHOULDER: (18, 42),
+            combined_runtime.head_mod.KP_RIGHT_SHOULDER: (52, 42),
+            combined_runtime.pass_mod.KP_LEFT_WRIST: (20, 76),
+            combined_runtime.pass_mod.KP_RIGHT_WRIST: (50, 76),
+        }
+        for idx, (x, y) in points.items():
+            keypoints[idx] = (x, y, 0.95)
+        return keypoints
+
+    def _run_fake_all_behavior_detection(
+        self,
+        *,
+        frame_count,
+        detector_schedule=None,
+        debug_overlay_callback=None,
+        hand_detections=None,
+        object_detections=None,
+    ):
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        keypoints = self._fake_pose_keypoints()
+
+        class MultiFrameCapture:
+            def __init__(self, source_frame, count):
+                self.source_frame = source_frame
+                self.count = count
+                self.read_count = 0
+
+            def read(self):
+                if self.read_count >= self.count:
+                    return False, None
+                self.read_count += 1
+                return True, self.source_frame.copy()
+
+            def get(self, prop):
+                if prop == combined_runtime.cv2.CAP_PROP_FRAME_WIDTH:
+                    return self.source_frame.shape[1]
+                if prop == combined_runtime.cv2.CAP_PROP_FRAME_HEIGHT:
+                    return self.source_frame.shape[0]
+                if prop == combined_runtime.cv2.CAP_PROP_FPS:
+                    return 30.0
+                if prop == combined_runtime.cv2.CAP_PROP_FRAME_COUNT:
+                    return self.count
+                return 0
+
+            def set(self, prop, value):
+                if prop == combined_runtime.cv2.CAP_PROP_POS_FRAMES:
+                    self.read_count = int(value)
+                return None
+
+        class PoseEstimator:
+            def __init__(self):
+                self.calls = 0
+
+            def detect_pose(self, _frame):
+                self.calls += 1
+                return [
+                    {
+                        "bbox": (12, 12, 58, 86),
+                        "confidence": 0.9,
+                        "keypoints": keypoints.copy(),
+                    }
+                ]
+
+        class Detector:
+            def __init__(self, detections):
+                self.calls = 0
+                self.detections = detections or []
+
+            def detect(self, _frame):
+                self.calls += 1
+                detections = self.detections
+                if callable(detections):
+                    detections = detections(self.calls)
+                return [dict(det) for det in detections]
+
+        class Tracker:
+            def update(self, detections):
+                return [1 for _ in detections]
+
+        pose_estimator = PoseEstimator()
+        hand_detector = Detector(hand_detections)
+        object_detector = Detector(object_detections)
+        published = []
+
+        def publish_callback(raw_frame, annotated_frame, metrics, *, debug_frame=None):
+            published.append(
+                {
+                    "raw": raw_frame.copy(),
+                    "annotated": annotated_frame.copy(),
+                    "debug": debug_frame.copy(),
+                    "metrics": dict(metrics),
+                }
+            )
+
+        combined_runtime.run_detection(
+            MultiFrameCapture(frame, frame_count),
+            pose_estimator,
+            hand_detector,
+            object_detector,
+            Tracker(),
+            {1: 5},
+            {1: 0.0},
+            [{"track_id": 1, "student_num": 5, "bbox": (12, 12, 58, 86)}],
+            [None],
+            "unit-test.mp4",
+            0,
+            source_mode="video",
+            source_fps=30.0,
+            frame_publish_callback=publish_callback,
+            publish_local_preview=False,
+            detector_schedule=detector_schedule,
+            debug_overlay_callback=debug_overlay_callback,
+        )
+
+        return SimpleNamespace(
+            frame=frame,
+            pose_estimator=pose_estimator,
+            hand_detector=hand_detector,
+            object_detector=object_detector,
+            published=published,
+        )
+
     def test_debug_preview_uses_diagnostic_overlay_without_mutating_clean_preview(self):
         frame = np.zeros((120, 160, 3), dtype=np.uint8)
         keypoints = np.zeros((17, 3), dtype=np.float32)
@@ -430,11 +559,149 @@ api_key = front-key
             source_fps=30.0,
             frame_publish_callback=publish_callback,
             publish_local_preview=False,
+            debug_overlay_callback=lambda: True,
         )
 
         self.assertTrue(np.array_equal(published["annotated"], frame))
         self.assertTrue(np.any(published["debug"] != frame))
         self.assertIn("processing_fps", published["metrics"])
+
+    def test_debug_preview_stays_clean_without_debug_demand(self):
+        result = self._run_fake_all_behavior_detection(
+            frame_count=1,
+            debug_overlay_callback=lambda: False,
+        )
+
+        self.assertTrue(np.array_equal(result.published[-1]["annotated"], result.frame))
+        self.assertTrue(np.array_equal(result.published[-1]["debug"], result.frame))
+
+    def test_detector_schedule_interval_skips_hand_and_object_detection(self):
+        schedule = SimpleNamespace(
+            adaptive_enabled=False,
+            hand_interval_frames=2,
+            object_interval_frames=2,
+            adaptive_burst_frames=0,
+            debug_overlay="on_demand",
+        )
+
+        result = self._run_fake_all_behavior_detection(
+            frame_count=5,
+            detector_schedule=schedule,
+            debug_overlay_callback=lambda: False,
+        )
+
+        self.assertEqual(result.pose_estimator.calls, 5)
+        self.assertEqual(result.hand_detector.calls, 3)
+        self.assertEqual(result.object_detector.calls, 3)
+
+    def test_detector_schedule_reuses_cached_detections_on_skipped_frames(self):
+        schedule = SimpleNamespace(
+            adaptive_enabled=False,
+            hand_interval_frames=99,
+            object_interval_frames=99,
+            adaptive_burst_frames=0,
+            debug_overlay="on_demand",
+        )
+        hand = {
+            "bbox": (18, 70, 32, 88),
+            "class_name": combined_runtime.hands_mod.CLASS_HAND,
+            "confidence": 0.9,
+        }
+        phone = {
+            "bbox": (100, 100, 114, 118),
+            "class_name": "phone",
+            "confidence": 0.9,
+        }
+
+        result = self._run_fake_all_behavior_detection(
+            frame_count=2,
+            detector_schedule=schedule,
+            debug_overlay_callback=lambda: False,
+            hand_detections=[hand],
+            object_detections=[phone],
+        )
+        metrics = combined_runtime._dashboard_snapshot()["metrics"]
+
+        self.assertEqual(result.hand_detector.calls, 1)
+        self.assertEqual(result.object_detector.calls, 1)
+        self.assertEqual(metrics["frame_idx"], 2)
+        self.assertEqual(metrics["hand_detections"], 1)
+        self.assertEqual(metrics["object_detections"], 1)
+
+    def test_detector_schedule_adaptive_burst_returns_to_every_frame_detection(self):
+        schedule = SimpleNamespace(
+            adaptive_enabled=True,
+            hand_interval_frames=99,
+            object_interval_frames=99,
+            adaptive_burst_frames=3,
+            debug_overlay="on_demand",
+        )
+        phone = {
+            "bbox": (20, 20, 34, 42),
+            "class_name": "phone",
+            "confidence": 0.9,
+        }
+
+        def fake_queue_sequence(
+            _task_queue,
+            _sequence_queue,
+            _recent_frames,
+            behavior_type,
+            event_ts_sec,
+            **payload,
+        ):
+            return {
+                "incident_id": f"{behavior_type}-test",
+                "created_at": "2026-01-01T00:00:00",
+                "display_time": "12:00 AM",
+                "event_clock": combined_runtime.head_mod.fmt_ts(event_ts_sec),
+                "behavior_type": behavior_type,
+                "camera_label": "Unit Test",
+                "session_details": {},
+                **payload,
+            }
+
+        with (
+            mock.patch.object(
+                combined_runtime,
+                "queue_evidence_sequence",
+                side_effect=fake_queue_sequence,
+            ),
+            mock.patch.object(
+                combined_runtime,
+                "flush_evidence_sequences",
+                return_value=[],
+            ),
+        ):
+            result = self._run_fake_all_behavior_detection(
+                frame_count=4,
+                detector_schedule=schedule,
+                debug_overlay_callback=lambda: False,
+                object_detections=[phone],
+            )
+
+        self.assertEqual(result.pose_estimator.calls, 4)
+        self.assertEqual(result.hand_detector.calls, 4)
+        self.assertEqual(result.object_detector.calls, 4)
+
+    def test_detector_schedule_interval_one_runs_hand_and_object_every_frame(self):
+        schedule = SimpleNamespace(
+            adaptive_enabled=False,
+            hand_interval_frames=1,
+            object_interval_frames=1,
+            adaptive_burst_frames=0,
+            debug_overlay="on_demand",
+        )
+
+        result = self._run_fake_all_behavior_detection(
+            frame_count=5,
+            detector_schedule=schedule,
+            debug_overlay_callback=lambda: False,
+        )
+
+        self.assertEqual(result.pose_estimator.calls, 5)
+        self.assertEqual(result.hand_detector.calls, 5)
+        self.assertEqual(result.object_detector.calls, 5)
 
     def test_evidence_sequence_reports_recording_incident_immediately(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:

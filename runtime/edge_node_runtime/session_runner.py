@@ -241,6 +241,8 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             incident_detected_callback=incident_detected_callback,
             should_stop_callback=runtime.should_stop_requested,
             publish_local_preview=CENTRAL_AGENT_PUBLISHES_LOCAL_PREVIEW,
+            detector_schedule=runtime_cfg.detector_schedule,
+            debug_overlay_callback=runtime.debug_overlay_requested,
         )
     finally:
         if cap is not None:

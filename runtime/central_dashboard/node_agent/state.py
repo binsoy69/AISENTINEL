@@ -57,6 +57,7 @@ class NodeRuntime:
         self._raw_seq = 0
         self._annotated_seq = 0
         self._debug_seq = 0
+        self._debug_stream_clients = 0
         self._last_publish_monotonic = 0.0
         self._last_frame_at = ""
 
@@ -184,6 +185,7 @@ class NodeRuntime:
                 "has_debug_frame": self._debug_jpeg is not None,
                 "last_frame_at": self._last_frame_at,
                 "preview_fps": self.config.preview_fps,
+                "debug_clients": self._debug_stream_clients,
             }
         return NodeHeartbeat(
             node_id=self.config.node_id,
@@ -504,6 +506,10 @@ class NodeRuntime:
     def should_stop_requested(self) -> bool:
         return self._shutdown.is_set() or self._session_stop.is_set()
 
+    def debug_overlay_requested(self) -> bool:
+        with self._lock:
+            return self._debug_stream_clients > 0
+
     def publish_detector_frames(
         self,
         raw_frame,
@@ -684,27 +690,36 @@ class NodeRuntime:
 
     def stream_generator(self, mode: str):
         last_seq = -1
-        while not self._shutdown.is_set():
+        debug_stream = mode == "debug"
+        if debug_stream:
             with self._lock:
-                if mode == "raw":
-                    jpeg_bytes = self._raw_jpeg
-                    seq = self._raw_seq
-                elif mode == "debug":
-                    jpeg_bytes = self._debug_jpeg
-                    seq = self._debug_seq
+                self._debug_stream_clients += 1
+        try:
+            while not self._shutdown.is_set():
+                with self._lock:
+                    if mode == "raw":
+                        jpeg_bytes = self._raw_jpeg
+                        seq = self._raw_seq
+                    elif mode == "debug":
+                        jpeg_bytes = self._debug_jpeg
+                        seq = self._debug_seq
+                    else:
+                        jpeg_bytes = self._annotated_jpeg
+                        seq = self._annotated_seq
+                if jpeg_bytes is not None and seq != last_seq:
+                    last_seq = seq
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n"
+                        + jpeg_bytes
+                        + b"\r\n"
+                    )
                 else:
-                    jpeg_bytes = self._annotated_jpeg
-                    seq = self._annotated_seq
-            if jpeg_bytes is not None and seq != last_seq:
-                last_seq = seq
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n"
-                    + jpeg_bytes
-                    + b"\r\n"
-                )
-            else:
-                time.sleep(0.03)
+                    time.sleep(0.03)
+        finally:
+            if debug_stream:
+                with self._lock:
+                    self._debug_stream_clients = max(0, self._debug_stream_clients - 1)
 
     def _open_capture(self):
         if self.config.source_mode == "video":

@@ -222,6 +222,66 @@ class FrontRuntimeBackendTests(unittest.TestCase):
             self.assertIn(b"Content-Type: image/jpeg", debug_chunk)
             runtime.close()
 
+    def test_debug_overlay_requested_tracks_active_debug_stream_clients(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config = NodeAgentConfig(
+                config_path=tmpdir / "node.ini",
+                node_id="front",
+                display_name="Front Node",
+                camera_label="Front Camera",
+                profile="front",
+                host="front.test",
+                port=8091,
+                api_key="front-key",
+                central_base_url="http://central.test:8090",
+                registration_interval_sec=10.0,
+                heartbeat_interval_sec=10.0,
+                http_timeout_sec=5.0,
+                source_mode="webcam",
+                camera_index=0,
+                video_path=None,
+                preview_width=640,
+                preview_fps=15.0,
+                jpeg_quality=75,
+                detector_mode="front_runtime",
+                runtime_config_path=tmpdir / "runtime.ini",
+                motion_threshold=5.0,
+                motion_min_area_ratio=0.001,
+                motion_cooldown_sec=0.05,
+                annotated_banner_ttl_sec=1.0,
+                evidence_root=tmpdir / "evidence",
+                pre_event_frames=2,
+                post_event_frames=2,
+                startup_detection_delay_sec=0.0,
+            )
+            runtime = NodeRuntime(config, http_client=FakeHttpClient())
+            try:
+                raw = np.zeros((72, 128, 3), dtype=np.uint8)
+                annotated = np.full((72, 128, 3), 200, dtype=np.uint8)
+                debug = np.full((72, 128, 3), 80, dtype=np.uint8)
+                runtime.publish_detector_frames(raw, annotated, debug_frame=debug)
+
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline:
+                    if runtime.heartbeat().extra["stream"]["has_debug_frame"]:
+                        break
+                    time.sleep(0.01)
+
+                self.assertFalse(runtime.debug_overlay_requested())
+                stream = runtime.stream_generator("debug")
+                chunk = next(stream)
+                self.assertIn(b"Content-Type: image/jpeg", chunk)
+                self.assertTrue(runtime.debug_overlay_requested())
+                self.assertEqual(
+                    runtime.heartbeat().extra["stream"]["debug_clients"],
+                    1,
+                )
+                stream.close()
+                self.assertFalse(runtime.debug_overlay_requested())
+            finally:
+                runtime.close()
+
     def test_node_runtime_heartbeat_exposes_sound_and_noise_incident_queues_snapshot(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
