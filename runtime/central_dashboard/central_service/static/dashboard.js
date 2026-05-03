@@ -4,6 +4,7 @@ const initialState = bootstrapNode ? JSON.parse(bootstrapNode.textContent) : {};
 const POLL_MS = 1000;
 const CLOCK_MS = 1000;
 const ALERT_DISMISS_MS = 2000;
+const RECORDS_PAGE_SIZE = 10;
 const EMPTY_SUBJECT_VALUE = "__unassigned_subject__";
 const CHART_COLORS = ["#3f83ff", "#f1c44c", "#ff6558", "#21badf", "#7a63ff", "#28d17c"];
 const SEAT_LAYOUT = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
@@ -54,6 +55,10 @@ const els = {
     recordsFilter: document.getElementById("records-filter"),
     recordsSearch: document.getElementById("records-search"),
     recordsClear: document.getElementById("records-clear"),
+    recordsPaginationSummary: document.getElementById("records-pagination-summary"),
+    recordsPrevPage: document.getElementById("records-prev-page"),
+    recordsNextPage: document.getElementById("records-next-page"),
+    recordsPageLabel: document.getElementById("records-page-label"),
     typeChart: document.getElementById("type-chart"),
     timelineChart: document.getElementById("timeline-chart"),
     analyticsTypesNote: document.getElementById("analytics-types-note"),
@@ -99,6 +104,7 @@ const state = {
     recordsSessionId: "",
     recordsFilter: "all",
     recordsQuery: "",
+    recordsPage: 1,
     knownIncidentIds: new Set(Object.values(initialIncidentsBySession).flat().map((incident) => String(incident.incident_id || "")).filter(Boolean)),
     activeAlertId: null,
     dismissedIncidentIds: new Set(),
@@ -636,17 +642,51 @@ function filteredRecords() {
     });
 }
 
+function recordsPageCount(itemCount) {
+    return Math.max(1, Math.ceil(Number(itemCount || 0) / RECORDS_PAGE_SIZE));
+}
+
+function resetRecordsPagination() {
+    state.recordsPage = 1;
+}
+
+function clampRecordsPagination(itemCount) {
+    const pageCount = recordsPageCount(itemCount);
+    state.recordsPage = Math.min(Math.max(1, Number(state.recordsPage || 1)), pageCount);
+    return pageCount;
+}
+
+function recordsPageItems(items) {
+    const start = (state.recordsPage - 1) * RECORDS_PAGE_SIZE;
+    return items.slice(start, start + RECORDS_PAGE_SIZE);
+}
+
+function recordsPaginationSummaryText({ selectionMissing, filteredCount, totalCount, pageItems }) {
+    if (selectionMissing) {
+        return "Select a session to show record totals.";
+    }
+    if (!filteredCount) {
+        return `Showing 0 of 0 matching records - ${totalCount} total for this session`;
+    }
+    const first = ((state.recordsPage - 1) * RECORDS_PAGE_SIZE) + 1;
+    const last = first + pageItems.length - 1;
+    return `Showing ${first}-${last} of ${filteredCount} matching records - ${totalCount} total for this session`;
+}
+
 function reviewOptions(selected) {
     const value = String(selected || "unverified").trim().toLowerCase().replaceAll("-", "_");
     return Object.entries(REVIEW_META).map(([key, meta]) => `<option value="${key}" ${value === key ? "selected" : ""}>${meta.label}</option>`).join("");
 }
 
-function recordsRenderSignature(items, selectionMissing, session) {
+function recordsRenderSignature(items, selectionMissing, session, totalRecords, pageCount) {
     return JSON.stringify({
         session_id: session?.session_id || "",
         selection_missing: selectionMissing,
         filter: state.recordsFilter,
         query: state.recordsQuery,
+        page: state.recordsPage,
+        page_count: pageCount,
+        total_records: totalRecords,
         rows: items.map((incident) => ({
             id: incident.incident_id || "",
             display_time: incident.display_time || "",
@@ -783,16 +823,28 @@ function renderMetrics() {
 function renderRecords() {
     const session = workspaceSession();
     const selectionMissing = workspaceSelectionMissing();
+    const totalRecords = selectionMissing ? 0 : workspaceIncidents().length;
     const items = filteredRecords();
+    const pageCount = clampRecordsPagination(items.length);
+    const pageItems = recordsPageItems(items);
     els.recordsContextLabel.textContent = currentSession()
         ? "Review synced incident evidence from the active session."
         : session
             ? `Review synced incident evidence from ${workspaceSessionLabel(session)}.`
             : "No active session is running. Select a subject code and session before opening stored records.";
-    const nextSignature = recordsRenderSignature(items, selectionMissing, session);
+    const nextSignature = recordsRenderSignature(items, selectionMissing, session, totalRecords, pageCount);
     if (state.recordsRenderSignature === nextSignature) return;
     state.recordsRenderSignature = nextSignature;
-    els.recordsBody.innerHTML = items.length ? items.map((incident) => `
+    els.recordsPaginationSummary.textContent = recordsPaginationSummaryText({
+        selectionMissing,
+        filteredCount: items.length,
+        totalCount: totalRecords,
+        pageItems,
+    });
+    els.recordsPageLabel.textContent = `Page ${state.recordsPage} of ${pageCount}`;
+    els.recordsPrevPage.disabled = selectionMissing || !items.length || state.recordsPage <= 1;
+    els.recordsNextPage.disabled = selectionMissing || !items.length || state.recordsPage >= pageCount;
+    els.recordsBody.innerHTML = pageItems.length ? pageItems.map((incident) => `
         <tr>
             <td>${escapeHtml(incident.display_time || incident.created_at || "--")}</td>
             <td>${escapeHtml(seatSummary(incident))}</td>
@@ -1089,6 +1141,7 @@ async function createSession() {
     state.snapshot.active_session = result.session;
     state.recordsSubject = "";
     state.recordsSessionId = "";
+    resetRecordsPagination();
     state.sessionHydrated = true;
     state.sessionDefaultsApplied = sessionScheduleIsComplete(result.session);
     state.sessionFormDirty = false;
@@ -1191,15 +1244,26 @@ els.restartSessionButton.addEventListener("click", () => sessionAction("restart"
 els.stopSessionButton.addEventListener("click", () => sessionAction("stop").catch((error) => showBanner(error.message, true)));
 els.recordsFilter.addEventListener("change", (event) => {
     state.recordsFilter = event.target.value;
+    resetRecordsPagination();
     renderRecords();
 });
 els.recordsSearch.addEventListener("input", (event) => {
     state.recordsQuery = event.target.value.trim().toLowerCase();
+    resetRecordsPagination();
+    renderRecords();
+});
+els.recordsPrevPage.addEventListener("click", () => {
+    state.recordsPage = Math.max(1, state.recordsPage - 1);
+    renderRecords();
+});
+els.recordsNextPage.addEventListener("click", () => {
+    state.recordsPage += 1;
     renderRecords();
 });
 els.recordsSubject.addEventListener("change", (event) => {
     state.recordsSubject = event.target.value;
     state.recordsSessionId = "";
+    resetRecordsPagination();
     renderRecordsScope();
     renderRecords();
     renderAnalytics();
@@ -1207,6 +1271,7 @@ els.recordsSubject.addEventListener("change", (event) => {
 });
 els.recordsSession.addEventListener("change", (event) => {
     state.recordsSessionId = event.target.value;
+    resetRecordsPagination();
     const sessionId = state.recordsSessionId;
     loadSessionIncidents(sessionId)
         .catch((error) => showBanner(error.message, true))

@@ -166,6 +166,25 @@ evidence_root = {legacy_evidence.as_posix()}
         self.assertNotIn("records-export", template)
         self.assertNotIn("function exportRecords", script)
 
+    def test_central_dashboard_records_pagination_controls_are_present(self):
+        script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(
+            encoding="utf-8"
+        )
+        template = (ROOT / "central_service" / "templates" / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+        stylesheet = (ROOT / "central_service" / "static" / "app.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("records-pagination-summary", template)
+        self.assertIn("records-prev-page", template)
+        self.assertIn("records-next-page", template)
+        self.assertIn("const RECORDS_PAGE_SIZE = 10", script)
+        self.assertIn("recordsPage", script)
+        self.assertIn("function resetRecordsPagination", script)
+        self.assertIn(".records-pagination", stylesheet)
+
     def test_front_node_records_export_controls_are_removed(self):
         script = (EDGE_NODE_ROOT / "web" / "static" / "dashboard.js").read_text(
             encoding="utf-8"

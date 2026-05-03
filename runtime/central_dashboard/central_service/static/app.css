@@ -570,6 +570,45 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
 .data-table tbody tr:hover { background: rgba(255,255,255,0.025); }
 .data-table td { font-size: var(--text-sm); line-height: 1.5; }
 .table-empty { color: var(--muted); text-align: center; }
+.records-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-md);
+    padding: 0.875rem 1rem;
+    border-top: 1px solid rgba(93, 120, 165, 0.18);
+    background: rgba(255, 255, 255, 0.018);
+}
+.records-pagination-summary {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+}
+.records-pagination-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+}
+.records-pagination-controls .ghost-button {
+    min-width: 5.75rem;
+}
+.records-page-label {
+    min-height: 2.25rem;
+    padding: 0 0.75rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(117, 138, 181, 0.2);
+    background: rgba(255, 255, 255, 0.04);
+    color: #cbd8f1;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
 .history-actions {
     display: flex;
     flex-wrap: wrap;
@@ -816,6 +855,8 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     .records-toolbar-controls { width: 100%; justify-items: stretch; min-width: 0; }
     .records-scope-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .records-actions { justify-content: flex-start; }
+    .records-pagination { align-items: flex-start; flex-direction: column; }
+    .records-pagination-controls { width: 100%; justify-content: flex-start; }
     .feeds-panel .panel-section-head,
     .feed-card-head { align-items: flex-start; }
     .feed-card-tools {
@@ -844,6 +885,9 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     .records-actions { width: 100%; }
     .records-actions > * { flex: 1 1 100%; }
     .records-select, .records-search, .review-select { min-width: 0; width: 100%; }
+    .records-pagination-controls { display: grid; grid-template-columns: 1fr; }
+    .records-pagination-controls .ghost-button,
+    .records-page-label { width: 100%; }
     .history-actions { min-width: 13rem; }
     .history-action-button { flex: 1 1 100%; }
     .seatmap-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
