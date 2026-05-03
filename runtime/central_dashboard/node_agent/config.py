@@ -69,6 +69,7 @@ class NodeAgentConfig:
     gif_frame_count: int = 5
     gif_max_width: int = 640
     gif_fps: float = 4.0
+    startup_detection_delay_sec: float = 5.0
 
 
 def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConfig:
@@ -137,6 +138,10 @@ def load_node_agent_config(config_path: str | os.PathLike[str]) -> NodeAgentConf
         motion_min_area_ratio=max(0.001, parser.getfloat("detector", "motion_min_area_ratio", fallback=0.012)),
         motion_cooldown_sec=max(1.0, parser.getfloat("detector", "motion_cooldown_sec", fallback=8.0)),
         annotated_banner_ttl_sec=max(1.0, parser.getfloat("detector", "annotated_banner_ttl_sec", fallback=4.0)),
+        startup_detection_delay_sec=max(
+            0.0,
+            parser.getfloat("detector", "startup_detection_delay_sec", fallback=5.0),
+        ),
         evidence_root=evidence_root,
         pre_event_frames=max(1, parser.getint("evidence", "pre_event_frames", fallback=8)),
         post_event_frames=max(1, parser.getint("evidence", "post_event_frames", fallback=8)),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import threading
+import time
 
 import cv2
 
@@ -147,6 +148,15 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             if setup_bundle is None:
                 raise RuntimeError("Monitoring setup was cancelled.")
 
+        _publish_startup_warmup_frames(
+            runtime,
+            cap,
+            latest_raw_frame,
+            latest_raw_frame_lock,
+        )
+        if runtime.should_stop_requested():
+            return
+
         runtime.mark_session_running()
 
         def sound_telemetry_callback(payload: dict) -> None:
@@ -243,6 +253,27 @@ def run_front_runtime_session(runtime, session: SessionSpec) -> None:
             hand_detector.close()
         if hasattr(object_detector, "close"):
             object_detector.close()
+
+
+def _publish_startup_warmup_frames(
+    runtime,
+    cap,
+    latest_raw_frame: dict,
+    latest_raw_frame_lock: threading.Lock,
+) -> None:
+    while not runtime.should_stop_requested():
+        remaining = runtime.detection_warmup_remaining_sec()
+        if remaining <= 0:
+            return
+
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            time.sleep(min(0.05, remaining))
+            continue
+
+        with latest_raw_frame_lock:
+            latest_raw_frame["frame"] = frame.copy()
+        runtime.publish_preview_frames(frame, frame)
 
 
 def _apply_node_config_overrides(node_config, runtime_cfg):

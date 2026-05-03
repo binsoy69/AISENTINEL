@@ -356,12 +356,30 @@ function nodeHasAnyStreamFrame(node) {
     return nodeHasStreamFrame(node, "raw") || nodeHasStreamFrame(node, "annotated") || nodeHasStreamFrame(node, "debug");
 }
 
+function nodeWarmupInfo(node) {
+    const warmup = node?.extra?.warmup || {};
+    const remainingSec = Number(warmup.remaining_sec || 0);
+    const nodeState = String(node?.state || "").toLowerCase();
+    return {
+        active: Boolean(warmup.active) && remainingSec > 0 && ["starting", "running"].includes(nodeState),
+        remainingSec,
+    };
+}
+
+function nodeRuntimeStateLabel(node) {
+    const warmup = nodeWarmupInfo(node);
+    if (warmup.active) return `Warming Up ${Math.ceil(warmup.remainingSec)}s`;
+    return sessionStatusLabel(node?.state || "unknown");
+}
+
 function streamEmptyMessage(node) {
     if (!node.online) return "Node offline or stream unavailable.";
     const errorText = String(node.last_error || "").trim();
     if (errorText) return `Node online, but the detector reports: ${errorText}`;
     if (!currentSession()) return "Node online. Create and start a shared session to open the live feed.";
     if (!liveFeedSessionActive()) return "Start the shared session to open the live feed.";
+    const warmup = nodeWarmupInfo(node);
+    if (warmup.active) return `Warming up ${Math.ceil(warmup.remainingSec)}s before detection starts.`;
     const stateLabel = sessionStatusLabel(node.state || "unknown");
     if (!["running", "starting"].includes(String(node.state || "").toLowerCase())) {
         return `Node online, detector state: ${stateLabel}.`;
@@ -697,7 +715,7 @@ function renderFeeds() {
         card.querySelector("[data-feed-status]").textContent = node.online ? "Online" : "Offline";
         card.querySelector("[data-feed-status]").className = `node-pill ${node.online ? "is-online" : "is-offline"}`;
         card.querySelector(`[data-feed-mode="${node.node_id}"]`).value = mode;
-        card.querySelector("[data-feed-state]").textContent = `State: ${sessionStatusLabel(node.state || "unknown")}`;
+        card.querySelector("[data-feed-state]").textContent = `State: ${nodeRuntimeStateLabel(node)}`;
         card.querySelector("[data-feed-fps]").textContent = `FPS: ${Number(node.fps || 0).toFixed(1)}`;
         card.querySelector("[data-feed-backlog]").textContent = `Queue: ${Number(node.sync_backlog || 0)}`;
         const sound = activeSessionSound(node);
@@ -912,7 +930,7 @@ function renderSystem() {
         const errorText = String(node.last_error || node.last_dropped_upload_error || "").trim();
         const sound = node.extra?.sound || null;
         const lastDrop = parseIso(node.last_dropped_upload_at);
-        return `<article class="system-card"><div class="system-card-head"><div><p class="panel-eyebrow">${escapeHtml(node.camera_label || node.node_id)}</p><h3>${escapeHtml(node.display_name || node.node_id)}</h3></div><span class="node-pill ${node.online ? "is-online" : "is-offline"}">${node.online ? "Online" : "Offline"}</span></div><div class="system-card-meta"><div class="system-card-meta-item"><span class="system-meta-label">Runtime State</span><strong>${escapeHtml(sessionStatusLabel(node.state || "unknown"))}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Seen</span><strong>${escapeHtml(seen ? `${formatDate(seen)} ${formatTime(seen)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Processing FPS</span><strong>${Number(node.fps || 0).toFixed(1)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Local Queue</span><strong>${Number(node.sync_backlog || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Dropped Uploads</span><strong>${Number(node.dropped_upload_count || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Drop</span><strong>${escapeHtml(lastDrop ? `${formatDate(lastDrop)} ${formatTime(lastDrop)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Level</span><strong>${sound?.enabled ? formatDbValue(sound.current_db) : "Disabled"}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Threshold</span><strong>${sound?.enabled ? formatDbValue(sound.threshold_db) : "--"}</strong></div></div><div class="system-card-error ${errorText ? "has-error" : ""}">${escapeHtml(errorText || sound?.last_error || "No node error reported in the latest heartbeat.")}</div></article>`;
+        return `<article class="system-card"><div class="system-card-head"><div><p class="panel-eyebrow">${escapeHtml(node.camera_label || node.node_id)}</p><h3>${escapeHtml(node.display_name || node.node_id)}</h3></div><span class="node-pill ${node.online ? "is-online" : "is-offline"}">${node.online ? "Online" : "Offline"}</span></div><div class="system-card-meta"><div class="system-card-meta-item"><span class="system-meta-label">Runtime State</span><strong>${escapeHtml(nodeRuntimeStateLabel(node))}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Seen</span><strong>${escapeHtml(seen ? `${formatDate(seen)} ${formatTime(seen)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Processing FPS</span><strong>${Number(node.fps || 0).toFixed(1)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Local Queue</span><strong>${Number(node.sync_backlog || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Dropped Uploads</span><strong>${Number(node.dropped_upload_count || 0)}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Last Drop</span><strong>${escapeHtml(lastDrop ? `${formatDate(lastDrop)} ${formatTime(lastDrop)}` : "--")}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Level</span><strong>${sound?.enabled ? formatDbValue(sound.current_db) : "Disabled"}</strong></div><div class="system-card-meta-item"><span class="system-meta-label">Sound Threshold</span><strong>${sound?.enabled ? formatDbValue(sound.threshold_db) : "--"}</strong></div></div><div class="system-card-error ${errorText ? "has-error" : ""}">${escapeHtml(errorText || sound?.last_error || "No node error reported in the latest heartbeat.")}</div></article>`;
     }).join("") : `<article class="system-card"><h3>Waiting for node registration</h3><p class="panel-copy">System details will appear once the front and mid nodes register with the central service.</p></article>`;
 }
 

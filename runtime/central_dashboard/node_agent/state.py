@@ -71,6 +71,8 @@ class NodeRuntime:
         self._last_dropped_upload_error = ""
         self._banner_text = ""
         self._banner_expires = 0.0
+        self._warmup_deadline_monotonic = 0.0
+        self._warmup_total_sec = 0.0
         self._registration_ok = False
         self._sound_state = dict(DEFAULT_SOUND_SNAPSHOT)
         self.upload_worker = IncidentUploadWorker(
@@ -172,6 +174,7 @@ class NodeRuntime:
                 "last_dropped_upload_at": self._last_dropped_upload_at,
                 "last_dropped_upload_error": self._last_dropped_upload_error,
             }
+            warmup_state = self._warmup_snapshot_locked(time.monotonic())
             stream_state = {
                 "raw_seq": self._raw_seq,
                 "annotated_seq": self._annotated_seq,
@@ -196,6 +199,7 @@ class NodeRuntime:
                 "sound": dict(self._sound_state),
                 "stream": stream_state,
                 "uploads": upload_state,
+                "warmup": warmup_state,
             },
         )
 
@@ -219,14 +223,23 @@ class NodeRuntime:
                 )
         self._clear_upload_backlog(f"session start accepted for {session.session_id}")
         self._cleanup_local_evidence_storage(f"session start accepted for {session.session_id}")
+        warmup_delay_sec = self._configured_startup_detection_delay_sec()
+        now = time.monotonic()
         with self._lock:
             self._session = session
             self._session_stop = threading.Event()
             self._status = "starting"
             self._last_error = ""
+            self._fps = 0.0
+            self._warmup_deadline_monotonic = now + warmup_delay_sec if warmup_delay_sec > 0 else 0.0
+            self._warmup_total_sec = warmup_delay_sec
             self._clear_frames_locked()
 
-        self.logger.info("session start accepted: session_id=%s", session.session_id)
+        self.logger.info(
+            "session start accepted: session_id=%s startup_detection_delay=%.1fs",
+            session.session_id,
+            warmup_delay_sec,
+        )
         self._session_thread = threading.Thread(
             target=self._run_session,
             args=(session,),
@@ -257,6 +270,7 @@ class NodeRuntime:
             self._status = "idle"
             self._session = None
             self._fps = 0.0
+            self._clear_detection_warmup_locked()
             self._clear_frames_locked()
         self._clear_upload_backlog("session stopped")
         return CommandAck(
@@ -379,9 +393,6 @@ class NodeRuntime:
         if capture is None or not capture.isOpened():
             raise RuntimeError("Could not open configured capture source.")
 
-        with self._lock:
-            self._status = "running"
-
         pending_sequences = []
         frame_counter = 0
         started_at = time.monotonic()
@@ -395,6 +406,25 @@ class NodeRuntime:
                         continue
                     time.sleep(0.05)
                     continue
+
+                warmup_remaining = self.detection_warmup_remaining_sec()
+                if warmup_remaining > 0:
+                    warmup_label = self.detection_warmup_label(warmup_remaining)
+                    annotated = annotate_frame(
+                        frame,
+                        node_name=self.config.display_name,
+                        camera_label=self.config.camera_label,
+                        session_id=session.session_id,
+                        fps=0.0,
+                        metrics={},
+                        banner_text=warmup_label,
+                    )
+                    self.publish_preview_frames(frame, annotated)
+                    continue
+
+                if frame_counter == 0:
+                    self.mark_session_running()
+                    started_at = time.monotonic()
 
                 for sequence in list(pending_sequences):
                     if builder.advance_sequence(sequence, frame):
@@ -460,6 +490,17 @@ class NodeRuntime:
             self._status = "running"
             self._last_error = ""
 
+    def detection_warmup_remaining_sec(self) -> float:
+        with self._lock:
+            return self._warmup_remaining_locked(time.monotonic())
+
+    def detection_warmup_active(self) -> bool:
+        return self.detection_warmup_remaining_sec() > 0
+
+    def detection_warmup_label(self, remaining_sec: float | None = None) -> str:
+        remaining = self.detection_warmup_remaining_sec() if remaining_sec is None else remaining_sec
+        return f"Warming up {max(1, int(remaining + 0.999))}s"
+
     def should_stop_requested(self) -> bool:
         return self._shutdown.is_set() or self._session_stop.is_set()
 
@@ -495,6 +536,13 @@ class NodeRuntime:
         manifest: IncidentManifest,
         assets: list[dict],
     ) -> None:
+        if self.detection_warmup_active():
+            self.logger.info(
+                "ignored finalized incident during startup warmup: incident=%s session=%s",
+                manifest.incident_id,
+                manifest.session_id,
+            )
+            return
         if not self._incident_matches_active_session(manifest):
             self.logger.info(
                 "ignored finalized incident outside active session: incident=%s session=%s",
@@ -512,6 +560,13 @@ class NodeRuntime:
         )
 
     def record_detected_incident(self, manifest: IncidentManifest) -> None:
+        if self.detection_warmup_active():
+            self.logger.info(
+                "ignored detected incident during startup warmup: incident=%s session=%s",
+                manifest.incident_id,
+                manifest.session_id,
+            )
+            return
         if not self._incident_matches_active_session(manifest):
             self.logger.info(
                 "ignored detected incident outside active session: incident=%s session=%s",
@@ -657,6 +712,31 @@ class NodeRuntime:
                 return None
             return cv2.VideoCapture(str(self.config.video_path))
         return cv2.VideoCapture(self.config.camera_index)
+
+    def _configured_startup_detection_delay_sec(self) -> float:
+        source_mode = str(self.config.source_mode or "").strip().lower()
+        if source_mode != "webcam":
+            return 0.0
+        return max(0.0, float(getattr(self.config, "startup_detection_delay_sec", 0.0) or 0.0))
+
+    def _warmup_remaining_locked(self, now_monotonic: float) -> float:
+        if self._session is None or self._warmup_deadline_monotonic <= 0:
+            return 0.0
+        return max(0.0, self._warmup_deadline_monotonic - now_monotonic)
+
+    def _warmup_snapshot_locked(self, now_monotonic: float) -> dict:
+        remaining = self._warmup_remaining_locked(now_monotonic)
+        active = remaining > 0 and self._status in {"starting", "running"}
+        return {
+            "active": active,
+            "remaining_sec": round(remaining, 3),
+            "total_sec": round(max(0.0, self._warmup_total_sec), 3),
+            "source_mode": self.config.source_mode,
+        }
+
+    def _clear_detection_warmup_locked(self) -> None:
+        self._warmup_deadline_monotonic = 0.0
+        self._warmup_total_sec = 0.0
 
     def _current_banner(self) -> str:
         with self._lock:

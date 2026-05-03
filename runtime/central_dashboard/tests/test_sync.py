@@ -61,6 +61,30 @@ class BlockingHttpClient(FakeHttpClient):
         return super().post_json(url, payload, headers=headers, timeout=timeout)
 
 
+class FakeCapture:
+    def __init__(self, frames, *, delay_sec: float = 0.01):
+        self.frames = [frame.copy() for frame in frames]
+        self.index = 0
+        self.delay_sec = delay_sec
+        self.opened = True
+
+    def isOpened(self):
+        return self.opened
+
+    def read(self):
+        frame = self.frames[self.index % len(self.frames)].copy()
+        self.index += 1
+        if self.delay_sec > 0:
+            time.sleep(self.delay_sec)
+        return True, frame
+
+    def release(self):
+        self.opened = False
+
+    def set(self, _prop, _value):
+        self.index = 0
+
+
 def build_config(tmpdir: Path) -> NodeAgentConfig:
     return NodeAgentConfig(
         config_path=tmpdir / "node.ini",
@@ -119,6 +143,81 @@ def manifest(session_id: str = "session-1", incident_id: str = "incident-1") -> 
 
 
 class NodeRuntimeAsyncUploadTests(unittest.TestCase):
+    def test_startup_warmup_ignores_incidents_without_counting_upload_drops(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            http_client = FakeHttpClient([])
+            runner_ready = threading.Event()
+
+            def fake_runner(runtime: NodeRuntime, _session) -> None:
+                runner_ready.set()
+                while not runtime.should_stop_requested():
+                    time.sleep(0.01)
+
+            config = replace(
+                build_config(tmpdir),
+                detector_mode="front_runtime",
+                startup_detection_delay_sec=5.0,
+            )
+            runtime = NodeRuntime(
+                config,
+                http_client=http_client,
+                front_runtime_runner=fake_runner,
+            )
+            ack = runtime.start_session({"session_id": "session-1", "subject_code": "CS321"})
+            self.assertTrue(ack.ok)
+            self.assertTrue(runner_ready.wait(timeout=1.0))
+
+            heartbeat = runtime.heartbeat()
+            self.assertTrue(heartbeat.extra["warmup"]["active"])
+            self.assertGreater(heartbeat.extra["warmup"]["remaining_sec"], 0)
+
+            runtime.record_finalized_incident(manifest(), [])
+            self.assertTrue(runtime.upload_worker.wait_until_idle(timeout=0.2))
+            self.assertEqual(http_client.requests, [])
+            heartbeat = runtime.heartbeat()
+            self.assertEqual(heartbeat.incident_count, 0)
+            self.assertEqual(heartbeat.extra["uploads"]["dropped_upload_count"], 0)
+
+            with runtime._lock:
+                runtime._warmup_deadline_monotonic = time.monotonic() - 0.01
+            runtime.record_finalized_incident(manifest(), [])
+            self.assertTrue(runtime.upload_worker.wait_until_idle(timeout=2.0))
+            self.assertEqual(len(http_client.requests), 1)
+            self.assertEqual(runtime.heartbeat().incident_count, 1)
+            runtime.close()
+
+    def test_motion_session_publishes_preview_frames_during_startup_warmup(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            config = replace(
+                build_config(tmpdir),
+                preview_fps=60.0,
+                startup_detection_delay_sec=1.0,
+            )
+            runtime = NodeRuntime(config, http_client=FakeHttpClient([]))
+            frames = [
+                np.zeros((72, 128, 3), dtype=np.uint8),
+                np.full((72, 128, 3), 255, dtype=np.uint8),
+            ]
+            runtime._open_capture = lambda: FakeCapture(frames)  # type: ignore[attr-defined]
+
+            ack = runtime.start_session({"session_id": "session-1", "subject_code": "CS321"})
+            self.assertTrue(ack.ok)
+            deadline = time.monotonic() + 0.8
+            heartbeat = runtime.heartbeat()
+            while time.monotonic() < deadline:
+                heartbeat = runtime.heartbeat()
+                if heartbeat.extra["stream"]["has_annotated_frame"]:
+                    break
+                time.sleep(0.01)
+
+            self.assertTrue(heartbeat.extra["warmup"]["active"])
+            self.assertTrue(heartbeat.extra["stream"]["has_annotated_frame"])
+            self.assertEqual(heartbeat.incident_count, 0)
+            self.assertEqual(heartbeat.extra["uploads"]["dropped_upload_count"], 0)
+            runtime.close()
+
     def test_finalized_incident_enqueue_does_not_wait_for_http(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -281,6 +380,7 @@ mode = motion
             self.assertEqual(config.preview_width, 640)
             self.assertEqual(config.preview_fps, 6.0)
             self.assertEqual(config.jpeg_quality, 60)
+            self.assertEqual(config.startup_detection_delay_sec, 5.0)
 
 
 if __name__ == "__main__":

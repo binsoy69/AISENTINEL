@@ -37,6 +37,7 @@ class ConfigTests(unittest.TestCase):
             config.runtime_config_path,
             (CONFIG_ROOT / "front_node.ini.example").resolve(strict=False),
         )
+        self.assertEqual(config.startup_detection_delay_sec, 5.0)
         self.assertIn("runtime", str(config.evidence_root))
         self.assertIn("central_dashboard", str(config.evidence_root))
 

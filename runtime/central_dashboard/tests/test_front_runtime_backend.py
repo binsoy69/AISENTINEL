@@ -129,6 +129,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 evidence_root=tmpdir / "evidence",
                 pre_event_frames=2,
                 post_event_frames=2,
+                startup_detection_delay_sec=0.0,
             )
 
             runner_ready = threading.Event()
@@ -252,6 +253,7 @@ class FrontRuntimeBackendTests(unittest.TestCase):
                 evidence_root=tmpdir / "evidence",
                 pre_event_frames=2,
                 post_event_frames=2,
+                startup_detection_delay_sec=0.0,
             )
 
             runner_ready = threading.Event()

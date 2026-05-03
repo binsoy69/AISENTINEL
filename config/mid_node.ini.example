@@ -28,6 +28,7 @@ motion_threshold = 24.0
 motion_min_area_ratio = 0.012
 motion_cooldown_sec = 8.0
 annotated_banner_ttl_sec = 4.0
+startup_detection_delay_sec = 5.0
 
 [models]
 pose = models/CHANGE_ME_POSE_MODEL.hef
