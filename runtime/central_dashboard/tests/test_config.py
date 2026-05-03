@@ -185,6 +185,30 @@ evidence_root = {legacy_evidence.as_posix()}
         self.assertIn("function resetRecordsPagination", script)
         self.assertIn(".records-pagination", stylesheet)
 
+    def test_central_dashboard_live_preview_toggle_and_subject_placeholder_are_present(self):
+        script = (ROOT / "central_service" / "static" / "dashboard.js").read_text(
+            encoding="utf-8"
+        )
+        template = (ROOT / "central_service" / "templates" / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+        stylesheet = (ROOT / "central_service" / "static" / "app.css").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('id="toggle-preview-button"', template)
+        self.assertIn("Hide Preview", template)
+        self.assertIn('placeholder="ECE 123"', template)
+        self.assertNotIn('placeholder="CS 321"', template)
+        self.assertIn('const LIVE_PREVIEW_STORAGE_KEY = "aisentinel.central.livePreviewHidden"', script)
+        self.assertIn("livePreviewHidden: readStoredLivePreviewHidden()", script)
+        self.assertIn("function writeStoredLivePreviewHidden", script)
+        self.assertIn("function toggleLivePreview", script)
+        self.assertIn("els.feedGrid.hidden = previewHidden", script)
+        self.assertIn("[data-feed-shell]", script)
+        self.assertIn(".feed-grid[hidden]", stylesheet)
+        self.assertIn(".stream-shell[hidden]", stylesheet)
+
     def test_front_node_records_export_controls_are_removed(self):
         script = (EDGE_NODE_ROOT / "web" / "static" / "dashboard.js").read_text(
             encoding="utf-8"

@@ -6,6 +6,7 @@ const CLOCK_MS = 1000;
 const ALERT_DISMISS_MS = 2000;
 const RECORDS_PAGE_SIZE = 10;
 const EMPTY_SUBJECT_VALUE = "__unassigned_subject__";
+const LIVE_PREVIEW_STORAGE_KEY = "aisentinel.central.livePreviewHidden";
 const CHART_COLORS = ["#3f83ff", "#f1c44c", "#ff6558", "#21badf", "#7a63ff", "#28d17c"];
 const SEAT_LAYOUT = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
 const REVIEW_META = {
@@ -47,6 +48,7 @@ const els = {
     noiseMeterTrack: document.getElementById("noise-meter-track"),
     noiseMeterFill: document.getElementById("noise-meter-fill"),
     feedGrid: document.getElementById("feed-grid"),
+    togglePreviewButton: document.getElementById("toggle-preview-button"),
     recordsContextLabel: document.getElementById("records-context-label"),
     recordsBody: document.getElementById("records-body"),
     recordsScopePicker: document.getElementById("records-scope-picker"),
@@ -96,10 +98,27 @@ function groupIncidentsBySession(incidents) {
 
 const initialIncidentsBySession = groupIncidentsBySession(initialState.incidents);
 
+function readStoredLivePreviewHidden() {
+    try {
+        return window.localStorage?.getItem(LIVE_PREVIEW_STORAGE_KEY) === "true";
+    } catch {
+        return false;
+    }
+}
+
+function writeStoredLivePreviewHidden(hidden) {
+    try {
+        window.localStorage?.setItem(LIVE_PREVIEW_STORAGE_KEY, hidden ? "true" : "false");
+    } catch {
+        // Keep the preview toggle usable even when browser storage is blocked.
+    }
+}
+
 const state = {
     snapshot: initialState,
     incidentsBySession: initialIncidentsBySession,
     feedModes: {},
+    livePreviewHidden: readStoredLivePreviewHidden(),
     recordsSubject: "",
     recordsSessionId: "",
     recordsFilter: "all",
@@ -542,6 +561,22 @@ function clearFeedImages() {
     }
 }
 
+function renderPreviewToggle() {
+    if (!els.togglePreviewButton) return;
+    const hidden = Boolean(state.livePreviewHidden);
+    els.togglePreviewButton.textContent = hidden ? "Show Preview" : "Hide Preview";
+    els.togglePreviewButton.setAttribute("aria-pressed", String(hidden));
+    els.togglePreviewButton.classList.toggle("is-active", hidden);
+}
+
+function toggleLivePreview() {
+    state.livePreviewHidden = !state.livePreviewHidden;
+    writeStoredLivePreviewHidden(state.livePreviewHidden);
+    if (state.livePreviewHidden) clearFeedImages();
+    renderPreviewToggle();
+    renderFeeds();
+}
+
 function currentSessionId() {
     return currentSession()?.session_id || "";
 }
@@ -726,7 +761,7 @@ function ensureFeedCard(node) {
                     </label>
                 </div>
             </div>
-            <div class="stream-shell">
+            <div class="stream-shell" data-feed-shell>
                 <img class="stream-image hidden" alt="${escapeHtml(node.display_name || node.node_id)} live feed" data-feed-image>
                 <div class="stream-empty" data-feed-empty></div>
             </div>
@@ -744,10 +779,14 @@ function ensureFeedCard(node) {
 function renderFeeds() {
     const nodes = Array.isArray(state.snapshot.nodes) ? state.snapshot.nodes : [];
     const keepIds = new Set(nodes.map((node) => node.node_id));
+    const previewHidden = Boolean(state.livePreviewHidden);
+    els.feedGrid.hidden = previewHidden;
+    if (previewHidden) clearFeedImages();
     for (const node of nodes) {
         const card = ensureFeedCard(node);
         const mode = state.feedModes[node.node_id] || "annotated";
         const streamUrl = node.stream_urls?.[mode] || "";
+        const shell = card.querySelector("[data-feed-shell]");
         const image = card.querySelector("[data-feed-image]");
         const empty = card.querySelector("[data-feed-empty]");
         card.querySelector("[data-feed-camera]").textContent = node.camera_label || node.node_id;
@@ -762,6 +801,14 @@ function renderFeeds() {
         card.querySelector("[data-feed-sound]").textContent = sound?.enabled
             ? `Noise: ${formatDbValue(sound.current_db)} / ${formatDbValue(sound.threshold_db)}`
             : "Noise: disabled";
+        card.classList.toggle("is-preview-hidden", previewHidden);
+        if (shell) shell.hidden = false;
+        if (previewHidden) {
+            image.classList.add("hidden");
+            image.removeAttribute("src");
+            empty.textContent = "";
+            continue;
+        }
         const streamReady = liveFeedSessionActive() && node.online && streamUrl && nodeHasStreamFrame(node, mode);
         if (streamReady) {
             if (image.getAttribute("src") !== streamUrl) image.setAttribute("src", streamUrl);
@@ -1084,6 +1131,7 @@ function render() {
     renderSessionSummary();
     renderMetrics();
     renderNoise();
+    renderPreviewToggle();
     renderFeeds();
     renderRecordsScope();
     renderRecords();
@@ -1284,6 +1332,7 @@ els.recordsSession.addEventListener("change", (event) => {
 });
 els.recordsClear.addEventListener("click", () => clearRecords().catch((error) => showBanner(error.message, true)));
 els.alertToastClose.addEventListener("click", () => dismissAlertPopup(state.activeAlertId));
+els.togglePreviewButton?.addEventListener("click", toggleLivePreview);
 
 document.addEventListener("click", (event) => {
     const sectionButton = event.target.closest("[data-section]");

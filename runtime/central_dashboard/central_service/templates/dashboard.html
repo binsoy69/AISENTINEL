@@ -181,7 +181,7 @@
                             <form id="session-form" class="session-form">
                                 <label class="field-group">
                                     <span class="field-label">Subject Code</span>
-                                    <input class="field-input" type="text" name="subject_code" placeholder="CS 321" required>
+                                    <input class="field-input" type="text" name="subject_code" placeholder="ECE 123" required>
                                 </label>
                                 <label class="field-group">
                                     <span class="field-label">Professor</span>
@@ -236,7 +236,10 @@
                         <p class="panel-eyebrow">Live Monitoring</p>
                         <h2>Dual Camera Feeds</h2>
                     </div>
-                    <p class="panel-copy">Switch between annotated, raw, and debug views per node while the shared session is active.</p>
+                    <div class="live-monitoring-actions">
+                        <p class="panel-copy">Switch between annotated, raw, and debug views per node while the shared session is active.</p>
+                        <button class="ghost-button ghost-button-tight preview-toggle-button" id="toggle-preview-button" type="button" aria-pressed="false">Hide Preview</button>
+                    </div>
                 </div>
                 <div class="feed-grid" id="feed-grid"></div>
             </section>

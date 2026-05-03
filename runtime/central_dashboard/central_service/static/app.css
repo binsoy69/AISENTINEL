@@ -515,6 +515,26 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     font-size: 0.84rem;
     line-height: 1.45;
 }
+.live-monitoring-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-end;
+    gap: 0.875rem;
+    min-width: min(100%, 34rem);
+    text-align: right;
+}
+.live-monitoring-actions .panel-copy {
+    max-width: 28rem;
+}
+.preview-toggle-button {
+    min-width: 8.75rem;
+}
+.preview-toggle-button.is-active {
+    border-color: rgba(51, 157, 255, 0.42);
+    background: rgba(51, 157, 255, 0.14);
+    color: #cbe4ff;
+}
+.feed-grid[hidden] { display: none !important; }
 .feed-card {
     padding: 0.9rem 0.95rem 0.95rem;
     display: grid;
@@ -543,6 +563,7 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     margin-top: 0; aspect-ratio: 16 / 9; border-radius: 16px; overflow: hidden; position: relative; display: grid; place-items: center;
     border: 1px solid rgba(93, 120, 165, 0.22); background: linear-gradient(180deg, rgba(13, 19, 34, 0.2), rgba(5, 9, 19, 0.7)), var(--panel-soft);
 }
+.stream-shell[hidden] { display: none !important; }
 .stream-image { width: 100%; height: 100%; object-fit: cover; display: block; }
 .stream-empty { padding: 1rem; color: var(--muted); text-align: center; max-width: 26ch; }
 .feed-footer {
@@ -859,6 +880,12 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     .records-pagination-controls { width: 100%; justify-content: flex-start; }
     .feeds-panel .panel-section-head,
     .feed-card-head { align-items: flex-start; }
+    .live-monitoring-actions {
+        width: 100%;
+        justify-content: space-between;
+        align-items: center;
+        text-align: left;
+    }
     .feed-card-tools {
         width: 100%;
         grid-template-columns: auto minmax(0, 1fr);
@@ -877,6 +904,8 @@ button:disabled { opacity: 0.48; cursor: not-allowed; transform: none; }
     .session-panel-content { padding-bottom: 0.95rem; }
     .feeds-panel { padding: 0.9rem; }
     .feed-card { padding: 0.85rem; }
+    .live-monitoring-actions { display: grid; justify-items: stretch; gap: 0.65rem; }
+    .preview-toggle-button { width: 100%; }
     .feed-card-tools { grid-template-columns: 1fr; gap: 0.55rem; }
     .feed-view { min-width: 0; width: 100%; }
     .workspace-tabs { width: 100%; justify-content: stretch; flex-wrap: wrap; }
