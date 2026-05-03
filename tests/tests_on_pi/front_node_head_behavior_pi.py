@@ -637,24 +637,16 @@ def _kp_clear(kp_conf, idx, threshold=HEAD_FACE_CONF_THRESH):
 
 def has_clear_head_signal(kp_conf):
     """Return True when face keypoints are reliable enough for head tilt."""
+    eye_clear = (
+        _kp_clear(kp_conf, KP_LEFT_EYE)
+        or _kp_clear(kp_conf, KP_RIGHT_EYE)
+    )
     ears_clear = (
         _kp_clear(kp_conf, KP_LEFT_EAR)
         and _kp_clear(kp_conf, KP_RIGHT_EAR)
     )
-    if ears_clear:
-        return True
-
     nose_clear = _kp_clear(kp_conf, KP_NOSE)
-    side_reference_clear = any(
-        _kp_clear(kp_conf, idx)
-        for idx in (
-            KP_LEFT_EYE,
-            KP_RIGHT_EYE,
-            KP_LEFT_EAR,
-            KP_RIGHT_EAR,
-        )
-    )
-    return nose_clear and side_reference_clear
+    return eye_clear and (nose_clear or ears_clear)
 
 
 def compute_signed_yaw(kp_xy, kp_conf):
@@ -698,7 +690,13 @@ def detect_head_tilt(kp_xy, kp_conf, baseline_yaw=0.0):
         return False, 0.0
 
     # ── Roll detection (ear-to-ear angle) ──────────────────────
-    if (_kp_clear(kp_conf, KP_LEFT_EAR) and
+    eye_clear = (
+        _kp_clear(kp_conf, KP_LEFT_EYE)
+        or _kp_clear(kp_conf, KP_RIGHT_EYE)
+    )
+
+    if (eye_clear and
+            _kp_clear(kp_conf, KP_LEFT_EAR) and
             _kp_clear(kp_conf, KP_RIGHT_EAR)):
         le = kp_xy[KP_LEFT_EAR]
         re = kp_xy[KP_RIGHT_EAR]
@@ -715,15 +713,7 @@ def detect_head_tilt(kp_xy, kp_conf, baseline_yaw=0.0):
     # reads as ~0, and only actual head turns trigger the alert.
     yaw_face_clear = (
         _kp_clear(kp_conf, KP_NOSE)
-        and any(
-            _kp_clear(kp_conf, idx)
-            for idx in (
-                KP_LEFT_EYE,
-                KP_RIGHT_EYE,
-                KP_LEFT_EAR,
-                KP_RIGHT_EAR,
-            )
-        )
+        and eye_clear
     )
     yaw_valid, signed_yaw = compute_signed_yaw(kp_xy, kp_conf)
     if yaw_face_clear and yaw_valid:
