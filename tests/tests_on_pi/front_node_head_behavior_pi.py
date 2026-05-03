@@ -68,6 +68,8 @@ EVIDENCE_DIR = SCRIPT_DIR / "evidence_head"
 
 # ── COCO 17-Keypoint Indices ────────────────────────────────
 KP_NOSE = 0
+KP_LEFT_EYE = 1
+KP_RIGHT_EYE = 2
 KP_LEFT_EAR = 3
 KP_RIGHT_EAR = 4
 KP_LEFT_SHOULDER = 5
@@ -80,6 +82,8 @@ SHOULDER_TURN_ANGLE_DEG = 20.0  # shoulder-line deviation from horizontal (overh
 SUSTAINED_SEC = 2.5             # seconds before flagging
 EVENT_COOLDOWN_SEC = 10.0       # cooldown between repeated flags
 KP_CONF_THRESH = 0.3            # minimum keypoint confidence
+HEAD_FACE_CONF_THRESH = 0.45    # stricter face confidence for head-tilt signals
+YAW_MIN_SHOULDER_WIDTH_PX = 20.0  # avoid yaw ratio spikes from tiny shoulder spans
 
 # ── Colors (BGR) ─────────────────────────────────────────────
 COL_NORMAL = (0, 255, 0)
@@ -627,20 +631,46 @@ class IoUTracker:
 #  BEHAVIOR DETECTION
 # ═══════════════════════════════════════════════════════════════
 
+def _kp_clear(kp_conf, idx, threshold=HEAD_FACE_CONF_THRESH):
+    return idx < len(kp_conf) and float(kp_conf[idx]) >= threshold
+
+
+def has_clear_head_signal(kp_conf):
+    """Return True when face keypoints are reliable enough for head tilt."""
+    ears_clear = (
+        _kp_clear(kp_conf, KP_LEFT_EAR)
+        and _kp_clear(kp_conf, KP_RIGHT_EAR)
+    )
+    if ears_clear:
+        return True
+
+    nose_clear = _kp_clear(kp_conf, KP_NOSE)
+    side_reference_clear = any(
+        _kp_clear(kp_conf, idx)
+        for idx in (
+            KP_LEFT_EYE,
+            KP_RIGHT_EYE,
+            KP_LEFT_EAR,
+            KP_RIGHT_EAR,
+        )
+    )
+    return nose_clear and side_reference_clear
+
+
 def compute_signed_yaw(kp_xy, kp_conf):
     """
     Compute the signed nose-offset / shoulder-width ratio.
     Positive = nose is to the right of shoulder center in image coords.
     Returns (valid, signed_ratio).
     """
-    if (kp_conf[KP_NOSE] >= KP_CONF_THRESH and
+    if (_kp_clear(kp_conf, KP_NOSE) and
             kp_conf[KP_LEFT_SHOULDER] >= KP_CONF_THRESH and
             kp_conf[KP_RIGHT_SHOULDER] >= KP_CONF_THRESH):
         nose_x = float(kp_xy[KP_NOSE][0])
         ls_x = float(kp_xy[KP_LEFT_SHOULDER][0])
         rs_x = float(kp_xy[KP_RIGHT_SHOULDER][0])
         shoulder_width = abs(rs_x - ls_x)
-        if shoulder_width >= 5:
+        if shoulder_width >= YAW_MIN_SHOULDER_WIDTH_PX:
             shoulder_center_x = (ls_x + rs_x) / 2.0
             return True, (nose_x - shoulder_center_x) / shoulder_width
     return False, 0.0
@@ -664,9 +694,12 @@ def detect_head_tilt(kp_xy, kp_conf, baseline_yaw=0.0):
     roll_score = 0.0
     yaw_score = 0.0
 
+    if not has_clear_head_signal(kp_conf):
+        return False, 0.0
+
     # ── Roll detection (ear-to-ear angle) ──────────────────────
-    if (kp_conf[KP_LEFT_EAR] >= KP_CONF_THRESH and
-            kp_conf[KP_RIGHT_EAR] >= KP_CONF_THRESH):
+    if (_kp_clear(kp_conf, KP_LEFT_EAR) and
+            _kp_clear(kp_conf, KP_RIGHT_EAR)):
         le = kp_xy[KP_LEFT_EAR]
         re = kp_xy[KP_RIGHT_EAR]
         raw = abs(math.degrees(
@@ -680,8 +713,20 @@ def detect_head_tilt(kp_xy, kp_conf, baseline_yaw=0.0):
     # Subtract the student's baseline offset so that their natural
     # resting position (due to perspective at the edge of the FOV)
     # reads as ~0, and only actual head turns trigger the alert.
+    yaw_face_clear = (
+        _kp_clear(kp_conf, KP_NOSE)
+        and any(
+            _kp_clear(kp_conf, idx)
+            for idx in (
+                KP_LEFT_EYE,
+                KP_RIGHT_EYE,
+                KP_LEFT_EAR,
+                KP_RIGHT_EAR,
+            )
+        )
+    )
     yaw_valid, signed_yaw = compute_signed_yaw(kp_xy, kp_conf)
-    if yaw_valid:
+    if yaw_face_clear and yaw_valid:
         corrected_yaw = abs(signed_yaw - baseline_yaw)
         yaw_score = corrected_yaw / HEAD_TURN_RATIO if HEAD_TURN_RATIO > 0 else 0.0
 
