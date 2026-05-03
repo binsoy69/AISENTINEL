@@ -1,5 +1,5 @@
-; AISENTINEL Pi video behavior test configuration
-; Paths inside this file are resolved relative to the repository root.
+; AISENTINEL Pi behavior test configuration example.
+; Copy this to config.ini for local overrides. Paths are resolved relative to the repository root.
 
 [models]
 pose = models/yolo_pose_model.hef
@@ -13,15 +13,19 @@ object_confidence = 0.25
 [runtime]
 port = 8080
 
-[web_dashboard]
-username = admin
-password = admin123
-secret_key = change-this-secret-key
-session_ttl_minutes = 480
-
 [video_source]
 default_video =
 default_setup_profile =
+auto_use_saved_setup = true
+
+[webcam_source]
+camera_index = 0
+camera_name = pi_test_webcam
+capture_width = 1280
+capture_height = 720
+capture_fps = 30.0
+warmup_frames = 15
+default_setup_profile = tests/tests_on_pi/setup_profiles/front_webcam_all_behavior_setup.json
 auto_use_saved_setup = true
 
 [outputs]

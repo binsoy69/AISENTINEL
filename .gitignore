@@ -51,6 +51,8 @@ tests/evidence_pose/*
 tests/evidence/*
 tests/tests_on_pi/evidence*
 tests/tests_on_pc/evidence*
+tests/tests_on_pi/*.ini
+!tests/tests_on_pi/*.ini.example
 
 # Local experiments and generated conversion outputs
 model_conversion/*

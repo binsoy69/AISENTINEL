@@ -13,8 +13,9 @@ REPO_ROOT = TEST_DIR.parent.parent
 RUNTIME_CONFIG_PATH = REPO_ROOT / "runtime" / "edge_node_runtime" / "runtime_config.py"
 
 DEFAULT_CONFIG_PATH = TEST_DIR / "config.ini"
-DEFAULT_VIDEO_CONFIG_PATH = TEST_DIR / "config_video.ini"
-DEFAULT_WEBCAM_CONFIG_PATH = TEST_DIR / "config_webcam.ini"
+DEFAULT_CONFIG_EXAMPLE_PATH = TEST_DIR / "config.ini.example"
+DEFAULT_VIDEO_CONFIG_PATH = DEFAULT_CONFIG_PATH
+DEFAULT_WEBCAM_CONFIG_PATH = DEFAULT_CONFIG_PATH
 
 
 def _load_runtime_config_module():
@@ -36,15 +37,30 @@ _runtime_config = _load_runtime_config_module()
 load_runtime_config = _runtime_config.load_runtime_config
 
 
+def _is_default_config_path(path) -> bool:
+    return Path(path).resolve(strict=False) == DEFAULT_CONFIG_PATH
+
+
 def add_config_arg(parser, default_config_path=DEFAULT_CONFIG_PATH) -> None:
+    fallback_note = ""
+    if _is_default_config_path(default_config_path):
+        fallback_note = f"; falls back to {DEFAULT_CONFIG_EXAMPLE_PATH}"
     parser.add_argument(
         "--config",
         default=None,
-        help=f"Runtime-like INI config path (default: {default_config_path})",
+        help=(
+            f"Runtime-like INI config path (default: {default_config_path}"
+            f"{fallback_note})"
+        ),
     )
 
 
 def load_test_config(config_arg=None, default_config_path=DEFAULT_CONFIG_PATH):
+    if config_arg is None:
+        default_path = Path(default_config_path)
+        if _is_default_config_path(default_path) and not default_path.exists():
+            default_config_path = DEFAULT_CONFIG_EXAMPLE_PATH
+
     return load_runtime_config(config_arg, default_config_path)
 
 
