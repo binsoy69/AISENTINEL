@@ -368,6 +368,37 @@ def run_sound_sensor_test(config_name: str = "front_node.ini") -> None:
     )
 
 
+def _sound_sensor_ads_cli_args(parser: configparser.ConfigParser) -> list[str]:
+    """Return ADS CLI overrides from a node INI [sound_sensor] section."""
+    if not parser.has_section("sound_sensor"):
+        return []
+
+    options = (
+        ("i2c_bus", "--bus"),
+        ("i2c_address", "--address"),
+        ("adc_channel", "--channel"),
+        ("full_scale", "--full-scale"),
+        ("data_rate", "--data-rate"),
+    )
+    args: list[str] = []
+    for option, flag in options:
+        value = parser.get("sound_sensor", option, fallback="").strip()
+        if not value or _is_placeholder_value(value):
+            continue
+        args.extend([flag, value])
+    return args
+
+
+def run_sound_sensor_raw_test(config_name: str = "front_node.ini") -> None:
+    """Run the KY-037 ADS1015 raw-value monitor without requiring calibration."""
+    config_path = require_operator_config(config_name)
+    parser = _read_ini(config_path)
+    run_script(
+        REPO_ROOT / "tests" / "tests_on_pi" / "diagnostics" / "ky037_ads1015_raw_test.py",
+        *_sound_sensor_ads_cli_args(parser),
+    )
+
+
 def run_central_dashboard_tests() -> int:
     configure_repo_environment()
     suite = unittest.defaultTestLoader.discover(str(CENTRAL_DASHBOARD_ROOT / "tests"))

@@ -61,7 +61,7 @@ The video launchers read `[video_source] default_video` from
   `programs/run_mid_node_video.py`
 - Testing: `programs/test_central_dashboard.py`,
   `programs/test_camera_preview.py`, `programs/test_hailo_detection.py`,
-  `programs/test_sound_sensor.py`
+  `programs/test_sound_sensor_raw.py`, `programs/test_sound_sensor.py`
 - Windows packaging: `programs/build_central_dashboard_exe.py`
 
 ## Important Config Files
@@ -166,9 +166,14 @@ Hardware test launchers are also available:
 ```bash
 python programs/test_camera_preview.py
 python programs/test_hailo_detection.py
+python programs/test_sound_sensor_raw.py
 python programs/test_sound_sensor.py
 ```
 
 Run `python programs/calibrate_front_sound_sensor.py` first on the Pi with the
 KY-037 attached; it creates the calibration JSON and updates the node INI path
 used by `test_sound_sensor.py`.
+
+Use `test_sound_sensor_raw.py` first when you only need to confirm the KY-037
+analog signal through ADS1015 channel A0. It does not require calibration and
+prints continuously until Ctrl+C.

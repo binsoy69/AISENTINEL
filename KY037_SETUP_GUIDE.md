@@ -67,6 +67,7 @@ This setup now uses no-argument launchers plus one shared runtime module:
 - front-node calibration launcher: `programs/calibrate_front_sound_sensor.py`
 - mid-node calibration launcher: `programs/calibrate_mid_sound_sensor.py`
 - advanced calibration script: `runtime/central_dashboard/scripts/calibrate_sound_sensor.py`
+- raw ADS monitor: `programs/test_sound_sensor_raw.py`
 - test script: `tests/tests_on_pi/diagnostics/ky037_sound_threshold_test.py`
 - default front config file:
   `runtime/central_dashboard/data/node_front/sound/ky037_ads1015_config.json`
@@ -210,6 +211,36 @@ Example saved config file:
   "ref_loud_rms_mv": 29.84,
   "updated_at": "2026-04-22T00:00:00Z"
 }
+```
+
+## Raw ADS Monitor
+
+Use this first when you want to confirm that the KY-037 analog output is
+changing through ADS1015 channel `A0`, without completing calibration:
+
+```bash
+python3 programs/test_sound_sensor_raw.py
+```
+
+It reads the ADS settings from `config/front_node.ini` and prints continuously
+until Ctrl+C:
+
+```text
+KY-037 ADS1015 Raw Monitor
+address=0x48 channel=A0 full_scale=+/-4.096V rate=1600SPS read_interval=0.1s
+Press Ctrl+C to stop.
+sample=1 raw_code=812 voltage=1.6240V voltage_mv=1624.00
+sample=2 raw_code=817 voltage=1.6340V voltage_mv=1634.00
+```
+
+Advanced usage can run the diagnostic script directly and choose a channel or
+print a fixed number of reads:
+
+```bash
+python3 tests/tests_on_pi/diagnostics/ky037_ads1015_raw_test.py \
+  --channel 0 \
+  --read-interval 0.05 \
+  --count 20
 ```
 
 ## Test Script

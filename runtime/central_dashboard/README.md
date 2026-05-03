@@ -40,6 +40,7 @@ Hardware checks:
 ```bash
 python programs/test_camera_preview.py
 python programs/test_hailo_detection.py
+python programs/test_sound_sensor_raw.py
 python programs/test_sound_sensor.py
 ```
 

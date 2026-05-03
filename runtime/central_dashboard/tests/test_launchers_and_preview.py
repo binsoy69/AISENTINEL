@@ -219,6 +219,51 @@ calibration_config = {calibration_path}
         args = run_script_mock.call_args.args
         self.assertEqual(args[1:], ("--config-file", str(calibration_path.resolve(strict=False))))
 
+    def test_run_sound_sensor_raw_test_passes_configured_ads_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir_str:
+            tmpdir = Path(tmpdir_str)
+            node_config = tmpdir / "front_node.ini"
+            node_config.write_text(
+                """
+[sound_sensor]
+i2c_bus = 1
+i2c_address = 0x49
+adc_channel = 2
+full_scale = 2.048
+data_rate = 920
+calibration_config =
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(
+                    launcher_common,
+                    "require_operator_config",
+                    return_value=node_config,
+                ),
+                mock.patch.object(launcher_common, "run_script") as run_script_mock,
+            ):
+                launcher_common.run_sound_sensor_raw_test("front_node.ini")
+
+        args = run_script_mock.call_args.args
+        self.assertEqual(Path(args[0]).name, "ky037_ads1015_raw_test.py")
+        self.assertEqual(
+            args[1:],
+            (
+                "--bus",
+                "1",
+                "--address",
+                "0x49",
+                "--channel",
+                "2",
+                "--full-scale",
+                "2.048",
+                "--data-rate",
+                "920",
+            ),
+        )
+
     def test_run_script_includes_launched_script_directory_for_sibling_imports(self):
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)

@@ -42,6 +42,9 @@ Video replay opens a file picker, saves the selected file to
 - `test_camera_preview.py`: opens the webcam using the runtime capture path,
   without AI models.
 - `test_hailo_detection.py`: runs the standalone Hailo object-detection test.
+- `test_sound_sensor_raw.py`: continuously prints raw KY-037 ADS1015 codes and
+  voltage using the ADS settings in `config/front_node.ini`; calibration is not
+  required.
 - `test_sound_sensor.py`: runs the KY-037 ADS1015 sound-threshold test using
   the calibration JSON configured in `config/front_node.ini`.
 

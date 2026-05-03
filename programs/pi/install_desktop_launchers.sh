@@ -105,6 +105,12 @@ write_launcher \
     "Create or update the mid node KY-037 sound calibration" \
     "programs/pi/calibrate_mid_sound_sensor.sh"
 
+write_launcher \
+    "AISENTINEL Test Sound Sensor Raw.desktop" \
+    "AISENTINEL Test Sound Sensor Raw" \
+    "Continuously show raw KY-037 ADS1015 readings" \
+    "programs/pi/test_sound_sensor_raw.sh"
+
 echo
 echo "Desktop launchers installed."
 echo "If Raspberry Pi Desktop asks whether to trust/execute them, choose Allow Launching."
