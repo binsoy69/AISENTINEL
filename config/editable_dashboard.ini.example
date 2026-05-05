@@ -1,0 +1,25 @@
+[service]
+; Bind address for the editable demo dashboard service.
+host = 0.0.0.0
+port = 8095
+db_path = runtime/editable_dashboard/data/editable.sqlite3
+evidence_root = runtime/editable_dashboard/data/evidence
+node_offline_after_sec = 12
+proxy_timeout_sec = 10
+stream_timeout_sec = 12
+
+[browser_auth]
+username = admin
+password = admin123
+secret_key = editable-dashboard-demo-secret
+session_ttl_minutes = 480
+
+[node:front]
+display_name = Front Node
+camera_label = Front Camera
+api_key = demo-front-node-key
+
+[node:mid]
+display_name = Mid Node
+camera_label = Mid Camera
+api_key = demo-mid-node-key

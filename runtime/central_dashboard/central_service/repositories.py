@@ -353,6 +353,18 @@ class CentralRepository:
         )
         self.connection.commit()
 
+    def set_incident_asset_paths(self, incident_id: str, *, poster_path: str = "", gif_path: str = "") -> dict | None:
+        self.connection.execute(
+            """
+            UPDATE incidents
+            SET poster_path=?, gif_path=?, updated_at=?
+            WHERE incident_id=?
+            """,
+            (poster_path, gif_path, utc_now_iso(), incident_id),
+        )
+        self.connection.commit()
+        return self.get_incident(incident_id)
+
     def update_review_status(self, incident_id: str, review_status: str) -> dict | None:
         self.connection.execute(
             "UPDATE incidents SET review_status=?, updated_at=? WHERE incident_id=?",
@@ -425,6 +437,14 @@ class CentralRepository:
         self.connection.execute("DELETE FROM incidents WHERE session_id=?", (session_id,))
         self.connection.commit()
         return int(row["total"] if row else 0)
+
+    def delete_incident(self, incident_id: str) -> dict | None:
+        row = self.get_incident(incident_id)
+        if row is None:
+            return None
+        self.connection.execute("DELETE FROM incidents WHERE incident_id=?", (incident_id,))
+        self.connection.commit()
+        return row
 
     def _row_to_incident(self, row: sqlite3.Row) -> dict:
         item = dict(row)

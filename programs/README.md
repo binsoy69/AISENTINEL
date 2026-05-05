@@ -7,9 +7,15 @@ double-click workflows, and beginner-friendly terminal usage.
 
 - `run_central_dashboard.py`: starts the central Flask dashboard using
   `config/central.ini`.
+- `run_editable_dashboard.py`: starts the isolated editable demo dashboard using
+  `config/editable_dashboard.ini` when present, otherwise the tracked example.
 - `build_central_dashboard_exe.py`: builds the Windows one-folder central
   dashboard EXE with PyInstaller.
+- `build_editable_dashboard_exe.py`: builds the Windows one-folder editable
+  demo dashboard EXE with PyInstaller.
 - `central_service_exe.ini`: editable config template copied beside the EXE.
+- `editable_dashboard_exe.ini`: editable demo config template copied beside the
+  editable dashboard EXE.
 
 ## Raspberry Pi Node Agents
 

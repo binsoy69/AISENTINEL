@@ -74,6 +74,16 @@ def require_operator_config(config_name: str) -> Path:
     return path
 
 
+def require_editable_dashboard_config(config_name: str) -> Path:
+    path = central_dashboard_config(config_name)
+    if path.exists():
+        return path
+    example = path.with_suffix(path.suffix + ".example")
+    if example.exists():
+        return example
+    raise SystemExit(_missing_config_message(path))
+
+
 def _read_ini(path: Path) -> configparser.ConfigParser:
     parser = configparser.ConfigParser()
     loaded = parser.read(path, encoding="utf-8")
@@ -263,6 +273,28 @@ def run_central_dashboard(config_name: str = "central.ini") -> None:
     app.run(host=config.host, port=config.port, threaded=True)
 
 
+def run_editable_dashboard(config_name: str = "editable_dashboard.ini") -> None:
+    configure_repo_environment()
+    configure_runtime_logging()
+    from central_dashboard.central_service.config import load_central_service_config
+    from editable_dashboard.editable_service.app import create_app
+
+    config_path = require_editable_dashboard_config(config_name)
+    config = load_central_service_config(config_path)
+    app = create_app(config)
+
+    print()
+    print("=" * 78)
+    print("  AISENTINEL - Editable Demo Dashboard")
+    print(f"  Config    : {config.config_path}")
+    print(f"  URL       : http://127.0.0.1:{config.port}")
+    print("  Browser   : open the URL above from the dashboard machine")
+    print("=" * 78)
+    print()
+
+    app.run(host=config.host, port=config.port, threaded=True)
+
+
 def run_node_agent(
     config_name: str,
     *,
@@ -401,6 +433,11 @@ def run_sound_sensor_raw_test(config_name: str = "front_node.ini") -> None:
 
 def run_central_dashboard_tests() -> int:
     configure_repo_environment()
-    suite = unittest.defaultTestLoader.discover(str(CENTRAL_DASHBOARD_ROOT / "tests"))
+    suite = unittest.TestSuite()
+    for tests_root in (
+        CENTRAL_DASHBOARD_ROOT / "tests",
+        RUNTIME_ROOT / "editable_dashboard" / "tests",
+    ):
+        suite.addTests(unittest.defaultTestLoader.discover(str(tests_root)))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1

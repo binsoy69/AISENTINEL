@@ -40,6 +40,7 @@ dist/
 runtime/central_dashboard/data/*
 !runtime/central_dashboard/data/.gitignore
 !runtime/central_dashboard/data/README.md
+runtime/editable_dashboard/data/*
 runtime/edge_node_runtime/data/*
 
 # Test/prototype output folders
